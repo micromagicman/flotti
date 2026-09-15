@@ -8,7 +8,7 @@ type Configuration = {
     agents: Agent[],
 }
 
-export {
+export type {
     Agent,
     Configuration
 };
