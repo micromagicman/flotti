@@ -1,3 +1,5 @@
+import type {Configuration} from "./types";
+
 const configuration: Configuration = {
     agents: [
         {
