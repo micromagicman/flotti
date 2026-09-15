@@ -2,6 +2,7 @@
   "name": "supavisor",
   "version": "0.1.0",
   "main": "build/index.js",
+  "type": "module",
   "scripts": {
     "test": "npm run test"
   },
@@ -21,5 +22,8 @@
     "url": "https://github.com/micromagicman/supavisor/issues"
   },
   "homepage": "https://github.com/micromagicman/supavisor#readme",
-  "description": "Simple ai agents orchestrator for humans"
+  "description": "Simple ai agents orchestrator for humans",
+  "devDependencies": {
+    "@types/node": "^26.5.1"
+  }
 }
