@@ -9,9 +9,9 @@ import {
     DEFAULT_RESTART_POLICY,
     loadConfiguration,
     resolveConfigurationLocation
-} from './config.js';
-import type {LoadConfigurationOptions} from './config.js';
-import {ConfigurationError} from './errors.js';
+} from '../src/config.js';
+import type {LoadConfigurationOptions} from '../src/config.js';
+import {ConfigurationError} from '../src/errors.js';
 
 const HOME = '/home/eva';
 

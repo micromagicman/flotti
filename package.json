@@ -8,8 +8,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test build/*.test.js"
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "test": "tsc -p tsconfig.test.json && node --test build-test/test/*.test.js"
   },
   "repository": {
     "type": "git",
