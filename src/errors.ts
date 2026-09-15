@@ -23,7 +23,6 @@ type ConfigurationErrorKind =
     | 'duplicate-agent-name'
     /** The agents list is empty, so there is nothing to supervise. */
     | 'empty-agent-list';
-
 type ConfigurationErrorOptions = {
     /** Configuration file the complaint is about, when one is already known. */
     readonly path?: string;
@@ -31,7 +30,6 @@ type ConfigurationErrorOptions = {
     readonly hint?: string;
     readonly cause?: unknown;
 };
-
 /**
  * A configuration problem stated in one sentence a human can act on: never a
  * stack trace, always the file and the place inside it.
@@ -40,15 +38,13 @@ class ConfigurationError extends Error {
     readonly kind: ConfigurationErrorKind;
     readonly path: string | undefined;
     readonly hint: string | undefined;
-
     constructor(kind: ConfigurationErrorKind, message: string, options: ConfigurationErrorOptions = {}) {
-        super(message, {cause: options.cause});
+        super(message, { cause: options.cause });
         this.name = 'ConfigurationError';
         this.kind = kind;
         this.path = options.path;
         this.hint = options.hint;
     }
 }
-
-export {ConfigurationError};
-export type {ConfigurationErrorKind, ConfigurationErrorOptions};
+export { ConfigurationError };
+export type { ConfigurationErrorKind, ConfigurationErrorOptions };
