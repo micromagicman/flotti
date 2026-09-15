@@ -1,0 +1,25 @@
+{
+  "name": "supavisor",
+  "version": "0.1.0",
+  "main": "build/index.js",
+  "scripts": {
+    "test": "npm run test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/micromagicman/supavisor.git"
+  },
+  "keywords": [
+    "supervisor",
+    "ai-agent",
+    "codex",
+    "claude"
+  ],
+  "author": "micromagicman",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/micromagicman/supavisor/issues"
+  },
+  "homepage": "https://github.com/micromagicman/supavisor#readme",
+  "description": "Simple ai agents orchestrator for humans"
+}
