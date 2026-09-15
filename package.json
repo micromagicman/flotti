@@ -3,8 +3,13 @@
   "version": "0.1.0",
   "main": "build/index.js",
   "type": "module",
+  "engines": {
+    "node": ">=20.11"
+  },
   "scripts": {
-    "test": "npm run test"
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test build/*.test.js"
   },
   "repository": {
     "type": "git",
@@ -24,6 +29,7 @@
   "homepage": "https://github.com/micromagicman/supavisor#readme",
   "description": "Simple ai agents orchestrator for humans",
   "devDependencies": {
-    "@types/node": "^26.5.1"
+    "@types/node": "^26.5.1",
+    "typescript": "^7.0.2"
   }
 }
