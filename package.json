@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "test": "tsc -p tsconfig.test.json && node --test build-test/test/*.test.js"
   },
