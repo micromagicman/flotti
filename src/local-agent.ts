@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import { createWriteStream, mkdirSync } from 'node:fs';
 import type { WriteStream } from 'node:fs';
@@ -13,16 +14,11 @@ import type {
     SessionConfigOption,
     SessionNotification
 } from '@agentclientprotocol/sdk';
-import { acpPermissionEvent, acpUpdateEvents } from './acp-events.js';
+import { AcpMessages, acpPermissionEvent, acpUpdateEvents } from './acp-events.js';
 import { prepareHandover } from './acp-adapters.js';
 import type { Handover } from './acp-adapters.js';
-import type {
-    AgentEvent,
-    AgentEventBody,
-    AgentEventListener,
-    AgentStatus,
-    FleetAgent
-} from './agent-events.js';
+import { AgentEvents } from './agent-events.js';
+import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent } from './agent-events.js';
 import type { LocalAgent } from './types.js';
 
 /**
@@ -81,8 +77,10 @@ class PermanentFailure extends Error {}
 
 type Turn = {
     readonly text: string;
-    readonly resolve: (reason: string) => void;
-    readonly reject: (error: Error) => void;
+    /** The message went to the agent: {@link LocalAgentProcess.send} resolves. */
+    readonly accepted: () => void;
+    /** The message never got to the agent: {@link LocalAgentProcess.send} rejects. */
+    readonly refused: (error: Error) => void;
 };
 
 /** One life of the agent process, from spawn to exit. */
@@ -108,17 +106,18 @@ type Run = {
 /**
  * A local agent: supavisor starts it as a child process speaking ACP over
  * stdio, holds one session with it, restarts it by its policy and turns
- * everything it says into {@link AgentEvent}s.
+ * everything it says into the fleet's agent events.
  */
 class LocalAgentProcess implements FleetAgent {
     readonly agent: LocalAgent;
     private readonly options: Required<Omit<LocalAgentOptions, 'env' | 'logDirectory'>>;
     private readonly env: Readonly<Record<string, string | undefined>>;
     private readonly logDirectory: string | null;
-    private readonly listeners = new Set<AgentEventListener>();
-    private seq = 0;
+    private readonly events: AgentEvents;
+    /** Ids for the pieces of the agent's answers. */
+    private readonly messages = new AcpMessages();
     private lifecycle: LifecycleState = 'stopped';
-    private shownStatus: AgentStatus = 'offline';
+    private shownStatus: AgentStatus = 'stopped';
     private shownDetail: string | undefined;
     private run: Run | undefined;
     private session: string | undefined;
@@ -132,6 +131,7 @@ class LocalAgentProcess implements FleetAgent {
 
     constructor(agent: LocalAgent, options: LocalAgentOptions = {}) {
         this.agent = agent;
+        this.events = new AgentEvents(agent.id);
         this.env = options.env ?? process.env;
         this.logDirectory = options.logDirectory === undefined ? join(agent.directory, 'logs') : options.logDirectory;
         this.options = {
@@ -144,7 +144,7 @@ class LocalAgentProcess implements FleetAgent {
         };
     }
 
-    get id(): string {
+    get agentId(): string {
         return this.agent.id;
     }
 
@@ -167,10 +167,7 @@ class LocalAgentProcess implements FleetAgent {
     }
 
     subscribe(listener: AgentEventListener): () => void {
-        this.listeners.add(listener);
-        return () => {
-            this.listeners.delete(listener);
-        };
+        return this.events.subscribe(listener);
     }
 
     /**
@@ -229,14 +226,17 @@ class LocalAgentProcess implements FleetAgent {
 
     /**
      * Sends a message. While the agent works on another one, the message waits
-     * in line. Resolves with the ACP stop reason — `end_turn`, `cancelled`, …
+     * in line. Resolves once the message went to the agent as `session/prompt`;
+     * how it ended comes as a `turn-end` event with the ACP stop reason —
+     * `end_turn`, `cancelled`, … Rejects when the message never went: the
+     * agent is not running, or stopped before its turn.
      */
-    send(text: string): Promise<string> {
+    send(text: string): Promise<void> {
         if (this.lifecycle !== 'running' && this.lifecycle !== 'starting' && this.lifecycle !== 'backoff') {
-            return Promise.reject(new Error(`agent "${this.id}" is ${this.lifecycle}; start it first`));
+            return Promise.reject(new Error(`agent "${this.agentId}" is ${this.lifecycle}; start it first`));
         }
         return new Promise((resolve, reject) => {
-            this.queue.push({ text, resolve, reject });
+            this.queue.push({ text, accepted: resolve, refused: reject });
             this.pump();
         });
     }
@@ -467,7 +467,9 @@ class LocalAgentProcess implements FleetAgent {
             return;
         }
         this.active = turn;
-        this.emit({ type: 'message', role: 'user', text: turn.text });
+        this.messages.reset();
+        this.emit({ type: 'message', role: 'user', messageId: randomUUID(), text: turn.text, append: false });
+        turn.accepted();
         this.showStatus();
         run.connection.agent.request(acp.methods.agent.session.prompt, {
             sessionId: this.session,
@@ -490,11 +492,10 @@ class LocalAgentProcess implements FleetAgent {
         this.active = undefined;
         this.cancelPermissions();
         if (reason === undefined) {
+            this.emit({ type: 'log', source: 'supavisor', text: `the message failed: ${message(error)}` });
             this.emit({ type: 'turn-end', reason: 'error' });
-            turn.reject(new Error(`the message failed: ${message(error)}`));
         } else {
             this.emit({ type: 'turn-end', reason });
-            turn.resolve(reason);
         }
         this.showStatus();
         this.pump();
@@ -520,7 +521,7 @@ class LocalAgentProcess implements FleetAgent {
         if (run !== this.run || run.replaying || notification.sessionId !== this.session) {
             return;
         }
-        for (const event of acpUpdateEvents(notification.update)) {
+        for (const event of acpUpdateEvents(notification.update, this.messages)) {
             this.emit(event);
         }
     }
@@ -529,7 +530,7 @@ class LocalAgentProcess implements FleetAgent {
         if (run !== this.run || run.stopping) {
             return Promise.resolve({ outcome: { outcome: 'cancelled' } });
         }
-        const requestId = `${this.id}-${++this.permissionCount}`;
+        const requestId = `${this.agentId}-${++this.permissionCount}`;
         return new Promise((resolve) => {
             this.permissions.set(requestId, resolve);
             this.emit(acpPermissionEvent(requestId, request));
@@ -635,7 +636,7 @@ class LocalAgentProcess implements FleetAgent {
         }
         this.run = undefined;
         const how = run.failure ?? (signal !== null ? `killed by ${signal}` : `exited with code ${code}`);
-        this.dropWork(`agent "${this.id}" stopped: ${how}`);
+        this.dropWork(`agent "${this.agentId}" stopped: ${how}`);
         if (run.stopping) {
             return;
         }
@@ -666,21 +667,24 @@ class LocalAgentProcess implements FleetAgent {
         }, delay);
     }
 
-    /** Messages die with the process: an answer that was on its way is gone, and a queued one has nowhere to go. */
+    /**
+     * Messages die with the process: an answer that was on its way is gone —
+     * its turn ends with `error`, and the status says why — and a queued one
+     * has nowhere to go, so its `send` rejects.
+     */
     private dropWork(reason: string): void {
         this.cancelPermissions();
-        const turns = [...(this.active === undefined ? [] : [this.active]), ...this.queue.splice(0)];
         if (this.active !== undefined) {
             this.emit({ type: 'turn-end', reason: 'error' });
         }
         this.active = undefined;
-        for (const turn of turns) {
-            turn.reject(new Error(reason));
+        for (const turn of this.queue.splice(0)) {
+            turn.refused(new Error(reason));
         }
     }
 
     private giveUp(reason: string): void {
-        this.dropWork(`agent "${this.id}" gave up: ${reason}`);
+        this.dropWork(`agent "${this.agentId}" gave up: ${reason}`);
         this.setLifecycle('fatal', reason);
     }
 
@@ -706,7 +710,7 @@ class LocalAgentProcess implements FleetAgent {
                 if (state === 'running') {
                     waiter.resolve();
                 } else {
-                    waiter.reject(new Error(`agent "${this.id}" is ${state}: ${detail}`));
+                    waiter.reject(new Error(`agent "${this.agentId}" is ${state}: ${detail}`));
                 }
             }
         }
@@ -728,7 +732,7 @@ class LocalAgentProcess implements FleetAgent {
                 status = 'error';
                 break;
             default:
-                status = 'offline';
+                status = 'stopped';
         }
         const shown = detail ?? (status === this.shownStatus ? this.shownDetail : undefined);
         if (status === this.shownStatus && shown === this.shownDetail) {
@@ -736,18 +740,11 @@ class LocalAgentProcess implements FleetAgent {
         }
         this.shownStatus = status;
         this.shownDetail = shown;
-        this.emit({ type: 'status', status, ...(shown === undefined ? {} : { detail: shown }) });
+        this.emit({ type: 'status', status, ...(shown === undefined ? {} : { reason: shown }) });
     }
 
     private emit(body: AgentEventBody): void {
-        const event = { ...body, agentId: this.id, seq: ++this.seq, time: new Date().toISOString() } as AgentEvent;
-        for (const listener of [...this.listeners]) {
-            try {
-                listener(event);
-            } catch {
-                // A listener's failure is the listener's business; the agent goes on.
-            }
-        }
+        this.events.emit(body);
     }
 
     private openLogs(): { trace?: WriteStream; stderrLog?: WriteStream } {

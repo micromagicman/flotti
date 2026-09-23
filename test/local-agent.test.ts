@@ -8,7 +8,9 @@ import { Harness, eventually, isAlive } from './local-agent-helpers.js';
 /** Events without the fields that change from run to run. */
 function shape(events: readonly AgentEvent[]): unknown[] {
     return events.map(({ agentId: _agentId, seq: _seq, time: _time, ...body }) =>
-        body.type === 'tool-call' ? { ...body, raw: undefined } : body);
+        body.type === 'tool-call' ? { ...body, raw: undefined }
+            : body.type === 'message' && body.role === 'user' ? { ...body, messageId: undefined }
+                : body);
 }
 
 describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
@@ -19,14 +21,14 @@ describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
         strictEqual(harness.agent.status, 'idle');
         ok(harness.agent.sessionId?.startsWith('session-'));
         const from = harness.lastSeq;
-        strictEqual(await harness.agent.send('hello'), 'end_turn');
+        strictEqual(await harness.talk('hello'), 'end_turn');
         deepStrictEqual(shape(harness.events.filter((event) => event.seq > from)), [
-            { type: 'message', role: 'user', text: 'hello' },
+            { type: 'message', role: 'user', messageId: undefined, text: 'hello', append: false },
             { type: 'status', status: 'working' },
             { type: 'tool-call', toolCallId: 'call-1', title: 'Think', status: 'in_progress', raw: undefined },
             { type: 'tool-call', toolCallId: 'call-1', status: 'completed', raw: undefined },
             { type: 'raw', protocol: 'acp', payload: { sessionUpdate: 'plan', entries: [] } },
-            { type: 'message', role: 'agent', text: 'you said: hello', messageId: 'm1' },
+            { type: 'message', role: 'agent', text: 'you said: hello', messageId: 'm1', append: false },
             { type: 'turn-end', reason: 'end_turn' },
             { type: 'status', status: 'idle' }
         ]);
@@ -50,7 +52,7 @@ describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
     it('queues a message sent while the agent is busy', async () => {
         const harness = new Harness();
         await harness.agent.start();
-        const answers = await Promise.all([harness.agent.send('one'), harness.agent.send('two')]);
+        const answers = await Promise.all([harness.talk('one'), harness.talk('two')]);
         deepStrictEqual(answers, ['end_turn', 'end_turn']);
         deepStrictEqual(harness.recorded('session/prompt').map((entry) => entry['text']), ['one', 'two']);
     });
@@ -58,7 +60,7 @@ describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
     it('queues a message sent before the agent is ready', async () => {
         const harness = new Harness();
         const started = harness.agent.start();
-        const answer = harness.agent.send('early');
+        const answer = harness.talk('early');
         await started;
         strictEqual(await answer, 'end_turn');
     });
@@ -67,13 +69,24 @@ describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
         const harness = new Harness();
         await rejects(harness.agent.send('hello'), /is stopped; start it first/);
     });
+
+    it('drops the queued messages when stopped', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        await harness.agent.send('wait');
+        const queued = harness.agent.send('second');
+        await harness.agent.stop();
+        await rejects(queued, /stopped/);
+        strictEqual(harness.agent.status, 'stopped');
+        deepStrictEqual(harness.recorded('session/prompt').map((entry) => entry['text']), ['wait']);
+    });
 });
 
 describe('LocalAgentProcess: permissions and cancelling', { timeout: 20_000 }, () => {
     it('holds a permission request until a person answers it', async () => {
         const harness = new Harness();
         await harness.agent.start();
-        const answer = harness.agent.send('permission');
+        const answer = harness.talk('permission');
         const request = await harness.next((event) => event.type === 'permission');
         ok(request.type === 'permission');
         strictEqual(request.title, 'Delete everything');
@@ -88,7 +101,7 @@ describe('LocalAgentProcess: permissions and cancelling', { timeout: 20_000 }, (
     it('cancels the message in work and answers open permission requests with cancelled', async () => {
         const harness = new Harness();
         await harness.agent.start();
-        const answer = harness.agent.send('permission');
+        const answer = harness.talk('permission');
         await harness.next((event) => event.type === 'permission');
         await harness.agent.cancel();
         strictEqual(await answer, 'cancelled');
@@ -98,7 +111,7 @@ describe('LocalAgentProcess: permissions and cancelling', { timeout: 20_000 }, (
     it('cancels a message the agent works on', async () => {
         const harness = new Harness();
         await harness.agent.start();
-        const answer = harness.agent.send('wait');
+        const answer = harness.talk('wait');
         await harness.next((event) => event.type === 'status' && event.status === 'working');
         await harness.agent.cancel();
         strictEqual(await answer, 'cancelled');
@@ -110,11 +123,14 @@ describe('LocalAgentProcess: permissions and cancelling', { timeout: 20_000 }, (
         const harness = new Harness({ fake: { resume: true }, options: { cancelTimeoutMs: 200 } });
         await harness.agent.start();
         const session = harness.agent.sessionId;
-        const answer = harness.agent.send('deaf');
+        const answer = harness.talk('deaf');
         await harness.next((event) => event.type === 'status' && event.status === 'working');
         const from = harness.lastSeq;
         await harness.agent.cancel();
-        await rejects(answer, /did not end the cancelled message within 200 ms/);
+        strictEqual(await answer, 'error');
+        const restarting = await harness.status('starting', from);
+        ok(restarting.type === 'status');
+        match(restarting.reason ?? '', /did not end the cancelled message within 200 ms/);
         await harness.status('idle', from);
         strictEqual(harness.agent.sessionId, session);
         deepStrictEqual(harness.recorded('session/resume').map((entry) =>
@@ -128,15 +144,15 @@ describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
         await harness.agent.start();
         const session = harness.agent.sessionId;
         const from = harness.lastSeq;
-        await rejects(harness.agent.send('crash'), /stopped: exited with code 3/);
+        strictEqual(await harness.talk('crash'), 'error');
         const backoff = await harness.status('starting', from);
         ok(backoff.type === 'status');
-        match(backoff.detail ?? '', /exited with code 3; restarting in 10 ms/);
+        match(backoff.reason ?? '', /exited with code 3; restarting in 10 ms/);
         await harness.status('idle', from);
         strictEqual(harness.agent.sessionId, session);
         strictEqual(harness.recorded('started').length, 2);
         strictEqual(harness.recorded('session/resume').length, 1);
-        strictEqual(await harness.agent.send('again'), 'end_turn');
+        strictEqual(await harness.talk('again'), 'end_turn');
     });
 
     it('falls back to session/load and does not repeat the replayed history', async () => {
@@ -161,8 +177,9 @@ describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
     it('leaves an agent with the policy "never" exited', async () => {
         const harness = new Harness({ manifest: { restart: 'never' } });
         await harness.agent.start();
-        await rejects(harness.agent.send('crash'));
-        await harness.status('offline');
+        const from = harness.lastSeq;
+        strictEqual(await harness.talk('crash'), 'error');
+        await harness.status('stopped', from);
         strictEqual(harness.agent.state, 'exited');
         strictEqual(harness.recorded('started').length, 1);
     });
@@ -171,8 +188,8 @@ describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
         const harness = new Harness({ fake: { crashStarts: 2 } });
         await harness.agent.start();
         const delays = harness.events
-            .filter((event) => event.type === 'status' && event.status === 'starting' && /restarting/.test(event.detail ?? ''))
-            .map((event) => event.type === 'status' ? /in (\d+) ms/.exec(event.detail ?? '')?.[1] : undefined);
+            .filter((event) => event.type === 'status' && event.status === 'starting' && /restarting/.test(event.reason ?? ''))
+            .map((event) => event.type === 'status' ? /in (\d+) ms/.exec(event.reason ?? '')?.[1] : undefined);
         deepStrictEqual(delays, ['10', '20']);
         strictEqual(harness.agent.state, 'running');
     });
@@ -196,7 +213,10 @@ describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
         const harness = new Harness({ manifest: { heartbeatTimeoutSec: 1 }, fake: { resume: true } });
         await harness.agent.start();
         const from = harness.lastSeq;
-        await rejects(harness.agent.send('freeze'), /no heartbeat for 1 s/);
+        strictEqual(await harness.talk('freeze'), 'error');
+        const restarting = await harness.status('starting', from);
+        ok(restarting.type === 'status');
+        match(restarting.reason ?? '', /no heartbeat for 1 s/);
         await harness.status('idle', from);
         strictEqual(harness.recorded('started').length, 2);
     });
@@ -204,21 +224,21 @@ describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
     it('stops the whole process group: what the agent started goes too', async () => {
         const harness = new Harness();
         await harness.agent.start();
-        await harness.agent.send('spawn');
+        await harness.talk('spawn');
         const [grandchild] = harness.recorded('grandchild');
         const [agent] = harness.recorded('started');
         const pids = [agent?.['pid'], grandchild?.['pid']] as number[];
         ok(pids.every(isAlive));
         await harness.agent.stop();
         strictEqual(harness.agent.state, 'stopped');
-        strictEqual(harness.agent.status, 'offline');
+        strictEqual(harness.agent.status, 'stopped');
         await eventually(() => !pids.some(isAlive));
     });
 
     it('stops an agent in the middle of a message: cancels it first, then ends the process', async () => {
         const harness = new Harness();
         await harness.agent.start();
-        const answer = harness.agent.send('wait');
+        const answer = harness.talk('wait');
         await harness.next((event) => event.type === 'status' && event.status === 'working');
         await harness.agent.stop();
         strictEqual(await answer, 'cancelled');

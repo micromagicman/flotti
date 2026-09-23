@@ -100,6 +100,21 @@ class Harness {
         return this.next((event) => event.seq > afterSeq && event.type === 'status' && event.status === status);
     }
 
+    /**
+     * Sends a message and waits until the agent is done with it; resolves with
+     * the reason of its `turn-end` event. `send` itself resolves as soon as the
+     * message went to the agent.
+     */
+    async talk(text: string): Promise<string> {
+        const before = this.lastSeq;
+        const sent = this.next((event) =>
+            event.seq > before && event.type === 'message' && event.role === 'user' && event.text === text);
+        await this.agent.send(text);
+        const { seq } = await sent;
+        const end = await this.next((event) => event.seq > seq && event.type === 'turn-end');
+        return end.type === 'turn-end' ? end.reason : '';
+    }
+
     /** What the pretend agent recorded, one object per line. */
     record(): Record<string, unknown>[] {
         if (!existsSync(this.recordFile)) {

@@ -3,8 +3,10 @@
 Simple ai agents orchestrator for humans.
 
 At this point supavisor **reads and checks** its fleet — the agents it is going to work with — and
-**runs a local agent** over ACP: starts it, talks to it, restarts it when it falls over. Talking to
-remote agents over A2A and the dashboard are the next steps of the `v0.1.0` milestone.
+talks to them: it **runs a local agent** over ACP (starts it, talks to it, restarts it when it falls
+over) and **talks to a remote agent** over A2A (see [Talking to a remote agent](#talking-to-a-remote-agent)).
+Both are driven by code for now; the dashboard is the next step of the `v0.1.0` milestone, and reading
+the fleet starts nothing by itself.
 
 ## Requirements
 
@@ -16,17 +18,10 @@ Node.js 20.11 or newer.
 npm ci
 npm run build
 node build/index.js [--fleet <dir>]
-node build/index.js run <agent-id> [message] [--fleet <dir>] [--yes]
 ```
 
 `node build/index.js` prints the agents it found and exits with `0`; on any problem with the fleet it
 prints one sentence explaining it and exits with a non-zero code.
-
-`run` starts a local agent, sends it one message — or whatever comes on stdin when there is none —
-prints the answer as it streams in and stops the agent. Tool calls and what supavisor has to say go to
-stderr, the answer to stdout. When the agent asks for a permission, `run` asks you on the terminal;
-`--yes` allows everything, and without a terminal to ask on the request is rejected. The exit code is
-`0` when the agent ended its turn normally. Ctrl-C cancels the message.
 
 ## The fleet
 
@@ -227,14 +222,71 @@ Everything a running agent says is kept in `logs/` of its directory: `acp.jsonl`
 both ways, a JSON line each, for debugging an adapter; `stderr.log` — what the agent writes to stderr.
 The files grow; nothing rotates them yet.
 
-In code, `LocalAgentProcess` (`src/local-agent.ts`) runs one agent and hands out its events. The
-events are the same for local and remote agents — status, pieces of messages and thoughts, tool calls,
-permission requests, the end of a turn, log lines, and whatever else the protocol said, untouched — and
-are described in `src/agent-events.ts`.
+In code, `LocalAgentProcess` (`src/local-agent.ts`) runs one agent. It is a `FleetAgent`, the same
+as a remote agent — see [One interface for every agent](#one-interface-for-every-agent).
+
+## Talking to a remote agent
+
+supavisor speaks A2A through the official SDK, [`@a2a-js/sdk`](https://github.com/a2aproject/a2a-js),
+so the protocol details — transports, the `A2A-Version` header, version 0.3 of the protocol — are the
+SDK's and not supavisor's. In code it is `A2AAgent` (`src/a2a-agent.ts`), a `FleetAgent` like a local
+agent: the dashboard gets the same events and drives it the same way.
+
+- **The card.** It is read from `<url>/.well-known/agent-card.json`, or from `url` itself when that
+  names a `.json` file. It is read once on connecting, not before every message: a card whose
+  `Cache-Control` says it is fresh is not asked for at all, and after that it is asked for with
+  `If-None-Match`. When the card offers an extended card, that one is read too.
+- **Versions.** Agents that speak A2A 1.0 and 0.3 both work; the dashboard shows which one is spoken.
+  Of the transports, JSON-RPC and HTTP+JSON are used; gRPC is not.
+- **Answers.** An agent that can stream answers as it goes. One that cannot is asked for its task every
+  two seconds until the task is done.
+- **Broken streams.** A stream the agent closes when the task is done or waits for a person is the
+  normal end. A stream that breaks off while the task is still going is reconnected to — the message is
+  not sent again — up to five times in a row, with growing pauses.
+- **Conversation.** Messages to one agent make one conversation. A task that waits for input shows the
+  agent as waiting, and the next message answers that task. A message sent while the agent is busy waits
+  until it is done.
+- **Cancel** cancels the task the agent is working on.
+- **Restart.** An agent that declares the [restart extension](docs/a2a-restart.md) is asked to restart
+  itself, and supavisor reconnects once it is back. Any other agent cannot be restarted from here, so
+  for it restart means a new conversation.
+
+Not done, on purpose:
+
+- **Push notifications.** They need an address the agent can reach, and supavisor runs on `localhost`;
+  a stream or polling does the same job for the dashboard.
+- **Checking the card signature.** The client reports whether the card is signed, but does not verify
+  the signature: a key fetched from the address the card itself names proves nothing, and the manifest
+  has no field for a key to trust yet.
+- **Security schemes of the card.** How supavisor proves itself is what the manifest says; the schemes
+  the card declares are shown, not acted upon.
+
+## One interface for every agent
+
+The dashboard does not know whether an agent is a local process or a remote service: both are a
+`FleetAgent` (`src/agent-events.ts`) — `start`, `send`, `cancel`, `answerPermission`, `restart`, `stop`,
+`status` and `subscribe`. `send` resolves once the agent has taken the message; what comes of it arrives
+as events. Every event carries the agent id, a `seq` that grows by one per agent — so a consumer can ask
+for everything after N — and its time:
+
+| Event        | What it says                                                                                   |
+|--------------|------------------------------------------------------------------------------------------------|
+| `status`     | `starting`, `idle`, `working`, `waiting`, `error` or `stopped`, and why                        |
+| `message`    | a piece of a message: pieces with one `messageId` make one message, `append` adds to its end   |
+| `thought`    | a piece of the agent's reasoning                                                               |
+| `tool-call`  | a tool call started or changed                                                                 |
+| `permission` | the agent waits until a person picks an option                                                 |
+| `turn-end`   | the agent is done with a message: `end_turn`, `cancelled`, `error`, `input_required`, …        |
+| `log`        | a line of diagnostics                                                                          |
+| `raw`        | whatever else the protocol said, untouched                                                     |
+
+A kind of event one protocol has not got simply does not come from it: A2A has no thoughts, tool calls
+or permission requests — an A2A agent asks a person by pausing its task, and the next message answers.
 
 ## Why JSON
 
-- **Nothing to install.** `JSON.parse` is built into Node; YAML or TOML would bring a parser along.
+- **Nothing to install.** `JSON.parse` is built into Node.
+  YAML or TOML would bring a parser along.
 - **The dashboard writes manifests too.** Editing the fleet from the settings page means rewriting
   `agent.json`; JSON survives a read-modify-write untouched, while the comments YAML or TOML would
   allow get lost on such a rewrite anyway.
