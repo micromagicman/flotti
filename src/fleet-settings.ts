@@ -5,7 +5,8 @@ import type {
     AgentSummary,
     FleetInfo,
     LocalAgentConfig,
-    RemoteAgentConfig
+    RemoteAgentConfig,
+    SshAgentsResponse
 } from './dashboard-protocol.js';
 import { ConfigurationError } from './errors.js';
 import {
@@ -21,6 +22,8 @@ import {
 import { MANIFEST_FILE, SYSTEM_PROMPT_FILE, readLocalManifest, readRemoteManifest } from './manifest.js';
 import type { Environment, ManifestContext } from './manifest.js';
 import { settingsFile, writeSettings } from './settings.js';
+import { SshError, discover, parseTarget } from './ssh.js';
+import type { PublishedAgent, SshTarget } from './ssh.js';
 import type { Supervisor } from './supervisor.js';
 import type { Agent, Fleet, FleetLocation } from './types.js';
 /** Manifest fields the settings page edits; any other field of the file is kept as it is. */
@@ -36,7 +39,7 @@ const LOCAL_FIELDS = [
     'restart',
     'heartbeatTimeoutSec'
 ] as const;
-const REMOTE_FIELDS = ['name', 'description', 'url', 'auth'] as const;
+const REMOTE_FIELDS = ['name', 'description', 'url', 'ssh', 'auth'] as const;
 /**
  * Where a removed agent goes, in the fleet directory. Removing an agent
  * would otherwise take its memory bank and skills with it; from here they can
@@ -47,6 +50,8 @@ type Fields = Record<string, unknown>;
 type FleetSettingsOptions = {
     /** Environment for `~` and the settings file; `process.env` by default. */
     readonly env?: Environment;
+    /** How the agents a host publishes are asked for; over the real `ssh` by default. */
+    readonly discover?: (target: SshTarget) => Promise<PublishedAgent[]>;
     /**
      * Called before the fleet directory changes, with the new fleet; throws to
      * refuse the change — another flotti runs that fleet.
@@ -139,6 +144,15 @@ function pick<T>(fields: Fields, name: string, check: (value: unknown) => boolea
     return check(value) ? value as T : undefined;
 }
 const isString = (value: unknown): boolean => typeof value === 'string';
+/** Whether a manifest's `ssh.target` leads to the same user, host and port. */
+function sameDestination(target: string, place: SshTarget): boolean {
+    try {
+        const other = parseTarget(target);
+        return other.destination === place.destination && other.port === place.port;
+    } catch {
+        return false;
+    }
+}
 /** The manifest as the file says it, for the page to edit: defaults are not filled in. */
 function readConfig(agent: Agent): AgentConfig {
     const fields = readJson(agent.manifestPath);
@@ -148,10 +162,11 @@ function readConfig(agent: Agent): AgentConfig {
         ...(pick<string>(fields, 'description', isString) === undefined ? {} : { description: fields['description'] as string })
     };
     if (agent.kind === 'remote') {
+        const url = pick<string>(fields, 'url', isString);
         const config: RemoteAgentConfig = {
             kind: 'remote',
             ...common,
-            url: pick<string>(fields, 'url', isString) ?? '',
+            ...(agent.ssh === undefined ? { url: url ?? '' } : { ssh: agent.ssh }),
             ...(isObject(fields['auth']) ? { auth: fields['auth'] as unknown as RemoteAgentConfig['auth'] } : {})
         };
         return config;
@@ -226,6 +241,91 @@ class FleetSettings {
         const agent = this.write(kind, id, manifestFrom(kind, fields, {}), systemPrompt);
         this.supervisor.add(agent);
         return this.summary(id);
+    }
+    /**
+     * Adds a remote agent in one step, from nothing but `user@host`: asks the
+     * host over SSH which agents it publishes, writes a remote agent reached
+     * through a tunnel for each one the fleet does not have yet, and starts it.
+     *
+     * @throws ConfigurationError saying why: the address, SSH itself, or what the host publishes.
+     */
+    async addOverSsh(body: unknown): Promise<SshAgentsResponse> {
+        const given = isObject(body) ? body['target'] : undefined;
+        if (typeof given !== 'string' || given.trim() === '') {
+            throw new ConfigurationError('missing-field', 'target is missing: write where the agent is, as user@host.');
+        }
+        const target = given.trim();
+        const { place, published } = await this.published(target);
+        const fleet = this.supervisor.agents().map((summary) => this.supervisor.agent(summary.id));
+        const present: string[] = [];
+        const added: AgentSummary[] = [];
+        for (const agent of published) {
+            const already = fleet.find((member) => member.kind === 'remote'
+                && member.ssh !== undefined
+                && sameDestination(member.ssh.target, place)
+                && (member.ssh.agent ?? agent.id) === agent.id);
+            if (already !== undefined) {
+                present.push(already.id);
+                continue;
+            }
+            const id = this.freeId(agent.id, place.host);
+            const manifest: Fields = {
+                name: agent.name ?? agent.id,
+                ...(agent.description === undefined ? {} : { description: agent.description }),
+                ssh: { target, agent: agent.id }
+            };
+            this.supervisor.add(this.write('remote', id, manifest, undefined));
+            added.push(this.summary(id));
+        }
+        if (added.length === 0) {
+            throw new ConfigurationError(
+                'duplicate-agent-id',
+                `Every agent ${place.destination} publishes is in the fleet already: ${present.join(', ')}.`
+            );
+        }
+        return { added, ...(present.length === 0 ? {} : { present }) };
+    }
+    /** What the host publishes; at least one agent, or a reason why not. */
+    private async published(target: string): Promise<{ place: SshTarget; published: PublishedAgent[] }> {
+        let place: SshTarget;
+        try {
+            place = parseTarget(target);
+        } catch (error) {
+            throw new ConfigurationError('wrong-type', `${(error as Error).message}.`, { cause: error });
+        }
+        let published: PublishedAgent[];
+        try {
+            published = await (this.options.discover ?? ((at: SshTarget) => discover(at)))(place);
+        } catch (error) {
+            if (error instanceof SshError) {
+                throw new ConfigurationError('ssh-failed', `${error.message}.`, { cause: error });
+            }
+            throw error;
+        }
+        if (published.length === 0) {
+            throw new ConfigurationError(
+                'ssh-failed',
+                `${place.destination} publishes no agent: ~/.flotti/a2a/ on it has no .json file. The A2A adapter `
+                + 'of the agent writes one there when it starts; see docs/a2a-ssh.md.'
+            );
+        }
+        return { place, published };
+    }
+    /** The id itself when it is free, else the id with the host, else with a number. */
+    private freeId(id: string, host: string): string {
+        const taken = (candidate: string) => this.supervisor.agents().some((agent) => agent.id === candidate)
+            || [LOCAL_DIRECTORY, REMOTE_DIRECTORY].some((group) => exists(join(this.location.path, group, candidate)));
+        const withHost = `${id}-${host.replace(/[^A-Za-z0-9._-]/g, '-')}`;
+        for (const candidate of [id, withHost]) {
+            if (AGENT_ID.test(candidate) && !taken(candidate)) {
+                return candidate;
+            }
+        }
+        for (let number = 2; ; number++) {
+            if (!taken(`${withHost}-${number}`)) {
+                return `${withHost}-${number}`;
+            }
+        }
     }
     /**
      * Writes the changed manifest and puts it to work: the agent is restarted
