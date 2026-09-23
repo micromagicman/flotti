@@ -48,7 +48,7 @@ const SAMPLE_LOCAL_MANIFEST = `{
     "name": "Claude",
     "adapter": "claude-code",
     "command": "npx",
-    "arguments": ["@zed-industries/claude-code-acp"]
+    "arguments": ["-y", "@agentclientprotocol/claude-agent-acp@0.81.1"]
 }`;
 /**
  * Checks the manifest of a local agent and fills in the documented defaults.

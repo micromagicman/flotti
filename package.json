@@ -31,5 +31,9 @@
   "devDependencies": {
     "@types/node": "^26.5.1",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.5.0",
+    "zod": "^4.6.5"
   }
 }

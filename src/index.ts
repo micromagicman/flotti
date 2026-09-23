@@ -7,11 +7,13 @@ import {
     prepareFleet
 } from './fleet.js';
 import { MANIFEST_FILE, SAMPLE_LOCAL_MANIFEST } from './manifest.js';
+import { RUN_USAGE, runCommand } from './run-command.js';
 import type { Agent, Fleet } from './types.js';
 const HELP = `supavisor — simple ai agents orchestrator for humans
 
 Usage:
-  supavisor [${FLEET_PATH_ARGUMENT} <dir>]
+  supavisor [${FLEET_PATH_ARGUMENT} <dir>]    Read the fleet and list its agents.
+  supavisor run <agent-id> [message]    Talk to a local agent; see below.
 
 Options:
   ${FLEET_PATH_ARGUMENT} <dir>      Fleet directory to read.
@@ -24,7 +26,9 @@ Fleet directory, in this order:
 
 Every agent is a directory: local/<id>/ for agents supavisor starts itself,
 remote/<id>/ for agents it reaches over A2A. Each holds ${MANIFEST_FILE}; README.md
-explains the fields in full — JSON has no comments to explain them in place.`;
+explains the fields in full — JSON has no comments to explain them in place.
+
+${RUN_USAGE}`;
 function describe(agent: Agent): string {
     if (agent.kind === 'remote') {
         return `  ${agent.id} (remote, ${agent.protocol}): ${agent.url}`;
@@ -49,12 +53,15 @@ function report(fleet: Fleet, created: readonly string[]): void {
         console.log(`Created ${path}`);
     }
 }
-function main(argv: readonly string[]): number {
+async function main(argv: readonly string[]): Promise<number> {
     if (argv.includes('--help') || argv.includes('-h')) {
         console.log(HELP);
         return 0;
     }
     try {
+        if (argv[0] === 'run') {
+            return await runCommand(argv.slice(1));
+        }
         const fleet = loadFleet({ argv });
         report(fleet, prepareFleet(fleet));
         return 0;
@@ -69,4 +76,4 @@ function main(argv: readonly string[]): number {
         throw error;
     }
 }
-process.exitCode = main(process.argv.slice(2));
+process.exitCode = await main(process.argv.slice(2));
