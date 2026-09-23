@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { RequestPermissionRequest, SessionUpdate } from '@agentclientprotocol/sdk';
 import type { AgentEventBody, PermissionOption } from './agent-events.js';
-
 /**
  * Gives the pieces of the agent's answers the ids the event model wants. ACP
  * may leave a chunk without `messageId`, and then it belongs to the message
@@ -10,12 +9,10 @@ import type { AgentEventBody, PermissionOption } from './agent-events.js';
  */
 class AcpMessages {
     private current: string | undefined;
-
     /** A new turn: the next piece starts a new message. */
     reset(): void {
         this.current = undefined;
     }
-
     piece(messageId: string | null | undefined): { readonly messageId: string; readonly append: boolean } {
         if (messageId && messageId !== this.current) {
             this.current = messageId;
@@ -28,7 +25,6 @@ class AcpMessages {
         return { messageId: this.current, append: true };
     }
 }
-
 /**
  * Turns one ACP `session/update` into the fleet's agent events. What the
  * event model has no place for goes out as a `raw` event — shown as is by the
@@ -70,7 +66,6 @@ function acpUpdateEvents(update: SessionUpdate, messages: AcpMessages): AgentEve
     }
     return [{ type: 'raw', protocol: 'acp', payload: update }];
 }
-
 /** The permission request as an event; `requestId` is how the answer finds its way back. */
 function acpPermissionEvent(requestId: string, request: RequestPermissionRequest): AgentEventBody {
     return {
@@ -84,5 +79,4 @@ function acpPermissionEvent(requestId: string, request: RequestPermissionRequest
         }))
     };
 }
-
 export { AcpMessages, acpPermissionEvent, acpUpdateEvents };

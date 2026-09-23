@@ -16,7 +16,6 @@ import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { Readable, Writable } from 'node:stream';
 import * as acp from '@agentclientprotocol/sdk';
-
 type FakeConfig = {
     /** Where to write what the agent was asked. */
     readonly record: string;
@@ -31,13 +30,10 @@ type FakeConfig = {
     /** Answer session/new with `auth_required`. */
     readonly authRequired?: boolean;
 };
-
 const config = JSON.parse(process.env['FAKE_ACP'] ?? '{}') as FakeConfig;
-
 function record(entry: object): void {
     appendFileSync(config.record, `${JSON.stringify(entry)}\n`);
 }
-
 if (config.crashStarts !== undefined && config.counter !== undefined) {
     const count = existsSync(config.counter) ? Number(readFileSync(config.counter, 'utf8')) : 0;
     writeFileSync(config.counter, String(count + 1));
@@ -46,7 +42,6 @@ if (config.crashStarts !== undefined && config.counter !== undefined) {
         process.exit(2);
     }
 }
-
 record({
     event: 'started',
     pid: process.pid,
@@ -54,10 +49,8 @@ record({
     codexConfig: process.env['CODEX_CONFIG'] ?? null
 });
 process.stderr.write('fake agent: ready\n');
-
 let sessionCount = 0;
 const cancels = new Map<string, () => void>();
-
 function modelOptions(current: string | undefined): acp.SessionConfigOption[] {
     if (config.models === undefined) {
         return [];
@@ -71,14 +64,42 @@ function modelOptions(current: string | undefined): acp.SessionConfigOption[] {
         options: config.models.map((value: string) => ({ value, name: value }))
     }];
 }
-
+/** Asks for a permission and says what the person picked; returns the stop reason. */
+async function askPermission(client: acp.AgentContext, sessionId: string): Promise<'cancelled' | 'end_turn'> {
+    const answer = await client.request(acp.methods.client.session.requestPermission, {
+        sessionId,
+        toolCall: { toolCallId: 'call-1', title: 'Delete everything' },
+        options: [
+            { optionId: 'yes', name: 'Allow', kind: 'allow_once' },
+            { optionId: 'no', name: 'Reject', kind: 'reject_once' }
+        ]
+    });
+    const outcome = answer.outcome.outcome === 'selected' ? answer.outcome.optionId : 'cancelled';
+    await say(client, sessionId, `permission: ${outcome}`);
+    return outcome === 'cancelled' ? 'cancelled' : 'end_turn';
+}
+/** An ordinary answer: a tool call, a plan, and the message said back. */
+async function answer(client: acp.AgentContext, sessionId: string, text: string): Promise<void> {
+    await client.notify(acp.methods.client.session.update, {
+        sessionId,
+        update: { sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'Think', status: 'in_progress' }
+    });
+    await client.notify(acp.methods.client.session.update, {
+        sessionId,
+        update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-1', status: 'completed' }
+    });
+    await client.notify(acp.methods.client.session.update, {
+        sessionId,
+        update: { sessionUpdate: 'plan', entries: [] }
+    });
+    await say(client, sessionId, `you said: ${text}`);
+}
 async function say(client: acp.AgentContext, sessionId: string, text: string): Promise<void> {
     await client.notify(acp.methods.client.session.update, {
         sessionId,
         update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text }, messageId: 'm1' }
     });
 }
-
 acp.agent({ name: 'fake-acp-agent' })
     .onRequest(acp.methods.agent.initialize, (context) => {
         record({ event: 'initialize', params: context.params });
@@ -145,19 +166,8 @@ acp.agent({ name: 'fake-acp-agent' })
             case 'deaf':
                 await new Promise<void>(() => undefined);
                 break;
-            case 'permission': {
-                const answer = await context.client.request(acp.methods.client.session.requestPermission, {
-                    sessionId,
-                    toolCall: { toolCallId: 'call-1', title: 'Delete everything' },
-                    options: [
-                        { optionId: 'yes', name: 'Allow', kind: 'allow_once' },
-                        { optionId: 'no', name: 'Reject', kind: 'reject_once' }
-                    ]
-                });
-                const outcome = answer.outcome.outcome === 'selected' ? answer.outcome.optionId : 'cancelled';
-                await say(context.client, sessionId, `permission: ${outcome}`);
-                return { stopReason: outcome === 'cancelled' ? 'cancelled' : 'end_turn' };
-            }
+            case 'permission':
+                return { stopReason: await askPermission(context.client, sessionId) };
             case 'spawn': {
                 const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
                 record({ event: 'grandchild', pid: grandchild.pid });
@@ -165,19 +175,7 @@ acp.agent({ name: 'fake-acp-agent' })
                 break;
             }
             default:
-                await context.client.notify(acp.methods.client.session.update, {
-                    sessionId,
-                    update: { sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'Think', status: 'in_progress' }
-                });
-                await context.client.notify(acp.methods.client.session.update, {
-                    sessionId,
-                    update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-1', status: 'completed' }
-                });
-                await context.client.notify(acp.methods.client.session.update, {
-                    sessionId,
-                    update: { sessionUpdate: 'plan', entries: [] }
-                });
-                await say(context.client, sessionId, `you said: ${text}`);
+                await answer(context.client, sessionId, text);
         }
         return { stopReason: 'end_turn' };
     })

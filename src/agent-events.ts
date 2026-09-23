@@ -8,7 +8,6 @@
  * Kept small on purpose: a kind of event is added here when a consumer needs it,
  * not because one protocol happens to have it.
  */
-
 /**
  * What the agent is doing, as the dashboard tab shows it:
  * - `starting` — being started or connected to, including waiting to retry; not ready for messages yet;
@@ -21,10 +20,8 @@
  *                never started, or exited where its policy says to leave it so.
  */
 type AgentStatus = 'starting' | 'idle' | 'working' | 'waiting' | 'error' | 'stopped';
-
 /** Progress of one tool call the agent makes. */
 type ToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
-
 /** One answer a person may give to a permission request, as the agent offered it. */
 type PermissionOption = {
     readonly optionId: string;
@@ -32,7 +29,6 @@ type PermissionOption = {
     /** `allow_once`, `allow_always`, `reject_once` or `reject_always`; kept as the agent sent it. */
     readonly kind: string;
 };
-
 type AgentEventBody =
     /** The agent status changed. */
     | {
@@ -85,7 +81,6 @@ type AgentEventBody =
     | { readonly type: 'log'; readonly source: 'agent' | 'supavisor'; readonly text: string }
     /** Something the protocol said that has no event of its own here, untouched. */
     | { readonly type: 'raw'; readonly protocol: 'acp' | 'a2a'; readonly payload: unknown };
-
 /** An event with its place in the agent's history. */
 type AgentEvent = AgentEventBody & {
     readonly agentId: string;
@@ -94,9 +89,7 @@ type AgentEvent = AgentEventBody & {
     /** ISO 8601 time the event happened. */
     readonly time: string;
 };
-
 type AgentEventListener = (event: AgentEvent) => void;
-
 /** An agent of the fleet as the dashboard drives it, local or remote. */
 interface FleetAgent {
     /** Id of the agent: the name of its directory in the fleet. */
@@ -133,7 +126,6 @@ interface FleetAgent {
     /** Stops the agent, or disconnects from it; queued messages are dropped. */
     stop(): Promise<void>;
 }
-
 /**
  * Keeps the listeners of one agent and hands its events to them, numbered and
  * timed. A listener that throws is the listener's problem: it does not stop the
@@ -142,16 +134,13 @@ interface FleetAgent {
 class AgentEvents {
     private readonly listeners = new Set<AgentEventListener>();
     private seq = 0;
-
     constructor(private readonly agentId: string) {}
-
     subscribe(listener: AgentEventListener): () => void {
         this.listeners.add(listener);
         return () => {
             this.listeners.delete(listener);
         };
     }
-
     emit(body: AgentEventBody): void {
         const event = { ...body, agentId: this.agentId, seq: ++this.seq, time: new Date().toISOString() } as AgentEvent;
         for (const listener of [...this.listeners]) {
@@ -162,12 +151,10 @@ class AgentEvents {
             }
         }
     }
-
     clear(): void {
         this.listeners.clear();
     }
 }
-
 export { AgentEvents };
 export type {
     AgentEvent,

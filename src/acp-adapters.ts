@@ -1,10 +1,8 @@
 import { lstatSync, mkdirSync, readFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LocalAgent } from './types.js';
-
 /** Environment variable codex-acp reads extra Codex configuration from, as a JSON object. */
 const CODEX_CONFIG_VARIABLE = 'CODEX_CONFIG';
-
 /**
  * How an agent gets what its directory holds. ACP has no field for a system
  * prompt or for skills, so each adapter takes them its own way:
@@ -31,7 +29,6 @@ type Handover = {
     /** What could not be handed over, in words for people. */
     readonly notes: readonly string[];
 };
-
 /**
  * Decides how the system prompt and the skills reach the agent, and prepares
  * what has to be on disk for that.
@@ -68,7 +65,6 @@ function prepareHandover(agent: LocalAgent, env: Readonly<Record<string, string 
             };
     }
 }
-
 function readSystemPrompt(agent: LocalAgent): string | undefined {
     if (agent.systemPromptFile === undefined) {
         return undefined;
@@ -76,7 +72,6 @@ function readSystemPrompt(agent: LocalAgent): string | undefined {
     const text = readFileSync(agent.systemPromptFile, 'utf8');
     return text.trim() === '' ? undefined : text;
 }
-
 /**
  * The Codex configuration with the system prompt in it. A `CODEX_CONFIG` the
  * manifest or the environment already sets is kept; a `developer_instructions`
@@ -94,7 +89,6 @@ function codexConfig(env: Readonly<Record<string, string | undefined>>, systemPr
     }
     return JSON.stringify({ developer_instructions: systemPrompt, ...config });
 }
-
 /**
  * Codex looks for skills in `<root>/.agents/skills`, and the agent keeps them in
  * `<root>/skills`: a link joins the two. A junction on Windows, where it needs
@@ -113,6 +107,5 @@ function linkCodexSkills(agent: LocalAgent): void {
     mkdirSync(container, { recursive: true });
     symlinkSync(agent.skillsDirectory, link, 'junction');
 }
-
 export { CODEX_CONFIG_VARIABLE, prepareHandover };
 export type { Handover };

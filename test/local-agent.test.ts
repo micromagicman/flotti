@@ -4,15 +4,22 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { AgentEvent } from '../src/agent-events.js';
 import { Harness, eventually, isAlive } from './local-agent-helpers.js';
-
 /** Events without the fields that change from run to run. */
 function shape(events: readonly AgentEvent[]): unknown[] {
-    return events.map(({ agentId: _agentId, seq: _seq, time: _time, ...body }) =>
-        body.type === 'tool-call' ? { ...body, raw: undefined }
-            : body.type === 'message' && body.role === 'user' ? { ...body, messageId: undefined }
-                : body);
+    return events.map((event) => {
+        const body: Record<string, unknown> = { ...event };
+        delete body['agentId'];
+        delete body['seq'];
+        delete body['time'];
+        if (event.type === 'tool-call') {
+            body['raw'] = undefined;
+        }
+        if (event.type === 'message' && event.role === 'user') {
+            body['messageId'] = undefined;
+        }
+        return body;
+    });
 }
-
 describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
     it('starts the agent, sends a message and streams the answer as events', async () => {
         const harness = new Harness();
@@ -35,7 +42,6 @@ describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
         const seqs = harness.events.map((event) => event.seq);
         deepStrictEqual(seqs, seqs.map((_, index) => index + 1));
     });
-
     it('turns the agent stderr into log events and keeps it with the ACP trace in logs/', async () => {
         const harness = new Harness();
         await harness.agent.start();
@@ -48,7 +54,8 @@ describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
         deepStrictEqual(trace[0]?.message.method, 'initialize');
         ok(trace.some((line) => line.direction === 'in'));
     });
-
+});
+describe('LocalAgentProcess: the queue', { timeout: 20_000 }, () => {
     it('queues a message sent while the agent is busy', async () => {
         const harness = new Harness();
         await harness.agent.start();
@@ -56,7 +63,6 @@ describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
         deepStrictEqual(answers, ['end_turn', 'end_turn']);
         deepStrictEqual(harness.recorded('session/prompt').map((entry) => entry['text']), ['one', 'two']);
     });
-
     it('queues a message sent before the agent is ready', async () => {
         const harness = new Harness();
         const started = harness.agent.start();
@@ -64,12 +70,10 @@ describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
         await started;
         strictEqual(await answer, 'end_turn');
     });
-
     it('refuses a message to a stopped agent', async () => {
         const harness = new Harness();
         await rejects(harness.agent.send('hello'), /is stopped; start it first/);
     });
-
     it('drops the queued messages when stopped', async () => {
         const harness = new Harness();
         await harness.agent.start();
@@ -81,7 +85,6 @@ describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
         deepStrictEqual(harness.recorded('session/prompt').map((entry) => entry['text']), ['wait']);
     });
 });
-
 describe('LocalAgentProcess: permissions and cancelling', { timeout: 20_000 }, () => {
     it('holds a permission request until a person answers it', async () => {
         const harness = new Harness();
@@ -97,7 +100,8 @@ describe('LocalAgentProcess: permissions and cancelling', { timeout: 20_000 }, (
         await harness.next((event) => event.type === 'message' && event.text === 'permission: yes');
         strictEqual(harness.agent.answerPermission(request.requestId, 'yes'), false);
     });
-
+});
+describe('LocalAgentProcess: cancelling', { timeout: 20_000 }, () => {
     it('cancels the message in work and answers open permission requests with cancelled', async () => {
         const harness = new Harness();
         await harness.agent.start();
@@ -107,7 +111,6 @@ describe('LocalAgentProcess: permissions and cancelling', { timeout: 20_000 }, (
         strictEqual(await answer, 'cancelled');
         await harness.next((event) => event.type === 'message' && event.text === 'permission: cancelled');
     });
-
     it('cancels a message the agent works on', async () => {
         const harness = new Harness();
         await harness.agent.start();
@@ -118,7 +121,6 @@ describe('LocalAgentProcess: permissions and cancelling', { timeout: 20_000 }, (
         strictEqual(harness.recorded('session/cancel').length, 1);
         strictEqual(harness.agent.state, 'running');
     });
-
     it('kills and restarts an agent that ignores the cancel', async () => {
         const harness = new Harness({ fake: { resume: true }, options: { cancelTimeoutMs: 200 } });
         await harness.agent.start();
@@ -137,7 +139,6 @@ describe('LocalAgentProcess: permissions and cancelling', { timeout: 20_000 }, (
             (entry['params'] as { sessionId: string }).sessionId), [session]);
     });
 });
-
 describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
     it('restarts an agent that crashed and resumes its session', async () => {
         const harness = new Harness({ fake: { resume: true } });
@@ -154,7 +155,6 @@ describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
         strictEqual(harness.recorded('session/resume').length, 1);
         strictEqual(await harness.talk('again'), 'end_turn');
     });
-
     it('falls back to session/load and does not repeat the replayed history', async () => {
         const harness = new Harness({ fake: { load: true } });
         await harness.agent.start();
@@ -164,7 +164,6 @@ describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
         strictEqual(harness.recorded('session/load').length, 1);
         ok(!harness.events.some((event) => event.type === 'message' && event.text.includes('replayed')));
     });
-
     it('starts a new session, and says the context is lost, when the agent can neither resume nor load', async () => {
         const harness = new Harness();
         await harness.agent.start();
@@ -173,7 +172,8 @@ describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
         ok(harness.agent.sessionId !== session);
         await harness.next((event) => event.type === 'log' && /the context is lost/.test(event.text));
     });
-
+});
+describe('LocalAgentProcess: restart policy', { timeout: 20_000 }, () => {
     it('leaves an agent with the policy "never" exited', async () => {
         const harness = new Harness({ manifest: { restart: 'never' } });
         await harness.agent.start();
@@ -183,7 +183,6 @@ describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
         strictEqual(harness.agent.state, 'exited');
         strictEqual(harness.recorded('started').length, 1);
     });
-
     it('retries a failing start with a growing delay and succeeds', async () => {
         const harness = new Harness({ fake: { crashStarts: 2 } });
         await harness.agent.start();
@@ -193,7 +192,6 @@ describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
         deepStrictEqual(delays, ['10', '20']);
         strictEqual(harness.agent.state, 'running');
     });
-
     it('gives up after the allowed retries and says why', async () => {
         const harness = new Harness({ fake: { crashStarts: 10 } });
         await rejects(harness.agent.start(), /is fatal: exited with code 2; gave up after 2 restarts in a row/);
@@ -201,14 +199,14 @@ describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
         strictEqual(harness.agent.status, 'error');
         strictEqual(readFileSync(join(harness.directory, 'counter'), 'utf8'), '3');
     });
-
     it('can be started again after it gave up', async () => {
         const harness = new Harness({ fake: { crashStarts: 3 } });
         await rejects(harness.agent.start());
         await harness.agent.start();
         strictEqual(harness.agent.state, 'running');
     });
-
+});
+describe('LocalAgentProcess: stopping', { timeout: 20_000 }, () => {
     it('kills and restarts an agent that stopped answering heartbeats', async () => {
         const harness = new Harness({ manifest: { heartbeatTimeoutSec: 1 }, fake: { resume: true } });
         await harness.agent.start();
@@ -220,7 +218,6 @@ describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
         await harness.status('idle', from);
         strictEqual(harness.recorded('started').length, 2);
     });
-
     it('stops the whole process group: what the agent started goes too', async () => {
         const harness = new Harness();
         await harness.agent.start();
@@ -234,7 +231,6 @@ describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
         strictEqual(harness.agent.status, 'stopped');
         await eventually(() => !pids.some(isAlive));
     });
-
     it('stops an agent in the middle of a message: cancels it first, then ends the process', async () => {
         const harness = new Harness();
         await harness.agent.start();
@@ -244,20 +240,19 @@ describe('LocalAgentProcess: lifecycle', { timeout: 20_000 }, () => {
         strictEqual(await answer, 'cancelled');
         strictEqual(harness.recorded('session/cancel').length, 1);
     });
-
+});
+describe('LocalAgentProcess: failures a retry cannot fix', { timeout: 20_000 }, () => {
     it('goes fatal at once for a command that does not exist', async () => {
         const harness = new Harness({ manifest: { command: 'supavisor-no-such-command' } });
         await rejects(harness.agent.start(), /command not found: supavisor-no-such-command/);
         strictEqual(harness.agent.state, 'fatal');
     });
-
     it('goes fatal at once when the agent wants a login', async () => {
         const harness = new Harness({ fake: { authRequired: true } });
         await rejects(harness.agent.start(), /the agent wants a login first/);
         strictEqual(harness.recorded('started').length, 1);
     });
 });
-
 describe('LocalAgentProcess: what the agent gets from its directory', { timeout: 20_000 }, () => {
     it('asks for the manifest model through the session model option', async () => {
         const harness = new Harness({ manifest: { model: 'large' }, fake: { models: ['small', 'large'] } });
@@ -266,19 +261,18 @@ describe('LocalAgentProcess: what the agent gets from its directory', { timeout:
             { sessionId: harness.agent.sessionId, configId: 'model', value: 'large' }
         ]);
     });
-
     it('goes fatal at once for a model the agent refuses', async () => {
         const harness = new Harness({ manifest: { model: 'huge' }, fake: { models: ['small'] } });
         await rejects(harness.agent.start(), /the agent refused model "huge"/);
         strictEqual(harness.recorded('started').length, 1);
     });
-
     it('says so when the agent offers no model option', async () => {
         const harness = new Harness({ manifest: { model: 'large' } });
         await harness.agent.start();
         await harness.next((event) => event.type === 'log' && /model "large" is not applied/.test(event.text));
     });
-
+});
+describe('LocalAgentProcess: what Claude Code gets, and where the agent runs', { timeout: 20_000 }, () => {
     it('runs the agent in its workdir and opens the session there', async () => {
         const harness = new Harness();
         await harness.agent.start();
@@ -287,7 +281,6 @@ describe('LocalAgentProcess: what the agent gets from its directory', { timeout:
         const [session] = harness.recorded('session/new');
         strictEqual((session?.['params'] as { cwd: string }).cwd, harness.directory);
     });
-
     it('hands Claude Code the system prompt, the skills and the agent directory', async () => {
         const harness = new Harness({
             manifest: { adapter: 'claude-code' },
@@ -306,14 +299,14 @@ describe('LocalAgentProcess: what the agent gets from its directory', { timeout:
             }
         });
     });
-
     it('sends no extra directories to an agent that does not support them', async () => {
         const harness = new Harness({ manifest: { adapter: 'claude-code' } });
         await harness.agent.start();
         const [session] = harness.recorded('session/new');
         strictEqual((session?.['params'] as Record<string, unknown>)['additionalDirectories'], undefined);
     });
-
+});
+describe('LocalAgentProcess: what Codex and adapterless agents get', { timeout: 20_000 }, () => {
     it('hands Codex the system prompt in CODEX_CONFIG and links its skills where Codex looks', async () => {
         const harness = new Harness({
             manifest: { adapter: 'codex', env: { CODEX_CONFIG: '{"model_reasoning_effort":"high"}' } },
@@ -330,7 +323,6 @@ describe('LocalAgentProcess: what the agent gets from its directory', { timeout:
         const [session] = harness.recorded('session/new');
         deepStrictEqual((session?.['params'] as Record<string, unknown>)['additionalDirectories'], [harness.directory]);
     });
-
     it('says the system prompt is not passed to an agent without an adapter', async () => {
         const harness = new Harness({ systemPrompt: 'Be brief.' });
         await harness.agent.start();

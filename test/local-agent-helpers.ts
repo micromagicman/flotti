@@ -7,18 +7,14 @@ import type { AgentEvent, AgentStatus } from '../src/agent-events.js';
 import { LocalAgentProcess } from '../src/local-agent.js';
 import type { LocalAgentOptions } from '../src/local-agent.js';
 import type { LocalAgent } from '../src/types.js';
-
 const FAKE_AGENT = fileURLToPath(new URL('./fake-acp-agent.js', import.meta.url));
 const workspace = mkdtempSync(join(tmpdir(), 'supavisor-agent-'));
 const started: LocalAgentProcess[] = [];
-
 after(async () => {
     await Promise.all(started.map((agent) => agent.stop()));
     rmSync(workspace, { recursive: true, force: true });
 });
-
 let made = 0;
-
 type FakeSetup = {
     /** What the pretend agent does; see test/fake-acp-agent.ts. */
     readonly fake?: Record<string, unknown>;
@@ -28,7 +24,6 @@ type FakeSetup = {
     /** Contents of system-prompt.md; no file when absent. */
     readonly systemPrompt?: string;
 };
-
 /** A local agent that runs the pretend ACP agent, with its own directory and record file. */
 class Harness {
     readonly directory: string;
@@ -36,7 +31,6 @@ class Harness {
     readonly agent: LocalAgentProcess;
     readonly events: AgentEvent[] = [];
     private readonly waiting: { test: (event: AgentEvent) => boolean; resolve: (event: AgentEvent) => void }[] = [];
-
     constructor(setup: FakeSetup = {}) {
         this.directory = join(workspace, `agent-${++made}`);
         mkdirSync(join(this.directory, 'skills'), { recursive: true });
@@ -85,7 +79,6 @@ class Harness {
             }
         });
     }
-
     /** The first event from now on, or already seen, that passes the test. */
     next(test: (event: AgentEvent) => boolean): Promise<AgentEvent> {
         const seen = this.events.find(test);
@@ -94,12 +87,10 @@ class Harness {
         }
         return new Promise((resolve) => this.waiting.push({ test, resolve }));
     }
-
     /** The first status event with this status that comes after `seq`. */
     status(status: AgentStatus, afterSeq = 0): Promise<AgentEvent> {
         return this.next((event) => event.seq > afterSeq && event.type === 'status' && event.status === status);
     }
-
     /**
      * Sends a message and waits until the agent is done with it; resolves with
      * the reason of its `turn-end` event. `send` itself resolves as soon as the
@@ -114,7 +105,6 @@ class Harness {
         const end = await this.next((event) => event.seq > seq && event.type === 'turn-end');
         return end.type === 'turn-end' ? end.reason : '';
     }
-
     /** What the pretend agent recorded, one object per line. */
     record(): Record<string, unknown>[] {
         if (!existsSync(this.recordFile)) {
@@ -123,16 +113,13 @@ class Harness {
         return readFileSync(this.recordFile, 'utf8').trim().split('\n').filter(Boolean)
             .map((line) => JSON.parse(line) as Record<string, unknown>);
     }
-
     recorded(event: string): Record<string, unknown>[] {
         return this.record().filter((entry) => entry['event'] === event);
     }
-
     get lastSeq(): number {
         return this.events.at(-1)?.seq ?? 0;
     }
 }
-
 function isAlive(pid: number): boolean {
     try {
         process.kill(pid, 0);
@@ -141,7 +128,6 @@ function isAlive(pid: number): boolean {
         return false;
     }
 }
-
 /** Waits until the condition holds, checking every 20 ms; fails after `timeoutMs`. */
 async function eventually(condition: () => boolean, timeoutMs = 3000): Promise<void> {
     const until = Date.now() + timeoutMs;
@@ -152,5 +138,4 @@ async function eventually(condition: () => boolean, timeoutMs = 3000): Promise<v
         await new Promise((resolve) => setTimeout(resolve, 20));
     }
 }
-
 export { FAKE_AGENT, Harness, eventually, isAlive, workspace };

@@ -20,7 +20,6 @@ import type { Handover } from './acp-adapters.js';
 import { AgentEvents } from './agent-events.js';
 import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent } from './agent-events.js';
 import type { LocalAgent } from './types.js';
-
 /**
  * Where the agent process is, after supervisord:
  * - `stopped`  — not started, or stopped by a person;
@@ -32,7 +31,6 @@ import type { LocalAgent } from './types.js';
  * - `fatal`    — supavisor gave up: it keeps failing, or fails in a way a retry cannot fix.
  */
 type LifecycleState = 'stopped' | 'starting' | 'running' | 'backoff' | 'stopping' | 'exited' | 'fatal';
-
 /** What supavisor needs besides the manifest. The defaults suit people; tests pass small numbers. */
 type LocalAgentOptions = {
     /** Environment the agent inherits before the manifest adds to it; defaults to `process.env`. */
@@ -55,7 +53,6 @@ type LocalAgentOptions = {
      */
     readonly logDirectory?: string | null;
 };
-
 const DEFAULTS = {
     startSecs: 10,
     maxRetries: 3,
@@ -64,17 +61,13 @@ const DEFAULTS = {
     cancelTimeoutMs: 5000,
     stopTimeoutMs: 5000
 };
-
 /** Extension request supavisor sends to see the agent is alive; any answer, an error too, will do. */
 const HEARTBEAT_METHOD = '_supavisor/heartbeat';
-
 /** JSON-RPC errors a retry cannot fix: the agent wants a login, or refuses what the manifest asks for. */
 const AUTH_REQUIRED = -32000;
 const INVALID_PARAMS = -32602;
-
 /** A failure that a restart would only repeat. */
 class PermanentFailure extends Error {}
-
 type Turn = {
     readonly text: string;
     /** The message went to the agent: {@link LocalAgentProcess.send} resolves. */
@@ -82,7 +75,6 @@ type Turn = {
     /** The message never got to the agent: {@link LocalAgentProcess.send} rejects. */
     readonly refused: (error: Error) => void;
 };
-
 /** One life of the agent process, from spawn to exit. */
 type Run = {
     readonly child: ChildProcess;
@@ -102,7 +94,6 @@ type Run = {
     trace?: WriteStream;
     stderrLog?: WriteStream;
 };
-
 /**
  * A local agent: supavisor starts it as a child process speaking ACP over
  * stdio, holds one session with it, restarts it by its policy and turns
@@ -128,7 +119,6 @@ class LocalAgentProcess implements FleetAgent {
     private readonly permissions = new Map<string, (response: RequestPermissionResponse) => void>();
     private permissionCount = 0;
     private waiters: { resolve: () => void; reject: (error: Error) => void }[] = [];
-
     constructor(agent: LocalAgent, options: LocalAgentOptions = {}) {
         this.agent = agent;
         this.events = new AgentEvents(agent.id);
@@ -143,33 +133,26 @@ class LocalAgentProcess implements FleetAgent {
             stopTimeoutMs: options.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs
         };
     }
-
     get agentId(): string {
         return this.agent.id;
     }
-
     get state(): LifecycleState {
         return this.lifecycle;
     }
-
     get status(): AgentStatus {
         return this.shownStatus;
     }
-
     /** Id of the ACP session; kept across restarts so the agent can pick the conversation up. */
     get sessionId(): string | undefined {
         return this.session;
     }
-
     /** What the agent said about itself in `initialize`: capabilities, login methods, name. */
     get capabilities(): InitializeResponse | undefined {
         return this.run?.capabilities;
     }
-
     subscribe(listener: AgentEventListener): () => void {
         return this.events.subscribe(listener);
     }
-
     /**
      * Starts the agent with a new session. Resolves once it is ready for
      * messages; rejects when it ends up `exited` or `fatal` instead — after
@@ -187,7 +170,6 @@ class LocalAgentProcess implements FleetAgent {
         }
         return ready;
     }
-
     /** Stops the agent: cancels the message in work, then ends the process and its children. */
     async stop(): Promise<void> {
         this.clearBackoff();
@@ -208,7 +190,6 @@ class LocalAgentProcess implements FleetAgent {
         await this.terminate(run);
         this.setLifecycle('stopped', 'stopped');
     }
-
     /**
      * Stops the agent and starts it again, picking the same session up when
      * the agent can: `session/resume`, else `session/load`. An agent that can
@@ -223,7 +204,6 @@ class LocalAgentProcess implements FleetAgent {
         void this.launch();
         return ready;
     }
-
     /**
      * Sends a message. While the agent works on another one, the message waits
      * in line. Resolves once the message went to the agent as `session/prompt`;
@@ -240,7 +220,6 @@ class LocalAgentProcess implements FleetAgent {
             this.pump();
         });
     }
-
     /**
      * Asks the agent to drop the message it works on. Open permission requests
      * are answered `cancelled`, as ACP requires. An agent that does not end the
@@ -259,7 +238,6 @@ class LocalAgentProcess implements FleetAgent {
             this.fail(run, `did not end the cancelled message within ${this.options.cancelTimeoutMs} ms`);
         }
     }
-
     /**
      * Answers a permission request with one of the options it offered, or
      * with `cancelled` when no option is given.
@@ -276,9 +254,7 @@ class LocalAgentProcess implements FleetAgent {
         this.showStatus();
         return true;
     }
-
     // --- starting --------------------------------------------------------------------------------------------
-
     private async launch(): Promise<void> {
         this.clearBackoff();
         this.setLifecycle('starting', this.retries === 0 ? 'starting' : `starting, try ${this.retries + 1}`);
@@ -309,7 +285,6 @@ class LocalAgentProcess implements FleetAgent {
         this.setLifecycle('running', 'ready');
         this.pump();
     }
-
     private spawn(handover: Handover): Run {
         const posix = process.platform !== 'win32';
         const child = spawn(this.agent.command, [...this.agent.arguments], {
@@ -359,7 +334,6 @@ class LocalAgentProcess implements FleetAgent {
         }
         return run;
     }
-
     private async handshake(run: Run, handover: Handover): Promise<void> {
         const { child } = run;
         if (child.stdin === null || child.stdout === null) {
@@ -381,6 +355,18 @@ class LocalAgentProcess implements FleetAgent {
         run.capabilities = capabilities;
         // Not sooner: before its first answer the agent may still be downloading under npx.
         this.startHeartbeat(run);
+        await this.applyModel(run, await this.openSession(run, connection, capabilities, handover));
+    }
+    /**
+     * Picks the previous session up when the agent can — `session/resume`, else
+     * `session/load` — or opens a new one; returns the session config options.
+     */
+    private async openSession(
+        run: Run,
+        connection: acp.ClientConnection,
+        capabilities: InitializeResponse,
+        handover: Handover
+    ): Promise<SessionConfigOption[] | null | undefined> {
         const agentCapabilities = capabilities.agentCapabilities;
         const directories = agentCapabilities?.sessionCapabilities?.additionalDirectories
             ? { additionalDirectories: [...handover.additionalDirectories] }
@@ -422,9 +408,8 @@ class LocalAgentProcess implements FleetAgent {
             this.session = response.sessionId;
             configOptions = response.configOptions;
         }
-        await this.applyModel(run, configOptions);
+        return configOptions;
     }
-
     /**
      * Asks for the manifest's model through the session's `model` config option
      * — the ACP way, the same for every agent that has one.
@@ -454,9 +439,7 @@ class LocalAgentProcess implements FleetAgent {
             throw new PermanentFailure(`the agent refused model "${model}": ${message(error)}`);
         }
     }
-
     // --- running ---------------------------------------------------------------------------------------------
-
     private pump(): void {
         const run = this.run;
         if (this.active !== undefined || this.lifecycle !== 'running' || run?.connection === undefined) {
@@ -484,7 +467,6 @@ class LocalAgentProcess implements FleetAgent {
             }
         );
     }
-
     private endTurn(turn: Turn, reason: string | undefined, error?: unknown): void {
         if (this.active !== turn) {
             return;
@@ -500,7 +482,6 @@ class LocalAgentProcess implements FleetAgent {
         this.showStatus();
         this.pump();
     }
-
     private waitForTurnEnd(turn: Turn, timeoutMs: number): Promise<boolean> {
         return new Promise((resolve) => {
             const started = Date.now();
@@ -516,7 +497,6 @@ class LocalAgentProcess implements FleetAgent {
             check();
         });
     }
-
     private onUpdate(run: Run, notification: SessionNotification): void {
         if (run !== this.run || run.replaying || notification.sessionId !== this.session) {
             return;
@@ -525,7 +505,6 @@ class LocalAgentProcess implements FleetAgent {
             this.emit(event);
         }
     }
-
     private onPermission(run: Run, request: RequestPermissionRequest): Promise<RequestPermissionResponse> {
         if (run !== this.run || run.stopping) {
             return Promise.resolve({ outcome: { outcome: 'cancelled' } });
@@ -537,13 +516,11 @@ class LocalAgentProcess implements FleetAgent {
             this.showStatus();
         });
     }
-
     private cancelPermissions(): void {
         for (const requestId of [...this.permissions.keys()]) {
             this.answerPermission(requestId);
         }
     }
-
     private onStderr(run: Run, chunk: string): void {
         run.stderrLog?.write(chunk);
         for (const line of chunk.split(/\r?\n/)) {
@@ -552,7 +529,6 @@ class LocalAgentProcess implements FleetAgent {
             }
         }
     }
-
     /** Sees every message both ways: for the trace file, and as a sign of life. */
     private tap(run: Run, stream: acp.Stream): acp.Stream {
         const record = (direction: 'in' | 'out', message: AnyMessage): void => {
@@ -575,7 +551,6 @@ class LocalAgentProcess implements FleetAgent {
         outbound.readable.pipeTo(stream.writable).catch(() => undefined);
         return { readable: inbound.readable, writable: outbound.writable };
     }
-
     /**
      * ACP has no heartbeat, so supavisor asks, from the answer to `initialize`
      * on: an extension request every third of the timeout. Any message from the agent counts as a sign of life — the
@@ -594,9 +569,7 @@ class LocalAgentProcess implements FleetAgent {
         }, Math.max(timeoutMs / 3, 10));
         run.heartbeat.unref();
     }
-
     // --- stopping and failing --------------------------------------------------------------------------------
-
     /** Ends a run that went wrong; {@link onExit} decides what comes next. */
     private fail(run: Run, reason: string, permanent = false): void {
         if (run.failure !== undefined || run.stopping) {
@@ -606,7 +579,6 @@ class LocalAgentProcess implements FleetAgent {
         run.permanent = permanent;
         void this.terminate(run, false);
     }
-
     private async terminate(run: Run, wait = true): Promise<void> {
         if (run.heartbeat !== undefined) {
             clearInterval(run.heartbeat);
@@ -623,7 +595,6 @@ class LocalAgentProcess implements FleetAgent {
             await run.exited;
         }
     }
-
     private onExit(run: Run, code: number | null, signal: NodeJS.Signals | null): void {
         if (run.heartbeat !== undefined) {
             clearInterval(run.heartbeat);
@@ -666,7 +637,6 @@ class LocalAgentProcess implements FleetAgent {
             void this.launch();
         }, delay);
     }
-
     /**
      * Messages die with the process: an answer that was on its way is gone —
      * its turn ends with `error`, and the status says why — and a queued one
@@ -682,25 +652,20 @@ class LocalAgentProcess implements FleetAgent {
             turn.refused(new Error(reason));
         }
     }
-
     private giveUp(reason: string): void {
         this.dropWork(`agent "${this.agentId}" gave up: ${reason}`);
         this.setLifecycle('fatal', reason);
     }
-
     private clearBackoff(): void {
         if (this.backoffTimer !== undefined) {
             clearTimeout(this.backoffTimer);
             this.backoffTimer = undefined;
         }
     }
-
     // --- state and events ------------------------------------------------------------------------------------
-
     private whenReady(): Promise<void> {
         return new Promise((resolve, reject) => this.waiters.push({ resolve, reject }));
     }
-
     /** Moves to another state; `running` ends the wait of {@link start} well, `stopped`, `exited` and `fatal` badly. */
     private setLifecycle(state: LifecycleState, detail: string): void {
         this.lifecycle = state;
@@ -716,7 +681,6 @@ class LocalAgentProcess implements FleetAgent {
         }
         this.showStatus(detail);
     }
-
     /** The status people see follows from the lifecycle and from what the agent is busy with. */
     private showStatus(detail?: string): void {
         let status: AgentStatus;
@@ -742,11 +706,9 @@ class LocalAgentProcess implements FleetAgent {
         this.shownDetail = shown;
         this.emit({ type: 'status', status, ...(shown === undefined ? {} : { reason: shown }) });
     }
-
     private emit(body: AgentEventBody): void {
         this.events.emit(body);
     }
-
     private openLogs(): { trace?: WriteStream; stderrLog?: WriteStream } {
         if (this.logDirectory === null) {
             return {};
@@ -759,7 +721,6 @@ class LocalAgentProcess implements FleetAgent {
         return { trace, stderrLog };
     }
 }
-
 function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
     const pid = child.pid;
     if (pid === undefined) {
@@ -779,11 +740,9 @@ function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
         // Already gone.
     }
 }
-
 function isPermanent(error: unknown): boolean {
     return error instanceof acp.RequestError && (error.code === AUTH_REQUIRED || error.code === INVALID_PARAMS);
 }
-
 function message(error: unknown): string {
     if (error instanceof acp.RequestError) {
         const hint = error.code === AUTH_REQUIRED ? ' (the agent wants a login first)' : '';
@@ -791,6 +750,5 @@ function message(error: unknown): string {
     }
     return error instanceof Error ? error.message : String(error);
 }
-
 export { LocalAgentProcess };
 export type { LifecycleState, LocalAgentOptions };
