@@ -10,7 +10,9 @@ the agent can reach, and flotti runs on `localhost`, often behind a tunnel that 
 This extension turns it around: flotti opens a stream to the agent once, and keeps it open; the agent
 says through it whatever it wants to say of its own. It is an ordinary A2A streaming message and an
 ordinary task: no new method, nothing the SDKs do not already carry, and the connection goes the way
-every other request goes — same address, same credentials.
+every other request goes — same address, same credentials, and down the same SSH tunnel for an
+agent reached over SSH ([a2a-ssh.md](a2a-ssh.md)); when the tunnel is opened again after a drop, so is
+the inbox.
 
 ## The agent declares it
 

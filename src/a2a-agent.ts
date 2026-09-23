@@ -15,6 +15,8 @@ import type { Client } from '@a2a-js/sdk/client';
 import { AgentEvents } from './agent-events.js';
 import type { AgentEventListener, AgentStatus, FleetAgent } from './agent-events.js';
 import type { Environment } from './manifest.js';
+import { SshConnection } from './ssh.js';
+import type { RemoteConnection, RemoteEndpoint, SshOptions } from './ssh.js';
 import type { RemoteAgent, RemoteAuth } from './types.js';
 /**
  * A2A extension through which flotti asks a remote agent to restart itself.
@@ -43,6 +45,15 @@ type A2AAgentOptions = {
     readonly reconnectDelayMaxMs?: number;
     /** How long a restarting agent may stay away before the restart counts as failed; 60 s by default. */
     readonly restartTimeoutMs?: number;
+    /**
+     * The way to the agent when it has to be opened first; by default an SSH
+     * tunnel for an agent with `ssh` in its manifest, and none otherwise.
+     */
+    readonly connection?: RemoteConnection;
+    /** How `ssh` is run for an agent with `ssh` in its manifest. */
+    readonly ssh?: SshOptions;
+    /** Longest pause between attempts to open a connection that dropped. 30 s by default. */
+    readonly reopenDelayMaxMs?: number;
 };
 /** What the agent card told about the agent, for the dashboard. */
 type A2AAgentInfo = {
@@ -116,6 +127,13 @@ class A2AAgent implements FleetAgent {
     private readonly reconnectDelayMs: number;
     private readonly reconnectDelayMaxMs: number;
     private readonly restartTimeoutMs: number;
+    private readonly reopenDelayMaxMs: number;
+    /** The way to the agent that has to be opened first — an SSH tunnel — if there is one. */
+    private readonly connection: RemoteConnection | undefined;
+    /** What the open connection says about the way to the agent. */
+    private endpoint: RemoteEndpoint | undefined;
+    /** Session of the attempts to open again a connection that dropped, or never opened. */
+    private retrying: AbortSignal | undefined;
     private readonly events: AgentEvents;
     private currentStatus: AgentStatus = 'stopped';
     private currentReason: string | undefined;
@@ -141,8 +159,11 @@ class A2AAgent implements FleetAgent {
         this.events = new AgentEvents(agent.id);
         this.env = options.env ?? process.env;
         const base = options.fetch ?? globalThis.fetch;
-        this.fetch = createAuthenticatingFetchWithRetry(base, {
-            headers: async () => authHeaders(this.agent.auth, this.env),
+        const routed: typeof fetch = (input, init) => base(this.route(input), init);
+        this.fetch = createAuthenticatingFetchWithRetry(routed, {
+            headers: async () => this.endpoint?.headers === undefined
+                ? authHeaders(this.agent.auth, this.env)
+                : { ...this.endpoint.headers },
             // A secret from the environment cannot be refreshed: a refusal is final.
             shouldRetryWithHeaders: async () => undefined
         });
@@ -152,6 +173,10 @@ class A2AAgent implements FleetAgent {
         this.reconnectDelayMs = options.reconnectDelayMs ?? 500;
         this.reconnectDelayMaxMs = options.reconnectDelayMaxMs ?? 5_000;
         this.restartTimeoutMs = options.restartTimeoutMs ?? 60_000;
+        this.reopenDelayMaxMs = options.reopenDelayMaxMs ?? 30_000;
+        this.connection = options.connection
+            ?? (agent.ssh === undefined ? undefined : new SshConnection(agent.ssh, options.ssh));
+        this.connection?.onDrop((reason: string) => this.dropped(reason));
     }
     get status(): AgentStatus {
         return this.currentStatus;
@@ -169,11 +194,19 @@ class A2AAgent implements FleetAgent {
      * checked with its `ETag`.
      */
     async start(): Promise<void> {
-        this.setStatus('starting');
+        if (this.reopening) {
+            // Started by hand while it was trying again by itself: this attempt takes over.
+            this.endSession();
+        }
+        this.setStatus('starting', this.connection === undefined ? undefined : 'opening the SSH tunnel');
         try {
             await this.connect();
         } catch (error) {
             this.setStatus('error', describeError(error));
+            if (this.connection !== undefined) {
+                // A tunnel is kept up: a host that is away now is tried again until it is back.
+                void this.keepTrying(describeError(error), 1);
+            }
             throw error;
         }
         this.setStatus('idle');
@@ -251,9 +284,88 @@ class A2AAgent implements FleetAgent {
         this.client = undefined;
         this.forgetConversation();
         this.setStatus('stopped');
+        this.endpoint = undefined;
+        await this.connection?.close();
+    }
+    /** Where a request really goes: down the tunnel, when the connection has one. */
+    private route(input: string | URL | Request): string | URL | Request {
+        const rewrite = this.endpoint?.rewrite;
+        if (rewrite === undefined) {
+            return input;
+        }
+        const url = new URL(input instanceof Request ? input.url : input.toString());
+        const moved = rewrite(url);
+        if (moved === undefined) {
+            return input;
+        }
+        return input instanceof Request ? new Request(moved, input) : moved.href;
+    }
+    /** The connection broke by itself: what was in work is lost, and the way is opened again. */
+    private dropped(reason: string): void {
+        if (this.currentStatus === 'stopped' || this.currentStatus === 'starting' || this.reopening) {
+            return;
+        }
+        this.endSession();
+        this.client = undefined;
+        void this.keepTrying(reason, 0);
+    }
+    /**
+     * Opens the connection again and again, with growing pauses, until it is
+     * back or the agent is stopped or started by hand. The status says what is
+     * going on and why the last attempt failed.
+     */
+    private async keepTrying(reason: string, firstAttempt: number): Promise<void> {
+        const signal = this.session.signal;
+        if (this.retrying === signal) {
+            return;
+        }
+        this.retrying = signal;
+        let why = reason;
+        try {
+            for (let attempt = firstAttempt; !signal.aborted; attempt++) {
+                if (attempt > 0) {
+                    const wait = Math.min(1_000 * 2 ** (attempt - 1), this.reopenDelayMaxMs);
+                    this.setStatus('error', `${why}; trying again in ${Math.ceil(wait / 1_000)} s`);
+                    await pause(wait, signal);
+                    if (signal.aborted) {
+                        return;
+                    }
+                }
+                this.setStatus('starting', `reconnecting: ${why}`);
+                try {
+                    await this.connect();
+                } catch (error) {
+                    why = describeError(error);
+                    continue;
+                }
+                if (!signal.aborted) {
+                    this.setStatus('idle', 'reconnected');
+                    this.openInbox();
+                }
+                return;
+            }
+        } finally {
+            if (this.retrying === signal) {
+                this.retrying = undefined;
+            }
+        }
+    }
+    /** Whether a connection that dropped, or never opened, is being tried again right now. */
+    private get reopening(): boolean {
+        return this.retrying !== undefined && !this.retrying.aborted;
     }
     private async connect(): Promise<void> {
-        authHeaders(this.agent.auth, this.env);
+        let url = this.agent.url;
+        if (this.connection !== undefined) {
+            this.endpoint = await this.connection.open(this.session.signal);
+            url = this.endpoint.url;
+        }
+        if (this.endpoint?.headers === undefined) {
+            authHeaders(this.agent.auth, this.env);
+        }
+        if (url === undefined) {
+            throw new Error(`Agent ${this.agentId} has neither url nor ssh in its manifest.`);
+        }
         const legacyCompat = { enabled: true };
         const factory = new ClientFactory(ClientFactoryOptions.createFrom(ClientFactoryOptions.default, {
             transports: [
@@ -263,7 +375,7 @@ class A2AAgent implements FleetAgent {
             cardResolver: new DefaultAgentCardResolver({ fetchImpl: this.cardFetch, legacyCompat }),
             clientConfig: { polling: true }
         }));
-        const location = cardLocation(this.agent.url);
+        const location = cardLocation(url);
         const client = await factory.createFromUrl(location.base, location.path);
         // The extended card, when the agent has one for those who proved themselves.
         const card = await client.getAgentCard({ signal: this.session.signal });
