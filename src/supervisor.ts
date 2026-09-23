@@ -1,5 +1,6 @@
 import { A2AAgent } from './a2a-agent.js';
 import type { AgentEvent, FleetAgent } from './agent-events.js';
+import { HistoryFile } from './agent-history.js';
 import type { AgentSummary, Delivery } from './dashboard-protocol.js';
 import { LocalAgentProcess } from './local-agent.js';
 import type { Agent, Fleet } from './types.js';
@@ -15,6 +16,14 @@ type SupervisorOptions = {
     readonly createAgent?: (agent: Agent) => FleetAgent;
     /** Events kept per agent for a page that connects later or reconnects. */
     readonly historyLimit?: number;
+    /**
+     * Whether the events of each agent are also written to its directory and
+     * read back when flotti starts again, so its tab survives the restart.
+     * Off unless asked for: `flotti run` asks, tests of fake fleets do not.
+     */
+    readonly persistHistory?: boolean;
+    /** Where a problem with the history on disk is reported; standard error by default. */
+    readonly warn?: (text: string) => void;
     /** How long a message may take to reach the agent before it counts as queued. */
     readonly queuedAfterMs?: number;
 };
@@ -28,7 +37,9 @@ type Member = {
      * new running one that counts from one again; the offset keeps the numbers
      * of its id growing, so a page that has seen N still gets what comes next.
      */
-    readonly offset: number;
+    offset: number;
+    /** The history on disk; absent when it is kept in memory only. */
+    readonly file: HistoryFile | undefined;
     unsubscribe: () => void;
 };
 /** An agent the request names that is not in the fleet. */
@@ -60,12 +71,16 @@ class Supervisor {
     private readonly createAgent: (agent: Agent) => FleetAgent;
     private readonly historyLimit: number;
     private readonly queuedAfterMs: number;
+    private readonly persistHistory: boolean;
+    private readonly warn: (text: string) => void;
     /** Last number given to an event of each id, kept when the agent goes: numbers of an id only grow. */
     private readonly lastSeq = new Map<string, number>();
     constructor(fleet: Fleet, options: SupervisorOptions = {}) {
         this.createAgent = options.createAgent ?? defaultAgent;
         this.historyLimit = options.historyLimit ?? 5000;
         this.queuedAfterMs = options.queuedAfterMs ?? 500;
+        this.persistHistory = options.persistHistory ?? false;
+        this.warn = options.warn ?? ((text) => console.error(text));
         for (const agent of fleet.agents) {
             this.join(agent, []);
         }
@@ -144,7 +159,7 @@ class Supervisor {
         const wasStopped = old.running.status === 'stopped';
         await old.running.stop().catch(() => undefined);
         old.unsubscribe();
-        const member = this.join(agent, old.history);
+        const member = this.join(agent, old.history, old.file);
         this.announce();
         if (!wasStopped) {
             void member.running.start().catch(() => undefined);
@@ -206,15 +221,45 @@ class Supervisor {
         }
         return member;
     }
-    private join(agent: Agent, history: AgentEvent[]): Member {
+    /**
+     * Puts an agent to work in the fleet. A changed one goes on with the
+     * history it had; any other reads what its directory kept from the runs
+     * before, and a line says where that ends.
+     */
+    private join(agent: Agent, history: AgentEvent[], file?: HistoryFile): Member {
+        let offset = this.lastSeq.get(agent.id) ?? 0;
+        let historyFile = file;
+        let restoredAny = false;
+        if (historyFile === undefined && this.persistHistory) {
+            historyFile = new HistoryFile(agent.id, agent.directory, this.historyLimit, this.warn);
+            const restored = historyFile.load();
+            const last = restored.at(-1)?.seq ?? 0;
+            if (history.length === 0 && restored.length > 0 && last > offset) {
+                history.push(...restored);
+                offset = last;
+                restoredAny = true;
+            }
+        }
         const member: Member = {
             agent,
             running: this.createAgent(agent),
             history,
-            offset: this.lastSeq.get(agent.id) ?? 0,
+            offset,
+            file: historyFile,
             unsubscribe: () => undefined
         };
         this.members.set(agent.id, member);
+        if (restoredAny) {
+            this.keep(member, {
+                type: 'log',
+                source: 'flotti',
+                text: 'flotti was started again; everything above is from before.',
+                agentId: agent.id,
+                seq: 1,
+                time: new Date().toISOString()
+            });
+            member.offset += 1;
+        }
         member.unsubscribe = member.running.subscribe((event) => this.keep(member, event));
         return member;
     }
@@ -228,6 +273,7 @@ class Supervisor {
         if (member.history.length > this.historyLimit) {
             member.history.splice(0, member.history.length - this.historyLimit);
         }
+        member.file?.append(event, member.history);
         this.notify({ type: 'event', event });
     }
     private notify(notice: SupervisorNotice): void {

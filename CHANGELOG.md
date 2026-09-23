@@ -2,6 +2,18 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **The history of a tab survives a restart.** Every event of an agent — messages, tool calls,
+  permission requests, status lines — is written to `.flotti-history.jsonl` in its directory and read
+  back when flotti starts; the last 5000 events of each agent are kept (#28).
+- **The agent speaks first.** What an agent says or does on its own, between the messages of a person,
+  shows in its tab: a local agent through any ACP update it sends outside a prompt, a remote one through
+  the new [inbox extension](docs/a2a-inbox.md) of A2A. A new `progress` event carries lines about what
+  the agent is busy with, shown in the open (#29).
+
 ## [0.1.0] — MVP
 
 The first release: a fleet of AI agents and one dashboard to work with them.

@@ -5,6 +5,8 @@ import { SettingsPanel } from './components/SettingsPanel.js';
 import { Sidebar } from './components/Sidebar.js';
 import { useFleet } from './connection.js';
 import type { Link } from './fleet-state.js';
+import { useAttention } from './use-attention.js';
+import type { Permission } from './use-attention.js';
 /** The tab is kept in the address, so a reload opens the same one. */
 const BROADCAST = 'all';
 /** No agent id starts with `_`, so the settings tab cannot hide an agent. */
@@ -29,9 +31,16 @@ const LINK_TEXT: Readonly<Record<Link, string>> = {
     closed: 'Connection lost, reconnecting…',
     gone: 'flotti has stopped'
 };
+/** Offered while the browser has not been told yes or no; a refusal is the person's to undo in the browser. */
+function NotifyButton({ permission, onAsk }: { readonly permission: Permission; readonly onAsk: () => void }) {
+    return permission === 'default'
+        ? <button type="button" className="notify" onClick={onAsk} title="A notification when an agent waits for you and flotti is out of sight">Notify me</button>
+        : null;
+}
 function App() {
     const [state, dispatch] = useFleet();
     const [tab, setTab] = useTab();
+    const attention = useAttention(state, setTab);
     const [seenSeq, setSeenSeq] = useState<Record<string, number>>({});
     const agent = state.agents.find((candidate) => candidate.id === tab)
         ?? (tab === BROADCAST || tab === SETTINGS ? undefined : state.agents[0]);
@@ -47,7 +56,10 @@ function App() {
         <div className="app">
             <header className="topbar">
                 <span className="brand">flotti</span>
-                <span className={`link link-${state.link}`} role="status">{LINK_TEXT[state.link]}</span>
+                <span className="topbar-side">
+                    <NotifyButton permission={attention.permission} onAsk={attention.askPermission} />
+                    <span className={`link link-${state.link}`} role="status">{LINK_TEXT[state.link]}</span>
+                </span>
             </header>
             <Sidebar
                 agents={state.agents}

@@ -85,8 +85,17 @@ same files: the fleet stays directories a person can read and edit by hand.
 
 The server is the one source of truth and the page only follows it: every event of an agent has a
 number, and a page that connects — or reconnects after losing the connection — says which it has seen
-and gets only the rest. So a reload or a second window shows the same history; flotti keeps the last
-5000 events of each agent while it runs.
+and gets only the rest. So a reload or a second window shows the same history.
+
+The history also survives a restart — of one agent, of flotti, of the machine. flotti writes every
+event of an agent to `.flotti-history.jsonl` in the agent directory, one JSON event per line, and reads
+it back when it starts: the tab shows the conversation, tool calls, permission requests and status
+lines as they were, then a line *flotti was started again; everything above is from before*, and goes
+on. Event numbers go on too, so a page left open over the restart gets only what it has not seen. Each
+agent keeps its last 5000 events: once the file holds twice that many, it is rewritten with the newest
+5000, and the oldest are gone. The file is the agent's, like the rest of its directory: it goes to
+`.trash/` with it, and deleting the file clears the tab from the next start on. A file flotti cannot
+read or write is reported once on standard error; the agent runs on, without the history on disk.
 
 ### What the page talks to
 
@@ -124,10 +133,12 @@ Every agent is a directory, and the directory name is the agent id:
 │       ├── agent.json      the manifest
 │       ├── system-prompt.md  optional
 │       ├── skills/         the agent's own skills
-│       └── memory/         the agent's memory bank: markdown notes linked with [[…]]
+│       ├── memory/         the agent's memory bank: markdown notes linked with [[…]]
+│       └── .flotti-history.jsonl  what its tab shows, kept across restarts
 └── remote/                 agents that run elsewhere, reached over A2A
     └── eva/
-        └── agent.json
+        ├── agent.json
+        └── .flotti-history.jsonl
 ```
 
 - An id is letters, digits, `.`, `_` and `-`, starting with a letter or a digit. Ids are shared by
@@ -138,6 +149,8 @@ Every agent is a directory, and the directory name is the agent id:
 - `skills/` and `memory/` belong to the agent: flotti creates them when they are missing and never
   reads them. It hands them to the agent, as told in [Running a local agent](#running-a-local-agent).
 - `logs/` is where flotti keeps what a running agent said; see the same section.
+- `.flotti-history.jsonl` is the history of the agent's tab, written by flotti; see
+  [The dashboard](#the-dashboard).
 
 ### Where the fleet comes from
 
