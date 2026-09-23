@@ -6,6 +6,11 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Added
 
+- **`flotti start` and `flotti status`.** After `npm install -g flotti` the fleet runs with
+  `flotti start`: in the background, giving the terminal back with the address of the dashboard; a
+  second `start` of a running fleet says it runs. `flotti stop` stops it, `flotti status` lists the
+  agents of the running fleet — id, local or remote, harness, status. `flotti run` stays for the
+  foreground (#36).
 - **The history of a tab survives a restart.** Every event of an agent — messages, tool calls,
   permission requests, status lines — is written to `.flotti-history.jsonl` in its directory and read
   back when flotti starts; the last 5000 events of each agent are kept (#28).

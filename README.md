@@ -12,32 +12,62 @@ they fall over) and **talks to remote agents** over A2A (see
 
 Node.js 20.11 or newer.
 
+## Install
+
+```bash
+npm install -g flotti
+```
+
+That puts the `flotti` command on your `PATH`. Without installing, `npx flotti <command>` does the same.
+
 ## Run
 
 ```bash
-npx flotti run      # starts the fleet and the dashboard: http://127.0.0.1:4870/
-npx flotti stop     # stops them, from any terminal
+flotti start    # starts the fleet and the dashboard in the background: http://127.0.0.1:4870/
+flotti status   # lists the agents of the fleet with their status
+flotti stop     # stops them, from any terminal
+flotti run      # what start does, in the foreground: Ctrl+C stops it
 ```
 
 That is the whole command line; everything else is done in the dashboard — agents are added, changed,
 removed, started and stopped there, and the fleet directory is picked there too (see
-[Settings](#settings)). Both commands also take `--fleet <dir>`, for tests and for several fleets on
-one machine (see [Where the fleet comes from](#where-the-fleet-comes-from)); `run` also takes
-`--port <port>` or `FLOTTI_PORT`.
+[Settings](#settings)). Every command also takes `--fleet <dir>`, for tests and for several fleets on
+one machine (see [Where the fleet comes from](#where-the-fleet-comes-from)); `start` and `run` also
+take `--port <port>` or `FLOTTI_PORT`.
 
-- **`flotti run`** reads the fleet, starts every agent, serves the dashboard and stays in the
-  foreground until it is stopped: Ctrl+C, a `SIGTERM`, or `flotti stop`. It stops its agents before
-  it exits. An agent that fails to start does not stop the others: its tab says why, and the restart
-  button tries again. One fleet is run by one flotti: a second `flotti run` of the same fleet refuses.
-- **`flotti stop`** finds the flotti that runs the fleet by `.flotti-run.json` in the fleet directory,
-  asks it to stop, and waits until it has — up to 30 s. It asks over the dashboard rather than with a
-  signal, because on Windows a signal kills at once and would leave the agents running. With nothing
-  running it says so and exits with `0`.
+- **`flotti start`** runs the fleet in the background and gives the terminal back once the dashboard
+  listens, printing its address. What `flotti run` would print goes to `.flotti.log` in the fleet
+  directory, rewritten on every start. If the fleet does not come up — a broken manifest, a taken
+  port — `start` prints why and exits with `1`, leaving nothing running. If the fleet already runs,
+  `start` does not start a second one: it says so, prints the address of its dashboard and exits
+  with `0`.
+- **`flotti run`** does the same in the foreground and stays there until it is stopped: Ctrl+C, a
+  `SIGTERM`, or `flotti stop`. It stops its agents before it exits. An agent that fails to start
+  does not stop the others: its tab says why, and the restart button tries again. One fleet is run
+  by one flotti: a second `flotti run` of the same fleet refuses.
+- **`flotti stop`** stops a fleet started by either of them. It finds the flotti that runs the fleet
+  by `.flotti-run.json` in the fleet directory, asks it to stop, and waits until it has — up to 30 s.
+  It asks over the dashboard rather than with a signal, because on Windows a signal kills at once and
+  would leave the agents running. With nothing running it says so and exits with `0`.
+- **`flotti status`** asks the running flotti for its agents and prints them as a table, one line an
+  agent; the harness is `-` where flotti does not know it (see [A local agent](#a-local-agent)):
+
+  ```text
+  flotti runs /home/me/.flotti/agents (process 4242), dashboard http://127.0.0.1:4870/
+
+  ID      TYPE    HARNESS  STATUS
+  claude  local   claude   idle
+  codex   local   codex    working
+  eva     remote  -        waiting
+  ```
+
+  With nothing running it says so and exits with `1`.
 
 On any problem with the fleet flotti prints one sentence explaining it and exits with a non-zero
 code, see [When something is wrong with it](#when-something-is-wrong-with-it).
 
-From the source: `npm ci`, `npm run build`, then `node build/index.js run`.
+From the source: `npm ci`, `npm run build`, then `node build/index.js start` (or `npm link` for the
+`flotti` command).
 
 ## The dashboard
 
