@@ -114,6 +114,8 @@ describe('A2AAgent: connecting', () => {
         await rejects(client.start());
         strictEqual(client.status, 'error');
     });
+});
+describe('A2AAgent: credentials', () => {
     it('sends the bearer token from the variable the manifest names, with every request', async () => {
         const agent = await fake({ script: echo });
         const { client } = connect(agent, {
@@ -143,6 +145,8 @@ describe('A2AAgent: connecting', () => {
         strictEqual(client.status, 'error');
         strictEqual(agent.cardRequests, 0);
     });
+});
+describe('A2AAgent: caching the card', () => {
     it('checks a card it has with If-None-Match instead of downloading it again', async () => {
         const agent = await fake({ script: echo });
         const { client } = connect(agent);
@@ -198,6 +202,8 @@ describe('A2AAgent: talking', () => {
         strictEqual(first.contextId, undefined);
         ok(second.contextId !== undefined && second.contextId !== '');
     });
+});
+describe('A2AAgent: a task waiting for input', () => {
     it('shows a task that waits for input as waiting, and answers that task with the next message', async () => {
         const agent = await fake({
             script: async (context, bus) => {
@@ -224,6 +230,8 @@ describe('A2AAgent: talking', () => {
         ok(answer.taskId !== undefined && answer.taskId !== '');
         deepStrictEqual(messages(events).map(message => message.text), ['pick one', 'Which one?', 'the second', 'took the second']);
     });
+});
+describe('A2AAgent: a busy agent, an agent that cannot stream', () => {
     it('queues a message sent while the agent is busy', async () => {
         const hold = gate();
         const agent = await fake({
@@ -268,6 +276,8 @@ describe('A2AAgent: talking', () => {
         ok(agent.methods().slice(1).every(method => method === 'GetTask'));
         deepStrictEqual(messages(events).map(message => message.text), ['hi', 'late answer']);
     });
+});
+describe('A2AAgent: broken streams and failed tasks', () => {
     it('reconnects to the task when the stream breaks off, without sending the message again', async () => {
         const hold = gate();
         const agent = await fake({
@@ -313,7 +323,7 @@ describe('A2AAgent: talking', () => {
         await rejects(client.send('hi'), /not connected/);
     });
 });
-describe('A2AAgent: cancel, restart, stop', () => {
+describe('A2AAgent: cancel and stop', () => {
     it('cancels the task the agent is working on', async () => {
         const agent = await fake({
             script: async (context, bus) => {
@@ -329,6 +339,23 @@ describe('A2AAgent: cancel, restart, stop', () => {
         ok(agent.methods().includes('CancelTask'));
         ok(events.some(event => event.type === 'status' && event.reason === 'canceled'));
     });
+    it('drops the queued messages when stopped', async () => {
+        const agent = await fake({
+            script: async (context, bus) => {
+                bus.publish(task(context, TaskState.TASK_STATE_WORKING));
+            }
+        });
+        const { client } = connect(agent);
+        await client.start();
+        await client.send('first');
+        const queued = client.send('second');
+        await client.stop();
+        await rejects(queued, /stopped/);
+        strictEqual(client.status, 'stopped');
+        strictEqual(agent.received.length, 1);
+    });
+});
+describe('A2AAgent: restart without the extension', () => {
     it('starts a new conversation when the agent cannot restart itself', async () => {
         const agent = await fake({ script: echo });
         const { client, events } = connect(agent);
@@ -345,6 +372,8 @@ describe('A2AAgent: cancel, restart, stop', () => {
         strictEqual(second.contextId, undefined);
         ok(!agent.methods().some(method => method === 'SendMessage'));
     });
+});
+describe('A2AAgent: restart with the extension', () => {
     it('asks an agent with the restart extension to restart, and reconnects', async () => {
         const restarts: RequestContext[] = [];
         const agent = await fake({
@@ -384,21 +413,6 @@ describe('A2AAgent: cancel, restart, stop', () => {
         await client.start();
         await rejects(client.restart(), /refused to restart/);
         strictEqual(client.status, 'error');
-    });
-    it('drops the queued messages when stopped', async () => {
-        const agent = await fake({
-            script: async (context, bus) => {
-                bus.publish(task(context, TaskState.TASK_STATE_WORKING));
-            }
-        });
-        const { client } = connect(agent);
-        await client.start();
-        await client.send('first');
-        const queued = client.send('second');
-        await client.stop();
-        await rejects(queued, /stopped/);
-        strictEqual(client.status, 'stopped');
-        strictEqual(agent.received.length, 1);
     });
 });
 describe('cardLocation', () => {

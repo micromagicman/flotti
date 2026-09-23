@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "test": "tsc -p tsconfig.test.json && node --test build-test/test/*.test.js"
   },
@@ -29,8 +30,11 @@
   "homepage": "https://github.com/micromagicman/supavisor#readme",
   "description": "Simple ai agents orchestrator for humans",
   "devDependencies": {
+    "@stylistic/eslint-plugin": "^5.10.0",
     "@types/node": "^26.5.1",
-    "typescript": "^7.0.2"
+    "eslint": "^10.10.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.0"
   },
   "dependencies": {
     "@a2a-js/sdk": "^1.2.0"

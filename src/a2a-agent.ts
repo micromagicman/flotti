@@ -63,6 +63,14 @@ type CurrentTask = {
     /** Id of the message that came with the state, if any. */
     readonly statusMessageId: string;
 };
+/** What reading the streams of one turn has learned so far. */
+type StreamProgress = {
+    /** Whether any event came back in this turn. */
+    received: boolean;
+    /** Reconnects in a row that failed; an event resets it. */
+    failures: number;
+    lastError: unknown;
+};
 /** A turn is over once the agent answered with a message, or its task stopped or paused. */
 const FINAL_STATES: readonly TaskState[] = [
     TaskState.TASK_STATE_COMPLETED,
@@ -307,58 +315,79 @@ class A2AAgent implements AgentConnection {
         signal: AbortSignal,
         deliver: () => void
     ): Promise<void> {
-        let stream = first;
-        let received = false;
-        let failures = 0;
-        let lastError: unknown;
-        for (;;) {
-            try {
-                for await (const event of stream) {
-                    received = true;
-                    deliver();
-                    failures = 0;
-                    if (this.apply(event)) {
-                        return;
-                    }
-                }
-            } catch (error) {
-                // Nothing came back yet: whether the agent got the message is unknown, and
-                // guessing a task to reconnect to could pick the previous one.
-                if (signal.aborted || !received) {
-                    throw error;
-                }
-                lastError = error;
+        const progress: StreamProgress = { received: false, failures: 0, lastError: undefined };
+        let stream: AsyncGenerator<StreamResponse> | undefined = first;
+        while (stream !== undefined) {
+            if (await this.readStream(stream, signal, deliver, progress)) {
+                return;
             }
             if (signal.aborted || this.turnIsOver()) {
                 return;
             }
             const task = this.task;
-            if (!received || task === undefined) {
+            if (!progress.received || task === undefined) {
                 throw new Error('the agent closed the stream without answering');
             }
-            for (;;) {
-                if (failures >= this.reconnectAttempts) {
-                    throw new Error(`lost the stream of task ${task.id}: ${describeError(lastError ?? 'closed early')}`, {
-                        cause: lastError
-                    });
+            stream = await this.catchUp(client, task, signal, progress);
+        }
+    }
+    /** Reads one stream until it ends; true once an event finished the turn. */
+    private async readStream(
+        stream: AsyncGenerator<StreamResponse>,
+        signal: AbortSignal,
+        deliver: () => void,
+        progress: StreamProgress
+    ): Promise<boolean> {
+        try {
+            for await (const event of stream) {
+                progress.received = true;
+                deliver();
+                progress.failures = 0;
+                if (this.apply(event)) {
+                    return true;
                 }
-                await pause(this.backoff(failures++), signal);
+            }
+        } catch (error) {
+            // Nothing came back yet: whether the agent got the message is unknown, and
+            // guessing a task to reconnect to could pick the previous one.
+            if (signal.aborted || !progress.received) {
+                throw error;
+            }
+            progress.lastError = error;
+        }
+        return false;
+    }
+    /**
+     * Catches up with a task whose stream broke off: the stream to go on reading,
+     * or nothing when the turn is over or the wait was aborted.
+     */
+    private async catchUp(
+        client: Client,
+        task: CurrentTask,
+        signal: AbortSignal,
+        progress: StreamProgress
+    ): Promise<AsyncGenerator<StreamResponse> | undefined> {
+        for (;;) {
+            if (progress.failures >= this.reconnectAttempts) {
+                throw new Error(`lost the stream of task ${task.id}: ${describeError(progress.lastError ?? 'closed early')}`, {
+                    cause: progress.lastError
+                });
+            }
+            await pause(this.backoff(progress.failures++), signal);
+            if (signal.aborted) {
+                return undefined;
+            }
+            try {
+                const now = await client.getTask({ tenant: '', id: task.id }, { signal });
+                if (this.apply({ payload: { $case: 'task', value: now } })) {
+                    return undefined;
+                }
+                return client.resubscribeTask({ tenant: '', id: task.id }, { signal });
+            } catch (error) {
                 if (signal.aborted) {
-                    return;
+                    return undefined;
                 }
-                try {
-                    const now = await client.getTask({ tenant: '', id: task.id }, { signal });
-                    if (this.apply({ payload: { $case: 'task', value: now } })) {
-                        return;
-                    }
-                    stream = client.resubscribeTask({ tenant: '', id: task.id }, { signal });
-                    break;
-                } catch (error) {
-                    if (signal.aborted) {
-                        return;
-                    }
-                    lastError = error;
-                }
+                progress.lastError = error;
             }
         }
     }
