@@ -9,12 +9,19 @@
  */
 import type { AgentEvent, AgentStatus } from './agent-events.js';
 import type { FleetSource, LocalAgentAdapter, RemoteAuth, RemoteSsh, RestartPolicy } from './types.js';
+/**
+ * The program that runs the agent. Known only where the manifest says it: the
+ * `adapter` of a local agent. A plain ACP agent and a remote one do not tell.
+ */
+type Harness = 'claude' | 'codex';
 /** An agent of the fleet as the page lists it. */
 type AgentSummary = {
     readonly id: string;
     readonly name: string;
     readonly kind: 'local' | 'remote';
     readonly description?: string;
+    /** Absent when flotti does not know it; never guessed. */
+    readonly harness?: Harness;
     readonly status: AgentStatus;
 };
 /**
@@ -145,6 +152,7 @@ export type {
     ErrorResponse,
     FleetInfo,
     FleetSwitch,
+    Harness,
     LocalAgentConfig,
     PermissionAnswer,
     RemoteAgentConfig,

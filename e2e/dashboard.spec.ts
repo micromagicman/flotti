@@ -22,12 +22,13 @@ const workspace = mkdtempSync(join(tmpdir(), 'flotti-e2e-'));
 let flotti: ChildProcess | undefined;
 let remote: InstanceType<typeof FakeAgent> | undefined;
 let url = '';
-function localAgent(fleet: string, id: string): void {
+function localAgent(fleet: string, id: string, adapter?: string): void {
     const directory = join(fleet, 'local', id);
     mkdirSync(directory, { recursive: true });
     const record = join(directory, 'record.jsonl');
     writeFileSync(join(directory, 'agent.json'), JSON.stringify({
         name: id,
+        ...(adapter === undefined ? {} : { adapter }),
         command: process.execPath,
         arguments: [FAKE_ACP],
         env: { FAKE_ACP: JSON.stringify({ record }) }
@@ -72,8 +73,8 @@ function starts(id: string): number {
 }
 test.beforeAll(async () => {
     const fleet = join(workspace, 'fleet');
-    localAgent(fleet, 'claude');
-    localAgent(fleet, 'codex');
+    localAgent(fleet, 'claude', 'claude-code');
+    localAgent(fleet, 'codex', 'codex');
     await remoteAgent(fleet, 'eva');
     url = await startFlotti(fleet);
 });
@@ -97,6 +98,13 @@ test('every agent has a tab with its status', async ({ page }) => {
     await expect(page.getByRole('tab')).toHaveText([/All agents/, /claude/, /codex/, /eva/, /Settings/]);
     for (const name of ['claude', 'codex', 'eva']) {
         await expect(tab(page, name).locator('[data-status]')).toHaveAttribute('data-status', 'idle');
+    }
+});
+test('the header of an agent names its harness, and says when it is not known', async ({ page }) => {
+    await page.goto(url);
+    for (const [name, harness] of [['claude', 'claude'], ['codex', 'codex'], ['eva', 'harness unknown']] as const) {
+        await tab(page, name).click();
+        await expect(page.locator('.agent-header [data-harness]')).toHaveText(harness);
     }
 });
 test('writes to one agent, and the answer stays in its tab', async ({ page }) => {

@@ -2,6 +2,7 @@ import { deepStrictEqual, rejects, strictEqual, throws } from 'node:assert/stric
 import { test } from 'node:test';
 import { Supervisor, UnknownAgentError } from '../src/supervisor.js';
 import type { SupervisorNotice } from '../src/supervisor.js';
+import type { Agent, RemoteAgent } from '../src/types.js';
 import { FakeFleetAgent, fakeFleet } from './fake-fleet-agent.js';
 function supervised(...ids: string[]) {
     const { fleet, fakes, createAgent } = fakeFleet(...ids);
@@ -24,6 +25,34 @@ test('starts every agent, and one that fails does not stop the others', async ()
         ['a', 'A', 'local', 'error'],
         ['b', 'B', 'local', 'idle']
     ]);
+});
+test('names the harness of an agent only where the manifest tells it', () => {
+    const { fleet, createAgent } = fakeFleet('claude', 'codex', 'plain', 'eva');
+    const [claude, codex, plain, eva] = fleet.agents.map((agent) => fake(agent.kind === 'local' ? agent : undefined));
+    const remote: RemoteAgent = {
+        kind: 'remote',
+        id: fake(eva).id,
+        name: fake(eva).name,
+        directory: '/fleet/remote/eva',
+        manifestPath: '/fleet/remote/eva/agent.json',
+        protocol: 'a2a',
+        url: 'https://eva.example.org/a2a',
+        auth: { type: 'none' }
+    };
+    const agents: Agent[] = [
+        { ...fake(claude), adapter: 'claude-code' },
+        { ...fake(codex), adapter: 'codex' },
+        fake(plain),
+        remote
+    ];
+    const supervisor = new Supervisor({ ...fleet, agents }, { createAgent });
+    deepStrictEqual(supervisor.agents().map((agent) => [agent.id, agent.harness]), [
+        ['claude', 'claude'],
+        ['codex', 'codex'],
+        ['plain', undefined],
+        ['eva', undefined]
+    ]);
+    deepStrictEqual(Object.keys(supervisor.agents()[2] ?? {}).includes('harness'), false, 'an unknown harness is left out, not guessed');
 });
 test('keeps the last events of each agent and hands out those after a seq', async () => {
     const { supervisor } = supervised('a');

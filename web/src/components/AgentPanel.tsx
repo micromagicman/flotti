@@ -20,6 +20,19 @@ function useAction(): [string | undefined, (action: () => Promise<unknown>) => v
         action().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)));
     }];
 }
+/**
+ * What runs the agent: claude or codex, from the adapter of its manifest. A
+ * plain ACP agent and a remote one do not say, and the badge says so too.
+ */
+function HarnessBadge({ agent }: { readonly agent: AgentSummary }) {
+    if (agent.harness !== undefined) {
+        return <span className="harness" data-harness={agent.harness} title="Harness">{agent.harness}</span>;
+    }
+    const why = agent.kind === 'remote'
+        ? 'A remote agent does not tell which harness runs it.'
+        : 'The manifest names no adapter, so the harness is not known.';
+    return <span className="harness harness-unknown" data-harness="unknown" title={why}>harness unknown</span>;
+}
 function AgentHeader({ agent, feed }: { readonly agent: AgentSummary; readonly feed: AgentFeed }) {
     const [error, run] = useAction();
     const busy = feed.status === 'working' || feed.status === 'waiting';
@@ -29,6 +42,7 @@ function AgentHeader({ agent, feed }: { readonly agent: AgentSummary; readonly f
             <div className="agent-title">
                 <h1>{agent.name}</h1>
                 <span className="kind">{agent.kind === 'local' ? 'local · ACP' : 'remote · A2A'}</span>
+                <HarnessBadge agent={agent} />
                 <StatusBadge status={feed.status} />
                 {feed.reason === undefined ? null : <span className="reason">{feed.reason}</span>}
             </div>
