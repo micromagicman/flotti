@@ -13,7 +13,7 @@ import {
 } from '@a2a-js/sdk/client';
 import type { Client } from '@a2a-js/sdk/client';
 import { AgentEvents, fromAgentPrompt } from './agent-events.js';
-import type { AgentEventListener, AgentStatus, FleetAgent } from './agent-events.js';
+import type { AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
 import type { Environment } from './manifest.js';
 import { SshConnection } from './ssh.js';
 import type { RemoteConnection, RemoteEndpoint, SshOptions } from './ssh.js';
@@ -212,7 +212,7 @@ class A2AAgent implements FleetAgent {
         this.setStatus('idle');
         this.openInbox();
     }
-    send(text: string, from?: string): Promise<void> {
+    send(text: string, { from }: SendOptions = {}): Promise<void> {
         const client = this.client;
         if (client === undefined) {
             return Promise.reject(new Error(`Agent ${this.agentId} is not connected; start it first.`));

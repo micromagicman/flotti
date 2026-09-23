@@ -29,8 +29,8 @@ function directory(ids: readonly string[]): FleetDirectory & { sent: string[] } 
     return {
         sent,
         agents: (): AgentSummary[] => ids.map((id) => ({ id, name: id, kind: 'local', status: 'idle' })),
-        send: async (agentId: string, text: string, from?: string): Promise<Delivery> => {
-            sent.push(`${from ?? '-'} -> ${agentId}: ${text}`);
+        send: async (agentId: string, text: string, options?: { from?: string }): Promise<Delivery> => {
+            sent.push(`${options?.from ?? '-'} -> ${agentId}: ${text}`);
             return { agentId, result: 'taken' };
         }
     };

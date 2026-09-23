@@ -1,5 +1,5 @@
 import { A2AAgent } from './a2a-agent.js';
-import type { AgentEvent, FleetAgent } from './agent-events.js';
+import type { AgentEvent, FleetAgent, SendOptions } from './agent-events.js';
 import { HistoryFile } from './agent-history.js';
 import type { AgentSummary, Delivery, Harness } from './dashboard-protocol.js';
 import type { FleetToolsAccess } from './fleet-mcp.js';
@@ -220,11 +220,11 @@ class Supervisor {
     /**
      * Sends a message to one agent; says whether it was taken, waits in line, or failed.
      *
-     * @param from Id of the agent of the fleet that sends it, when not a person:
+     * @param options `from` — the agent of the fleet that sends it, when not a person:
      *     the fleet tools send so, and the `message` event of the receiver carries it.
      */
-    send(agentId: string, text: string, from?: string): Promise<Delivery> {
-        return this.deliver(this.member(agentId), text, from);
+    send(agentId: string, text: string, options: SendOptions = {}): Promise<Delivery> {
+        return this.deliver(this.member(agentId), text, options);
     }
     /**
      * Sends one message to many agents, each on its own: an agent that is down
@@ -324,9 +324,9 @@ class Supervisor {
      * with another message takes it only later, and the answer does not wait
      * for that — a `delivery` notice tells how it ended.
      */
-    private deliver(member: Member, text: string, from?: string): Promise<Delivery> {
+    private deliver(member: Member, text: string, options: SendOptions = {}): Promise<Delivery> {
         const agentId = member.agent.id;
-        const sent = member.running.send(text, from).then(
+        const sent = member.running.send(text, options).then(
             (): Delivery => ({ agentId, result: 'taken' }),
             (error: unknown): Delivery => ({ agentId, result: 'failed', error: describeError(error) })
         );

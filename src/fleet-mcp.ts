@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { SendOptions } from './agent-events.js';
 import type { AgentSummary, Delivery } from './dashboard-protocol.js';
 /**
  * The fleet as tools: an MCP server flotti hands to every ACP agent it starts,
@@ -26,7 +27,7 @@ const MAX_BODY_BYTES = 1_000_000;
 interface FleetDirectory {
     agents(): AgentSummary[];
     /** Sends a message on behalf of an agent of the fleet: `from` is its id. */
-    send(agentId: string, text: string, from?: string): Promise<Delivery>;
+    send(agentId: string, text: string, options?: SendOptions): Promise<Delivery>;
 }
 /** How an agent reaches the tools: the port on its side and the token that says who it is. */
 type FleetToolsAccess = {
@@ -268,7 +269,7 @@ class FleetMcpServer {
         if (!fleet.agents().some((agent) => agent.id === to)) {
             return failure(`there is no agent "${to}" in the fleet; list_agents names them`);
         }
-        const delivery = await fleet.send(to, message, from);
+        const delivery = await fleet.send(to, message, { from });
         if (delivery.result === 'failed') {
             return failure(`"${to}" did not get it: ${delivery.error ?? 'no reason given'}`);
         }

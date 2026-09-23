@@ -1,5 +1,5 @@
 import { AgentEvents } from '../src/agent-events.js';
-import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent } from '../src/agent-events.js';
+import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from '../src/agent-events.js';
 import type { Agent, Fleet, LocalAgent } from '../src/types.js';
 /**
  * A fleet agent in memory, for the supervisor and the dashboard server: it
@@ -37,7 +37,7 @@ class FakeFleetAgent implements FleetAgent {
             throw new Error('broken');
         }
     }
-    async send(text: string, from?: string): Promise<void> {
+    async send(text: string, { from }: SendOptions = {}): Promise<void> {
         this.calls.push(from === undefined ? `send ${text}` : `send ${text} from ${from}`);
         if (this.broken) {
             throw new Error(`${this.agentId} is broken`);

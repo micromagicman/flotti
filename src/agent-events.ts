@@ -102,6 +102,11 @@ type AgentEvent = AgentEventBody & {
     readonly time: string;
 };
 type AgentEventListener = (event: AgentEvent) => void;
+/** How a message is sent: on behalf of whom. */
+type SendOptions = {
+    /** Id of the agent of the fleet that sends it; absent for a person. */
+    readonly from?: string;
+};
 /** An agent of the fleet as the dashboard drives it, local or remote. */
 interface FleetAgent {
     /** Id of the agent: the name of its directory in the fleet. */
@@ -122,7 +127,7 @@ interface FleetAgent {
      * `from` is the id of the agent of the fleet that sent it, when not a
      * person: its `message` event carries it, and the agent is told who wrote.
      */
-    send(text: string, from?: string): Promise<void>;
+    send(text: string, options?: SendOptions): Promise<void>;
     /** Asks the agent to drop what it is working on; does nothing when it is not busy. */
     cancel(): Promise<void>;
     /**
@@ -190,5 +195,6 @@ export type {
     AgentStatus,
     FleetAgent,
     PermissionOption,
+    SendOptions,
     ToolCallStatus
 };

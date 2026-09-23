@@ -19,7 +19,7 @@ import { AcpMessages, acpPermissionEvent, acpUpdateEvents } from './acp-events.j
 import { prepareHandover } from './acp-adapters.js';
 import type { Handover } from './acp-adapters.js';
 import { AgentEvents, fromAgentPrompt } from './agent-events.js';
-import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent } from './agent-events.js';
+import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
 import { MCP_PATH, MCP_SERVER_NAME } from './fleet-mcp.js';
 import type { FleetToolsAccess } from './fleet-mcp.js';
 import { RemoteStartReader, parseTarget, remoteCommandArguments } from './ssh.js';
@@ -234,7 +234,7 @@ class LocalAgentProcess implements FleetAgent {
      * `end_turn`, `cancelled`, … Rejects when the message never went: the
      * agent is not running, or stopped before its turn.
      */
-    send(text: string, from?: string): Promise<void> {
+    send(text: string, { from }: SendOptions = {}): Promise<void> {
         if (this.lifecycle !== 'running' && this.lifecycle !== 'starting' && this.lifecycle !== 'backoff') {
             return Promise.reject(new Error(`agent "${this.agentId}" is ${this.lifecycle}; start it first`));
         }
