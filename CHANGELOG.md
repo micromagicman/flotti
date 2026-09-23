@@ -36,7 +36,6 @@ The first release: a fleet of AI agents and one dashboard to work with them.
 
 - The A2A adapter of Eva, so the dashboard can connect to her session
   ([micromagicman/eva#266](https://github.com/micromagicman/eva/issues/266)).
-- The A2A adapter of Cutie is not part of this release: it is to follow the contract of Eva's
-  adapter (see #7).
+- The A2A adapter of Cutie, on the same contract as Eva's (owners/quanthread-ai-hub#218, !194).
 
 [0.1.0]: https://github.com/micromagicman/flotti/releases/tag/v0.1.0
