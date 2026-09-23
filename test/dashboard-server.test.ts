@@ -6,11 +6,12 @@ import { join } from 'node:path';
 import { after, afterEach, test } from 'node:test';
 import { WebSocket } from 'ws';
 import type { AgentEvent } from '../src/agent-events.js';
-import type { ServerMessage } from '../src/dashboard-protocol.js';
+import type { ServerMessage, SshAgentsResponse } from '../src/dashboard-protocol.js';
 import { startDashboard } from '../src/dashboard-server.js';
 import type { Dashboard } from '../src/dashboard-server.js';
 import { loadFleet } from '../src/fleet.js';
 import { FleetSettings } from '../src/fleet-settings.js';
+import { SshError } from '../src/ssh.js';
 import { Supervisor } from '../src/supervisor.js';
 import { FakeFleetAgent, fakeFleet } from './fake-fleet-agent.js';
 const webRoot = mkdtempSync(join(tmpdir(), 'flotti-web-'));
@@ -232,4 +233,37 @@ test('tells the pages when it goes away', async () => {
     await dashboard.close();
     await closed;
     strictEqual(messages.at(-1)?.type, 'shutdown');
+});
+test('the settings page adds the agents of user@host in one step, and says why it could not', async () => {
+    const home = mkdtempSync(join(webRoot, 'home-'));
+    const root = join(home, 'fleet');
+    mkdirSync(root);
+    const env = { HOME: home };
+    const fleet = loadFleet({ argv: ['--fleet', root], env });
+    const supervisor = new Supervisor(fleet, { createAgent: (agent: { id: string }) => new FakeFleetAgent(agent.id) });
+    const settings = new FleetSettings(fleet, supervisor, {
+        env,
+        discover: async (target) => {
+            if (target.host === 'away.example.org') {
+                throw new SshError(`Cannot reach ${target.host} over SSH (Connection refused)`);
+            }
+            return [{ id: 'eva', name: 'Eva', url: 'http://127.0.0.1:18741/', token: 'kept-in-memory' }];
+        }
+    });
+    const dashboard = await startDashboard(supervisor, { port: 0, webRoot, settings });
+    open.push({ dashboard, supervisor, sockets: [] });
+    const added = await call(dashboard.port, 'POST', '/api/ssh-agents', { target: 'eva@build.example.org' });
+    strictEqual(added.status, 201, added.text);
+    deepStrictEqual((added.body as SshAgentsResponse).added.map((agent) => [agent.id, agent.name, agent.kind]), [['eva', 'Eva', 'remote']]);
+    ok(!added.text.includes('kept-in-memory'), 'the token does not reach the page');
+    deepStrictEqual((await call(dashboard.port, 'GET', '/api/agents/eva')).body, {
+        kind: 'remote',
+        id: 'eva',
+        name: 'Eva',
+        ssh: { target: 'eva@build.example.org', agent: 'eva' }
+    });
+    strictEqual((await call(dashboard.port, 'POST', '/api/ssh-agents', { target: 'eva@build.example.org' })).status, 409);
+    const away = await call(dashboard.port, 'POST', '/api/ssh-agents', { target: 'eva@away.example.org' });
+    deepStrictEqual([away.status, (away.body as { error: string }).error], [502, 'Cannot reach away.example.org over SSH (Connection refused).']);
+    strictEqual((await call(dashboard.port, 'POST', '/api/ssh-agents', { target: '-oProxyCommand=x' })).status, 400);
 });

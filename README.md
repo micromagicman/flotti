@@ -67,6 +67,11 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
 The settings page does what would otherwise be done by editing files, and it does it by writing the
 same files: the fleet stays directories a person can read and edit by hand.
 
+- **Connect over SSH.** A remote agent in one step: its `user@host`, and **Connect**. Your public key
+  has to be on the host; flotti asks the host which agents it publishes, adds them and keeps an SSH
+  tunnel to each one up — no `ssh -L`, no port, no token to copy. When it cannot, it says why: the key
+  is not accepted, the host is unknown or unreachable, the host publishes nothing. See
+  [Over SSH](#over-ssh).
 - **Agents.** Each agent of the fleet with its status and **Start**/**Stop**, **Restart**, **Edit**
   and **Delete**. **Add local agent** and **Add remote agent** open a form with every field of
   [the manifest](#the-manifest-agentjson) and, for a local agent, its system prompt. Picking an adapter
@@ -113,6 +118,7 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `POST /api/agents/<id>/cancel`                | drops the message in work                              |
 | `POST /api/agents/<id>/start`, `…/stop`       | starts or stops the agent; start answers at once        |
 | `POST /api/agents` `{kind, id, …}`            | a new agent: writes its directory and starts it         |
+| `POST /api/ssh-agents` `{target}`             | adds the agents `user@host` publishes, reached over SSH |
 | `GET /api/agents/<id>`                        | its manifest as the file says it, and its system prompt |
 | `PUT /api/agents/<id>` `{kind, id, …}`        | a changed manifest: writes it and restarts the agent    |
 | `DELETE /api/agents/<id>`                     | stops the agent and moves its directory to `.trash/`    |
@@ -239,7 +245,8 @@ A full example:
 
 | Field         | Required | Type             | Default            | Meaning                                         |
 |---------------|----------|------------------|--------------------|-------------------------------------------------|
-| `url`         | yes      | `http:` or `https:` address | —       | Where the agent is.                             |
+| `url`         | yes, or `ssh` | `http:` or `https:` address | —  | Where the agent is.                             |
+| `ssh`         | yes, or `url` | `"user@host"`, or an object, below | — | Reach the agent through an SSH tunnel; see [Over SSH](#over-ssh). |
 | `protocol`    | no       | `a2a`            | `a2a`              | How to talk to it; A2A is the only one for now.  |
 | `auth`        | no       | object, below    | `{"type": "none"}` | How flotti proves itself to the agent.           |
 | `name`        | no       | non-empty string | the id             | Name shown to people.                            |
@@ -256,6 +263,19 @@ A full example:
 The manifest names the environment variable that holds the secret, never the secret itself: manifests
 are plain files, they get copied, shown in the dashboard and edited by it. flotti reads the variable
 when it connects; a value that does not look like a variable name is refused.
+
+An agent reached over SSH has `ssh` in place of `url`:
+
+```json
+{
+    "name": "Eva",
+    "ssh": {"target": "eva@build.example.org", "agent": "eva"}
+}
+```
+
+`"ssh": "eva@build.example.org"` is the same when the host publishes one agent. `target` is
+`user@host` or `user@host:port`; `agent` picks one of the agents the host publishes. `url` and `ssh`
+cannot both be given; `auth` may, for a host that publishes no token.
 
 ## Running a local agent
 
@@ -359,6 +379,28 @@ agent: the dashboard gets the same events and drives it the same way.
 - **Restart.** An agent that declares the [restart extension](docs/a2a-restart.md) is asked to restart
   itself, and flotti reconnects once it is back. Any other agent cannot be restarted from here, so
   for it restart means a new conversation.
+
+### Over SSH
+
+A remote agent often listens on the loopback of its own machine, reached with SSH. For it the manifest
+says `"ssh": "user@host"`, and flotti does the rest with nothing but the user's key:
+
+- **Asks the host** over SSH where the agent listens and which token it expects: the agent's A2A
+  adapter publishes both in `~/.flotti/a2a/<id>.json` on its host — the contract is in
+  [docs/a2a-ssh.md](docs/a2a-ssh.md). The token stays in memory: it is never written to the manifest,
+  a log or the dashboard.
+- **Opens the tunnel**: `ssh -N -L` from a free port on `127.0.0.1` to the published address, and sends
+  every request to that address — the one the card names too — down the tunnel.
+- **Keeps it up.** When the tunnel drops, the agent shows `starting` with the reason while flotti
+  tries again and `error` with "trying again in N s" between attempts, with pauses from 1 s to 30 s,
+  until it is back or the agent is stopped. A host that is away when flotti starts is tried the same way.
+- **Says why it could not**: the key is not accepted (and where the public key goes), the host is not
+  known, cannot be reached, or its key changed; the host publishes nothing, or several agents and the
+  manifest does not say which.
+
+SSH runs non-interactively (`BatchMode=yes`) through the `ssh` of this machine, so `~/.ssh/config`,
+the SSH agent and the known hosts are the user's own; a host seen for the first time is remembered
+(`StrictHostKeyChecking=accept-new`), one whose key changed is refused.
 
 Not done, on purpose:
 

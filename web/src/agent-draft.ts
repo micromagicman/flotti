@@ -21,7 +21,9 @@ type Draft = {
     readonly restart: RestartPolicy | '';
     readonly heartbeatTimeoutSec: string;
     readonly systemPrompt: string;
-    /** Remote agents. */
+    /** Remote agents: `sshTarget` when reached over SSH, `url` otherwise. */
+    readonly sshTarget: string;
+    readonly sshAgent: string;
     readonly url: string;
     readonly authType: RemoteAuth['type'];
     readonly tokenEnv: string;
@@ -47,6 +49,8 @@ const EMPTY: Draft = {
     restart: '',
     heartbeatTimeoutSec: '',
     systemPrompt: '',
+    sshTarget: '',
+    sshAgent: '',
     url: '',
     authType: 'none',
     tokenEnv: '',
@@ -77,7 +81,9 @@ function fromConfig(config: AgentConfig): Draft {
         const auth = config.auth ?? { type: 'none' };
         return {
             ...common,
-            url: config.url,
+            sshTarget: config.ssh?.target ?? '',
+            sshAgent: config.ssh?.agent ?? '',
+            url: config.url ?? '',
             authType: auth.type,
             tokenEnv: auth.type === 'bearer' ? auth.tokenEnv : '',
             header: auth.type === 'api-key' ? auth.header : '',
@@ -118,7 +124,10 @@ function toConfig(draft: Draft): AgentConfig {
             : draft.authType === 'api-key'
                 ? { type: 'api-key', header: draft.header.trim(), valueEnv: draft.valueEnv.trim() }
                 : { type: 'none' };
-        const remote: RemoteAgentConfig = { kind: 'remote', ...common, url: draft.url.trim(), auth };
+        const target = draft.sshTarget.trim();
+        const remote: RemoteAgentConfig = target === ''
+            ? { kind: 'remote', ...common, url: draft.url.trim(), auth }
+            : { kind: 'remote', ...common, ssh: { target, ...optional('agent', draft.sshAgent.trim()) }, auth };
         return remote;
     }
     const env: Record<string, string> = {};

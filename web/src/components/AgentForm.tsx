@@ -68,13 +68,39 @@ function LocalFields({ draft, update, setDraft }: { readonly draft: Draft; reado
         </>
     );
 }
-function RemoteFields({ draft, update }: { readonly draft: Draft; readonly update: Update }) {
+/** Where the agent is: a host over SSH, or an address. */
+function WhereFields({ draft, update }: { readonly draft: Draft; readonly update: Update }) {
+    const overSsh = draft.sshTarget.trim() !== '';
     return (
         <>
-            <Field label="URL" hint="Address of the agent, http: or https:.">
-                <input value={draft.url} onChange={(event) => update('url', event.target.value)} />
-            </Field>
-            <Field label="Authentication">
+            <div className="field-row">
+                <Field label="SSH" hint="user@host: flotti opens the tunnel and gets the address and the token itself. Empty: reach the agent at URL.">
+                    <input value={draft.sshTarget} placeholder="user@host" onChange={(event) => update('sshTarget', event.target.value)} />
+                </Field>
+                {overSsh
+                    ? (
+                        <Field label="Published agent" hint="Empty: the only one the host publishes.">
+                            <input value={draft.sshAgent} onChange={(event) => update('sshAgent', event.target.value)} />
+                        </Field>
+                    )
+                    : null}
+            </div>
+            {overSsh
+                ? null
+                : (
+                    <Field label="URL" hint="Address of the agent, http: or https:.">
+                        <input value={draft.url} onChange={(event) => update('url', event.target.value)} />
+                    </Field>
+                )}
+        </>
+    );
+}
+function RemoteFields({ draft, update }: { readonly draft: Draft; readonly update: Update }) {
+    const overSsh = draft.sshTarget.trim() !== '';
+    return (
+        <>
+            <WhereFields draft={draft} update={update} />
+            <Field label="Authentication" hint={overSsh ? 'Over SSH, the token the host publishes wins; this is for a host that publishes none.' : undefined}>
                 <select value={draft.authType} onChange={(event) => update('authType', event.target.value as RemoteAuth['type'])}>
                     <option value="none">none</option>
                     <option value="bearer">bearer token</option>

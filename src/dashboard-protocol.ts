@@ -8,7 +8,7 @@
  * while the socket only carries what the agents do.
  */
 import type { AgentEvent, AgentStatus } from './agent-events.js';
-import type { FleetSource, LocalAgentAdapter, RemoteAuth, RestartPolicy } from './types.js';
+import type { FleetSource, LocalAgentAdapter, RemoteAuth, RemoteSsh, RestartPolicy } from './types.js';
 /**
  * The program that runs the agent. Known only where the manifest says it: the
  * `adapter` of a local agent. A plain ACP agent and a remote one do not tell.
@@ -110,14 +110,29 @@ type LocalAgentConfig = {
     /** Text of `system-prompt.md`; empty or absent means no such file. */
     readonly systemPrompt?: string;
 };
-/** The manifest of a remote agent as the settings page edits it. */
+/**
+ * The manifest of a remote agent as the settings page edits it: reached at
+ * `url`, or through an SSH tunnel to the host `ssh` names.
+ */
 type RemoteAgentConfig = {
     readonly kind: 'remote';
     readonly id: string;
     readonly name?: string;
     readonly description?: string;
-    readonly url: string;
+    readonly url?: string;
+    readonly ssh?: RemoteSsh;
     readonly auth?: RemoteAuth;
+};
+/** Body of `POST /api/ssh-agents`: the one thing a person gives to add the agents of a host. */
+type SshAgentsRequest = {
+    /** `user@host`, or `user@host:port`; the user's public key is already on the host. */
+    readonly target: string;
+};
+/** Answer to `POST /api/ssh-agents`: the agents the host publishes that joined the fleet. */
+type SshAgentsResponse = {
+    readonly added: readonly AgentSummary[];
+    /** Ids of the agents of the fleet the host's agents already were. */
+    readonly present?: readonly string[];
 };
 /**
  * Body of `POST /api/agents` (a new agent) and of `PUT /api/agents/<id>`
@@ -142,5 +157,7 @@ export type {
     PermissionAnswer,
     RemoteAgentConfig,
     SendRequest,
-    ServerMessage
+    ServerMessage,
+    SshAgentsRequest,
+    SshAgentsResponse
 };

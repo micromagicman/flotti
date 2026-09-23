@@ -69,6 +69,42 @@ function FleetDirectory() {
         </form>
     );
 }
+/**
+ * A remote agent in one step: its user@host, and nothing else. flotti asks the
+ * host over SSH what it publishes, adds the agents and keeps a tunnel to them.
+ */
+function SshConnect() {
+    const [target, setTarget] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string>();
+    const [added, setAdded] = useState<string>();
+    const submit = (event: FormEvent): void => {
+        event.preventDefault();
+        setBusy(true);
+        setError(undefined);
+        setAdded(undefined);
+        api.addOverSsh(target.trim()).then((answer) => {
+            setTarget('');
+            setAdded(`Added ${answer.added.map((agent) => agent.name).join(', ')}`
+                + `${answer.present === undefined ? '' : `; already in the fleet: ${answer.present.join(', ')}`}.`);
+        }, (reason: unknown) => setError(errorText(reason))).finally(() => setBusy(false));
+    };
+    return (
+        <form className="settings-section" aria-label="Connect over SSH" onSubmit={submit}>
+            <h2>Connect over SSH</h2>
+            <div className="field-inline">
+                <input aria-label="SSH address" placeholder="user@host" value={target} onChange={(event) => setTarget(event.target.value)} />
+                <button type="submit" className="primary" disabled={busy || target.trim() === ''}>{busy ? 'Connecting…' : 'Connect'}</button>
+            </div>
+            <p className="field-hint">
+                Your public key has to be on the host already. flotti asks the host which agents it publishes, adds them,
+                and keeps an SSH tunnel to each one up: no port, no token to copy.
+            </p>
+            {added === undefined ? null : <p className="note" role="status">{added}</p>}
+            {error === undefined ? null : <p className="error" role="alert">{error}</p>}
+        </form>
+    );
+}
 function AgentRow({ agent, onEdit }: { readonly agent: AgentSummary; readonly onEdit: () => void }) {
     const [confirming, setConfirming] = useState(false);
     const [error, setError] = useState<string>();
@@ -142,6 +178,7 @@ function SettingsPanel({ agents }: SettingsPanelProps) {
             {editing === undefined
                 ? (
                     <>
+                        <SshConnect />
                         <FleetDirectory />
                         <div className="settings-section">
                             <h2>Agents</h2>
