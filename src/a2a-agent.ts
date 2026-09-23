@@ -12,7 +12,7 @@ import {
     withA2AExtensions
 } from '@a2a-js/sdk/client';
 import type { Client } from '@a2a-js/sdk/client';
-import { AgentEvents } from './agent-events.js';
+import { AgentEvents, fromAgentPrompt } from './agent-events.js';
 import type { AgentEventListener, AgentStatus, FleetAgent } from './agent-events.js';
 import type { Environment } from './manifest.js';
 import { SshConnection } from './ssh.js';
@@ -212,7 +212,7 @@ class A2AAgent implements FleetAgent {
         this.setStatus('idle');
         this.openInbox();
     }
-    send(text: string): Promise<void> {
+    send(text: string, from?: string): Promise<void> {
         const client = this.client;
         if (client === undefined) {
             return Promise.reject(new Error(`Agent ${this.agentId} is not connected; start it first.`));
@@ -224,7 +224,7 @@ class A2AAgent implements FleetAgent {
             accepted = resolve;
             refused = reject;
         });
-        const turn = this.queue.then(() => this.runTurn(client, text, signal, accepted, refused));
+        const turn = this.queue.then(() => this.runTurn(client, { text, from }, signal, accepted, refused));
         this.queue = turn.catch(() => undefined);
         return delivery;
     }
@@ -403,7 +403,7 @@ class A2AAgent implements FleetAgent {
     /** One message and everything the agent does about it, until the turn is over. */
     private async runTurn(
         client: Client,
-        text: string,
+        { text, from }: { readonly text: string; readonly from: string | undefined },
         signal: AbortSignal,
         accepted: () => void,
         refused: (error: unknown) => void
@@ -412,13 +412,15 @@ class A2AAgent implements FleetAgent {
             refused(new Error(`Agent ${this.agentId} was stopped before the message was sent.`));
             return;
         }
-        const message = this.userMessage(text);
+        // The fleet tools are for the agents flotti starts: one with a loop of its own is only told who wrote.
+        const message = this.userMessage(from === undefined ? text : fromAgentPrompt(from, text, false));
         this.answering = message.taskId === '' ? undefined : this.task;
         let delivered = false;
         const deliver = () => {
             if (!delivered) {
                 delivered = true;
-                this.events.emit({ type: 'message', role: 'user', messageId: message.messageId, text, append: false });
+                const sender = from === undefined ? {} : { from };
+                this.events.emit({ type: 'message', role: 'user', messageId: message.messageId, text, append: false, ...sender });
                 accepted();
             }
         };

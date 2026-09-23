@@ -49,6 +49,12 @@ type AgentEventBody =
         readonly messageId: string;
         readonly text: string;
         readonly append: boolean;
+        /**
+         * A `user` message another agent of the fleet sent — its id — rather
+         * than a person. The text is what that agent wrote, without the lines
+         * flotti adds for the receiving agent (see {@link fromAgentPrompt}).
+         */
+        readonly from?: string;
     }
     /** A piece of the agent's reasoning, shown apart from its answer. */
     | { readonly type: 'thought'; readonly text: string }
@@ -112,8 +118,11 @@ interface FleetAgent {
      * agent has taken the message, not when it has answered: what comes of it
      * arrives as events, down to `turn-end`. Rejects when the message never
      * reached the agent — not started, stopped, gone before its turn.
+     *
+     * `from` is the id of the agent of the fleet that sent it, when not a
+     * person: its `message` event carries it, and the agent is told who wrote.
      */
-    send(text: string): Promise<void>;
+    send(text: string, from?: string): Promise<void>;
     /** Asks the agent to drop what it is working on; does nothing when it is not busy. */
     cancel(): Promise<void>;
     /**
@@ -161,7 +170,19 @@ class AgentEvents {
         this.listeners.clear();
     }
 }
-export { AgentEvents };
+/**
+ * What an agent is given when another agent of the fleet writes to it: who
+ * wrote, and how to answer — the answer of its turn goes to the person
+ * watching it, not back to the sender.
+ */
+function fromAgentPrompt(from: string, text: string, hasTools = true): string {
+    const how = hasTools
+        ? ` To answer it, use the flotti tool send_message with to "${from}", or reply; `
+            + `what you say here goes to the person watching you, not to "${from}".`
+        : '';
+    return `[Message from agent "${from}" of the flotti fleet.${how}]\n\n${text}`;
+}
+export { AgentEvents, fromAgentPrompt };
 export type {
     AgentEvent,
     AgentEventBody,

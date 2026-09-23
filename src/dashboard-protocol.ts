@@ -103,6 +103,8 @@ type LocalAgentConfig = {
     readonly model?: string;
     readonly command: string;
     readonly arguments?: readonly string[];
+    /** `user@host`: flotti starts the agent on that host over SSH. */
+    readonly ssh?: string;
     readonly workdir?: string;
     readonly env?: Readonly<Record<string, string>>;
     readonly restart?: RestartPolicy;

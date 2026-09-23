@@ -65,6 +65,7 @@ function readLocalManifest(value: unknown, context: ManifestContext): LocalAgent
     const adapter = optionalChoice(fields['adapter'], ADAPTERS, at('adapter'));
     const model = optionalString(fields['model'], at('model'));
     const workdir = optionalString(fields['workdir'], at('workdir'));
+    const ssh = optionalHost(fields['ssh'], at('ssh'));
     return {
         ...agentBase(fields, context),
         kind: 'local',
@@ -72,7 +73,10 @@ function readLocalManifest(value: unknown, context: ManifestContext): LocalAgent
         ...(model === undefined ? {} : { model }),
         command: requiredString(fields['command'], at('command')),
         arguments: optionalStringArray(fields['arguments'], at('arguments')),
-        workdir: workdir === undefined ? context.directory : workingDirectory(workdir, context),
+        ...(ssh === undefined ? {} : { ssh }),
+        workdir: ssh !== undefined
+            ? workdir?.trim() ?? '~'
+            : workdir === undefined ? context.directory : workingDirectory(workdir, context),
         env: optionalEnvironment(fields['env'], at('env')),
         restart: optionalChoice(fields['restart'], RESTART_POLICIES, at('restart')) ?? DEFAULT_RESTART_POLICY,
         heartbeatTimeoutSec: optionalPositiveNumber(fields['heartbeatTimeoutSec'], at('heartbeatTimeoutSec'))
@@ -133,6 +137,18 @@ function sshAccess(value: unknown, place: Place): RemoteSsh {
         reject('wrong-type', place.path, `${inside('agent').field} must be the id of a published agent, got ${shown(agent)}`);
     }
     return { target, ...(agent === undefined ? {} : { agent }) };
+}
+/** `"ssh": "user@host"` of a local agent: the host flotti starts it on. */
+function optionalHost(value: unknown, place: Place): string | undefined {
+    const target = optionalString(value, place)?.trim();
+    if (target !== undefined) {
+        try {
+            parseTarget(target);
+        } catch (error) {
+            reject('wrong-type', place.path, `${place.field}: ${(error as Error).message}`);
+        }
+    }
+    return target;
 }
 function manifestObject(value: unknown, context: ManifestContext): Fields {
     if (!isObject(value)) {

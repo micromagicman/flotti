@@ -235,7 +235,8 @@ The smallest one:
 | `id`                  | no       | non-empty string                | —                              | If given, must equal the directory name; the directory is what counts.            |
 | `adapter`             | no       | `claude-code`, `codex`          | —                              | Which ACP adapter `command` starts, so flotti knows how to hand over the model, the system prompt and the skills. Without it the agent gets plain ACP only. |
 | `model`               | no       | non-empty string                | the adapter's own default      | Model the agent is asked to use.                                                 |
-| `workdir`             | no       | non-empty string                | the agent directory            | Directory the agent is started in; a relative one is taken from the agent directory, `~` is expanded. |
+| `ssh`                 | no       | `user@host`, `user@host:port`   | —                              | Start the agent on that host over SSH instead of here: see [On another host](#on-another-host). |
+| `workdir`             | no       | non-empty string                | the agent directory            | Directory the agent is started in; a relative one is taken from the agent directory, `~` is expanded. With `ssh`, a path on that host, `~` there by default. |
 | `env`                 | no       | object of strings               | `{}`                           | Variables added to the agent environment.                                        |
 | `restart`             | no       | `always`, `on-failure`, `never` | `on-failure`                   | What to do when the agent stops.                                                 |
 | `heartbeatTimeoutSec` | no       | positive number                 | `60`                           | Seconds without a heartbeat before the agent counts as lost.                      |
@@ -339,6 +340,65 @@ The extra workspace root is what lets the agent read its skills and keep its mem
 A `CODEX_CONFIG` of your own, in `env` or in the environment, is kept; a `developer_instructions` in it
 wins over `system-prompt.md`. The system prompt is read at every start, so an edit takes effect on a
 restart. A model the agent does not offer stops the start at once: a retry would not change the answer.
+
+### The fleet tools
+
+Every agent flotti starts gets the fleet as tools, with nothing to set up in the agent itself: flotti
+serves an MCP server of its own and names it in `mcpServers` of every `session/new`, `session/resume`
+and `session/load`. A bare Claude Code or Codex sees them as `mcp__flotti__…`:
+
+| Tool           | What it does                                                                          |
+|----------------|---------------------------------------------------------------------------------------|
+| `list_agents`  | the agents of the fleet — id, name, description, harness, status; the caller is marked `you` |
+| `send_message` | sends a message to another agent: `to` — its id, `text`                                |
+| `reply`        | answers the agent whose message came last                                             |
+| `forward`      | forwards the last message another agent sent, as it was, to another agent; `comment` goes before it |
+
+A message sent so reaches the other agent like one from a person, but from that agent: its `message`
+event has `from` — the sender's id — and the agent is told who wrote and how to answer. What it says in
+its turn goes to its own tab, not back to the sender: an answer to an agent is a `send_message` too.
+Messages queue as a person's do; a tool call does not wait for the answer.
+
+The server speaks MCP over HTTP (the streamable transport, with plain JSON answers) on a free port of
+`127.0.0.1`, and every agent gets a token of its own in the `Authorization` header: the token tells who
+is sending, and without one of the fleet's tokens the server answers nothing. HTTP is the transport
+both adapters take — claude-agent-acp 0.81.1 declares `mcpCapabilities` `http` and `sse`, codex-acp
+1.13.1 `http` only, and both take `stdio`, which ACP requires of every agent — and the one an SSH
+tunnel carries to an agent on another host. An agent that declares no `http` gets no tools, and a log
+event says so. A remote A2A agent — one with a loop of its own — gets no tools; a message from an agent
+reaches it with a line saying who wrote.
+
+### On another host
+
+With `"ssh": "user@host"` flotti starts the agent on that host rather than here, and runs it like one
+here: start, stop, restart, the restart policy, the heartbeat and the status are the same. It is
+`ssh` that flotti starts, with `command` and `arguments` run on the host; ACP goes through the SSH
+connection, and so do the commands the agent runs and the files it works with — they are the host's.
+
+```json
+{
+    "adapter": "codex",
+    "command": "npx",
+    "arguments": ["-y", "@agentclientprotocol/codex-acp@1.13.1"],
+    "ssh": "dev@build.example.org",
+    "workdir": "~/projects/app"
+}
+```
+
+- **Access** is your SSH key, as for [remote agents over SSH](#over-ssh): the `ssh` of this machine
+  with your `~/.ssh/config` and agent, never asking anything. Nothing else is set up on the host but
+  what the agent needs to run: `npx` in the `PATH` of a non-interactive SSH session, and a login to
+  Claude Code or Codex there.
+- **`workdir`** is a path on the host — absolute, relative to the home directory there, or starting
+  with `~` — and the home directory when the manifest names none. The host says what it is before the
+  command starts, because ACP wants an absolute path.
+- **`env`** is all the agent gets of an environment besides the host's own: nothing of this machine
+  goes along.
+- **The fleet tools** go through a reverse tunnel of the same SSH connection: a port the host picks,
+  on its loopback, leads to the tools here.
+- **What stays here**: the agent directory — the manifest, `logs/`, the history of its tab. The system
+  prompt goes along as text; `skills/` and `memory/` do not, and a log event says so.
+- **Stop** ends `ssh`; the agent on the host gets the end of its input and goes.
 
 ### Lifecycle
 
@@ -458,7 +518,7 @@ for everything after N — and its time:
 | Event        | What it says                                                                                   |
 |--------------|------------------------------------------------------------------------------------------------|
 | `status`     | `starting`, `idle`, `working`, `waiting`, `error` or `stopped`, and why                        |
-| `message`    | a piece of a message: pieces with one `messageId` make one message, `append` adds to its end   |
+| `message`    | a piece of a message: pieces with one `messageId` make one message, `append` adds to its end; `from` — the agent that sent it, when not a person |
 | `thought`    | a piece of the agent's reasoning                                                               |
 | `progress`   | a line about what the agent is doing, shown in the open                                        |
 | `tool-call`  | a tool call started or changed                                                                 |

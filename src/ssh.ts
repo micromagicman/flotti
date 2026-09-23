@@ -355,6 +355,99 @@ class SshTunnel {
         }
     }
 }
+/** What a process started over SSH is: the command and how it is run on the host. */
+type RemoteCommand = {
+    readonly command: string;
+    readonly arguments: readonly string[];
+    /** Variables set for the command on the host; the environment of flotti stays here. */
+    readonly env: Readonly<Record<string, string>>;
+    /** Working directory on the host: absolute, relative to the home directory, or starting with `~`. */
+    readonly workdir: string;
+    /** A port of this machine the host gets a way back to, through a reverse tunnel. */
+    readonly reversePort?: number;
+};
+/** Marks the line on which the host says where the command runs. */
+const CWD_MARKER = `${RECORD_SEPARATOR}flotti-cwd `;
+/** What ssh says once the host has given the reverse tunnel a port. */
+const ALLOCATED_PORT = /^Allocated port (\d+) for remote forward/;
+/** Quoted for a POSIX shell: `'…'`, with every `'` inside closed, escaped and opened again. */
+function shellQuote(value: string): string {
+    return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+/** `cd` to the working directory: `~` stays the home directory of the SSH user, whatever it is called there. */
+function changeDirectory(workdir: string): string {
+    if (workdir === '~') {
+        return 'cd "$HOME"';
+    }
+    if (workdir.startsWith('~/')) {
+        return `cd "$HOME"/${shellQuote(workdir.slice(2))}`;
+    }
+    return `cd ${shellQuote(workdir)}`;
+}
+/**
+ * The arguments of `ssh` that start a command on the host with its standard
+ * streams wired to this side — no terminal, so ACP goes through untouched —
+ * and, with `reversePort`, a reverse tunnel from a port the host picks to that
+ * port here. Before the command, the host prints where it runs: ACP wants an
+ * absolute working directory, and `~` is known only there.
+ */
+function remoteCommandArguments(target: SshTarget, remote: RemoteCommand, options: SshOptions = {}): string[] {
+    const environment = Object.entries(remote.env).map(([name, value]) => `${name}=${value}`);
+    const run = [remote.command, ...remote.arguments].map(shellQuote).join(' ');
+    const script = `${changeDirectory(remote.workdir)} || exit 97; `
+        + `printf "\\036flotti-cwd %s\\n" "$PWD" >&2; `
+        + `exec ${environment.length === 0 ? '' : `env ${environment.map(shellQuote).join(' ')} `}${run}`;
+    return [
+        ...commonArguments(target, options),
+        '-T',
+        '-o', 'ServerAliveInterval=15',
+        '-o', 'ServerAliveCountMax=3',
+        ...(remote.reversePort === undefined
+            ? []
+            : ['-o', 'ExitOnForwardFailure=yes', '-R', `0:127.0.0.1:${remote.reversePort}`]),
+        '--', target.destination,
+        `sh -c ${shellQuote(script)}`
+    ];
+}
+/** Where the command runs on the host, and the port of the reverse tunnel there. */
+type RemotePlace = { readonly cwd: string; readonly reversePort?: number };
+/**
+ * Reads what ssh and the host say on standard error while the command starts:
+ * the working directory and the port of the reverse tunnel. Every other line
+ * is the command's own.
+ */
+class RemoteStartReader {
+    private buffer = '';
+    private cwd: string | undefined;
+    private port: number | undefined;
+    constructor(private readonly wantsPort: boolean) {}
+    /** Everything is known. */
+    get place(): RemotePlace | undefined {
+        if (this.cwd === undefined || (this.wantsPort && this.port === undefined)) {
+            return undefined;
+        }
+        return { cwd: this.cwd, ...(this.port === undefined ? {} : { reversePort: this.port }) };
+    }
+    /** Takes a piece of standard error; returns the whole lines that are not about the start. */
+    read(chunk: string): string[] {
+        this.buffer += chunk;
+        const lines = this.buffer.split(/\r?\n/);
+        this.buffer = lines.pop() ?? '';
+        return lines.filter((line) => !this.take(line));
+    }
+    private take(line: string): boolean {
+        if (line.startsWith(CWD_MARKER)) {
+            this.cwd = line.slice(CWD_MARKER.length);
+            return true;
+        }
+        const allocated = ALLOCATED_PORT.exec(line);
+        if (allocated !== null) {
+            this.port = Number(allocated[1]);
+            return true;
+        }
+        return false;
+    }
+}
 /** What a connection gives the A2A client: where to go, and how to prove itself there. */
 type RemoteEndpoint = {
     /** Address of the agent, as the agent itself knows it. */
@@ -448,6 +541,9 @@ class SshConnection implements RemoteConnection {
 }
 export {
     PUBLISH_DIRECTORY,
+    RemoteStartReader,
+    remoteCommandArguments,
+    shellQuote,
     SshConnection,
     SshError,
     SshTunnel,
@@ -457,4 +553,4 @@ export {
     parseTarget,
     pickPublished
 };
-export type { PublishedAgent, RemoteConnection, RemoteEndpoint, SshOptions, SshTarget };
+export type { PublishedAgent, RemoteCommand, RemoteConnection, RemoteEndpoint, RemotePlace, SshOptions, SshTarget };

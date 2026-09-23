@@ -47,8 +47,9 @@ type AgentBase = {
     readonly manifestPath: string;
 };
 /**
- * An agent flotti starts itself, from `<fleet>/local/<id>/`. The optional
- * fields of the manifest are already filled with the documented defaults.
+ * An agent flotti starts itself, from `<fleet>/local/<id>/`: on this machine,
+ * or on another one over SSH. The optional fields of the manifest are already
+ * filled with the documented defaults.
  */
 type LocalAgent = AgentBase & {
     readonly kind: 'local';
@@ -60,7 +61,18 @@ type LocalAgent = AgentBase & {
     readonly command: string;
     /** Arguments passed to the executable; empty when the manifest says nothing. */
     readonly arguments: readonly string[];
-    /** Absolute working directory; the agent directory when the manifest says nothing. */
+    /**
+     * `user@host`, or `user@host:port`, when flotti starts the agent on that host
+     * over SSH rather than here: the process, its commands and its files are
+     * there, and ACP goes through the SSH connection.
+     */
+    readonly ssh?: string;
+    /**
+     * Working directory. Here: absolute, the agent directory when the manifest
+     * says nothing. On an SSH host: as the manifest writes it — absolute,
+     * relative to the home directory there, or starting with `~` — and `~`
+     * when it says nothing.
+     */
     readonly workdir: string;
     /** Variables added to the agent environment; empty when the manifest says nothing. */
     readonly env: Readonly<Record<string, string>>;
