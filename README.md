@@ -420,3 +420,10 @@ npm run test:e2e  # builds, starts flotti with pretend agents and drives the das
 The page is React, built by Vite from `web/` into `build/web`, which the server serves. `test:e2e`
 uses Playwright's Chromium — `npx playwright install chromium` once; `FLOTTI_E2E_CHROMIUM=<path>`
 points it at another Chromium instead.
+
+### Releasing
+
+Bump `version` in `package.json`, merge, then push a tag `v<version>` — the `publish` workflow
+checks the tag against `package.json`, builds, runs the tests and publishes to npm with the
+`NPM_TOKEN` repository secret. A tag pushed earlier is released by running `publish` by hand
+(Actions → publish → Run workflow) with that tag.
