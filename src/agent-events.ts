@@ -53,6 +53,12 @@ type AgentEventBody =
     /** A piece of the agent's reasoning, shown apart from its answer. */
     | { readonly type: 'thought'; readonly text: string }
     /**
+     * A line about what the agent is doing — "running the tests", "waiting for
+     * CI" — said while it works, in a turn or on its own. Shown in the open, unlike
+     * a thought, and not a message: it answers nobody.
+     */
+    | { readonly type: 'progress'; readonly text: string }
+    /**
      * A tool call started or changed. The first event of a `toolCallId` carries
      * what is known; the later ones carry only what changed.
      */

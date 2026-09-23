@@ -55,6 +55,23 @@ describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
         ok(trace.some((line) => line.direction === 'in'));
     });
 });
+describe('LocalAgentProcess: what the agent does of its own', { timeout: 20_000 }, () => {
+    it('shows what the agent says and does after the turn is over, as a message of its own', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        strictEqual(await harness.talk('later'), 'end_turn');
+        const from = harness.lastSeq;
+        await harness.next((event) => event.type === 'message' && event.text === 'CI is green');
+        const after = shape(harness.events.filter((event) => event.seq > from));
+        deepStrictEqual(after[0], { type: 'tool-call', toolCallId: 'call-2', title: 'Check CI', status: 'completed', raw: undefined });
+        const message = harness.events.find((event) => event.seq > from && event.type === 'message');
+        ok(message?.type === 'message');
+        strictEqual(message.role, 'agent');
+        strictEqual(message.append, false);
+        ok(message.messageId !== 'm1', 'the message of its own must not go on the answer of the turn');
+        strictEqual(harness.agent.status, 'idle');
+    });
+});
 describe('LocalAgentProcess: the queue', { timeout: 20_000 }, () => {
     it('queues a message sent while the agent is busy', async () => {
         const harness = new Harness();

@@ -22,6 +22,12 @@ import type { RemoteAgent, RemoteAuth } from './types.js';
  * is in docs/a2a-restart.md.
  */
 const RESTART_EXTENSION = 'https://github.com/micromagicman/flotti/blob/main/docs/a2a-restart.md';
+/**
+ * A2A extension through which a remote agent says things of its own — a message
+ * nobody asked for, a line about what it is busy with — outside the turns of the
+ * dashboard. The contract is in docs/a2a-inbox.md.
+ */
+const INBOX_EXTENSION = 'https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md';
 type A2AAgentOptions = {
     /** Where the secrets named by `auth` are read from; defaults to `process.env`. */
     readonly env?: Environment;
@@ -50,6 +56,8 @@ type A2AAgentInfo = {
     readonly streaming: boolean;
     /** Whether the agent can restart itself when asked (the flotti restart extension). */
     readonly restart: boolean;
+    /** Whether the agent says things of its own through the flotti inbox extension. */
+    readonly inbox: boolean;
     /** Whether the card carries a signature. It is not verified: see README, "Talking to a remote agent". */
     readonly signed: boolean;
     /** Names of the security schemes the card declares. */
@@ -70,6 +78,15 @@ type StreamProgress = {
     /** Reconnects in a row that failed; an event resets it. */
     failures: number;
     lastError: unknown;
+};
+/** What reading the inbox has learned so far. */
+type InboxProgress = {
+    /** The inbox task, once the agent opened it: a broken stream goes back to it. */
+    taskId: string | undefined;
+    /** Attempts in a row that failed; an event resets it. */
+    failures: number;
+    /** The agent turned the inbox down: flotti stops asking. */
+    refused: boolean;
 };
 /** A turn is over once the agent answered with a message, or its task stopped or paused. */
 const FINAL_STATES: readonly TaskState[] = [
@@ -114,6 +131,10 @@ class A2AAgent implements FleetAgent {
     private answering: CurrentTask | undefined;
     /** Ids of the agent messages already shown: a task snapshot repeats them. */
     private readonly shown = new Set<string>();
+    /** Whether a message of a person is being worked on: the status is the turn's then. */
+    private inTurn = false;
+    /** Whether the agent last said, through the inbox, that it is busy on its own. */
+    private busyOnItsOwn = false;
     constructor(agent: RemoteAgent, options: A2AAgentOptions = {}) {
         this.agentId = agent.id;
         this.agent = agent;
@@ -156,6 +177,7 @@ class A2AAgent implements FleetAgent {
             throw error;
         }
         this.setStatus('idle');
+        this.openInbox();
     }
     send(text: string): Promise<void> {
         const client = this.client;
@@ -210,6 +232,7 @@ class A2AAgent implements FleetAgent {
                 await client.cancelTask({ tenant: '', id: unfinished.id, metadata: undefined }).catch(() => undefined);
             }
             this.setStatus('idle', 'new conversation: the agent cannot be restarted remotely');
+            this.openInbox();
             return;
         }
         this.setStatus('starting', 'restarting');
@@ -221,6 +244,7 @@ class A2AAgent implements FleetAgent {
             throw error;
         }
         this.setStatus('idle', 'restarted');
+        this.openInbox();
     }
     async stop(): Promise<void> {
         this.endSession();
@@ -286,6 +310,7 @@ class A2AAgent implements FleetAgent {
                 accepted();
             }
         };
+        this.inTurn = true;
         this.setStatus('working');
         try {
             await this.exchange(client, message, signal, deliver);
@@ -304,6 +329,10 @@ class A2AAgent implements FleetAgent {
             refused(error);
         } finally {
             this.answering = undefined;
+            this.inTurn = false;
+            if (this.busyOnItsOwn && this.currentStatus === 'idle') {
+                this.setStatus('working');
+            }
         }
     }
     /** Sends the message and follows the answer, streamed or polled, until the turn is over. */
@@ -522,6 +551,154 @@ class A2AAgent implements FleetAgent {
         }
         return FINAL_STATES.includes(state) || INTERRUPTED_STATES.includes(state);
     }
+    // --- the inbox: what the agent says of its own ----------------------------------------------------------
+    /**
+     * Opens the inbox of an agent that offers it, and keeps it open in the
+     * background until the session ends: stop and restart abort it.
+     */
+    private openInbox(): void {
+        const client = this.client;
+        if (client === undefined || this.card?.inbox !== true) {
+            return;
+        }
+        if (!this.card.streaming) {
+            this.log('the agent offers the inbox but cannot stream: what it says of its own will not show here');
+            return;
+        }
+        void this.followInbox(client, this.session.signal);
+    }
+    /**
+     * Reads the inbox for as long as the session lasts. A stream that breaks off
+     * is caught up with `GetTask` and reconnected to with `SubscribeToTask`; an
+     * inbox task the agent no longer has — it restarted — is opened anew.
+     */
+    private async followInbox(client: Client, signal: AbortSignal): Promise<void> {
+        const progress: InboxProgress = { taskId: undefined, failures: 0, refused: false };
+        let lastError: unknown;
+        while (!signal.aborted && !progress.refused) {
+            lastError = undefined;
+            try {
+                const stream = await this.inboxStream(client, progress, signal);
+                for await (const event of stream ?? []) {
+                    if (progress.failures > 0) {
+                        this.log('the inbox is back');
+                    }
+                    progress.failures = 0;
+                    this.applyInbox(event, progress);
+                }
+            } catch (error) {
+                lastError = error;
+            }
+            if (signal.aborted || progress.refused) {
+                return;
+            }
+            if (progress.failures++ === 0) {
+                this.log(`lost the inbox, reconnecting: ${describeError(lastError ?? 'closed early')}`);
+            }
+            await pause(this.backoff(progress.failures - 1), signal);
+        }
+    }
+    /** The stream to read the inbox from: a new inbox, or the one open before; nothing when that one is over. */
+    private async inboxStream(
+        client: Client,
+        progress: InboxProgress,
+        signal: AbortSignal
+    ): Promise<AsyncGenerator<StreamResponse> | undefined> {
+        const taskId = progress.taskId;
+        if (taskId === undefined) {
+            const request = extensionRequest(INBOX_EXTENSION, 'flotti listens for what you say of your own.', { action: 'subscribe' });
+            return client.sendMessageStream(sendRequest(request), {
+                signal,
+                serviceParameters: ServiceParameters.create(withA2AExtensions(INBOX_EXTENSION))
+            });
+        }
+        let task: Task;
+        try {
+            task = await client.getTask({ tenant: '', id: taskId }, { signal });
+        } catch (error) {
+            // The agent does not know the task any more: it restarted. A new inbox, then.
+            progress.taskId = undefined;
+            throw error;
+        }
+        this.applyInbox({ payload: { $case: 'task', value: task } }, progress);
+        return progress.taskId === undefined || progress.refused
+            ? undefined
+            : client.resubscribeTask({ tenant: '', id: taskId }, { signal });
+    }
+    /** Shows one event of the inbox, and learns from it what became of the inbox task. */
+    private applyInbox(event: StreamResponse, progress: InboxProgress): void {
+        const payload = event.payload;
+        switch (payload?.$case) {
+            case 'message':
+                this.inboxMessage(payload.value);
+                this.log('the agent answered the inbox request with a message: it keeps no inbox');
+                progress.refused = true;
+                return;
+            case 'task':
+                for (const message of payload.value.history) {
+                    if (message.role === Role.ROLE_AGENT) {
+                        this.inboxMessage(message);
+                    }
+                }
+                for (const artifact of payload.value.artifacts) {
+                    this.showArtifact(payload.value.id, artifact.artifactId, artifact.parts, false);
+                }
+                this.trackInbox(payload.value.id, payload.value.status, progress);
+                return;
+            case 'statusUpdate':
+                this.trackInbox(payload.value.taskId, payload.value.status, progress);
+                return;
+            case 'artifactUpdate': {
+                const { artifact, taskId, append } = payload.value;
+                if (artifact !== undefined) {
+                    this.showArtifact(taskId, artifact.artifactId, artifact.parts, append);
+                }
+                return;
+            }
+            default:
+                return;
+        }
+    }
+    private trackInbox(taskId: string, status: Task['status'], progress: InboxProgress): void {
+        progress.taskId = taskId;
+        if (status?.message !== undefined) {
+            this.inboxMessage(status.message);
+        }
+        const state = status?.state ?? TaskState.TASK_STATE_UNSPECIFIED;
+        if (state === TaskState.TASK_STATE_REJECTED || state === TaskState.TASK_STATE_FAILED) {
+            const why = status?.message === undefined ? '' : `: ${partsText(status.message.parts)}`;
+            this.log(`the agent turned the inbox down${why}`);
+            progress.refused = true;
+        } else if (FINAL_STATES.includes(state)) {
+            // Closed by the agent — it is going away, say. The next inbox is a new one.
+            progress.taskId = undefined;
+        }
+    }
+    /** A message that came through the inbox: a message of the agent's own, or a line of progress. */
+    private inboxMessage(message: Message): void {
+        const params = inboxParams(message);
+        if (params.kind === 'progress') {
+            const id = message.messageId || randomUUID();
+            const text = partsText(message.parts);
+            if (!this.shown.has(id) && text !== '') {
+                this.events.emit({ type: 'progress', text });
+            }
+            this.shown.add(id);
+        } else {
+            this.showMessage(message);
+        }
+        if (params.busy !== undefined) {
+            this.busyOnItsOwn = params.busy;
+            if (!this.inTurn && params.busy && this.currentStatus === 'idle') {
+                this.setStatus('working');
+            } else if (!this.inTurn && !params.busy && this.currentStatus === 'working') {
+                this.setStatus('idle');
+            }
+        }
+    }
+    private log(text: string): void {
+        this.events.emit({ type: 'log', source: 'flotti', text });
+    }
     private showMessage(message: Message): void {
         const id = message.messageId || randomUUID();
         if (this.shown.has(id)) {
@@ -570,6 +747,7 @@ class A2AAgent implements FleetAgent {
     private forgetConversation(): void {
         this.contextId = undefined;
         this.task = undefined;
+        this.busyOnItsOwn = false;
         this.shown.clear();
     }
     private backoff(attempt: number): number {
@@ -659,6 +837,7 @@ function describeCard(card: AgentCard, protocolVersion: string): A2AAgentInfo {
         protocolVersion,
         streaming: card.capabilities?.streaming === true,
         restart: (card.capabilities?.extensions ?? []).some(extension => extension.uri === RESTART_EXTENSION),
+        inbox: (card.capabilities?.extensions ?? []).some(extension => extension.uri === INBOX_EXTENSION),
         signed: (card.signatures ?? []).length > 0,
         security: Object.keys(card.securitySchemes ?? {}),
         skills: (card.skills ?? []).map(skill => ({ id: skill.id, name: skill.name, description: skill.description }))
@@ -669,16 +848,7 @@ function describeCard(card: AgentCard, protocolVersion: string): A2AAgentInfo {
  * but a failed or rejected task means the agent took the request.
  */
 async function askToRestart(client: Client): Promise<void> {
-    const request: Message = {
-        messageId: randomUUID(),
-        contextId: '',
-        taskId: '',
-        role: Role.ROLE_USER,
-        parts: [textPart('Restart requested by flotti.')],
-        metadata: { [RESTART_EXTENSION]: { action: 'restart' } },
-        extensions: [RESTART_EXTENSION],
-        referenceTaskIds: []
-    };
+    const request = extensionRequest(RESTART_EXTENSION, 'Restart requested by flotti.', { action: 'restart' });
     const result = await client.sendMessage(sendRequest(request), {
         serviceParameters: ServiceParameters.create(withA2AExtensions(RESTART_EXTENSION))
     });
@@ -690,6 +860,35 @@ async function askToRestart(client: Client): Promise<void> {
         const why = result.status?.message === undefined ? '' : `: ${partsText(result.status.message.parts)}`;
         throw new Error(`the agent refused to restart${why}`);
     }
+}
+/**
+ * A message that belongs to no conversation and asks something of an extension:
+ * the request is in the metadata, under the extension URI; the text is for
+ * agents and logs that show messages to people.
+ */
+function extensionRequest(uri: string, text: string, params: Record<string, unknown>): Message {
+    return {
+        messageId: randomUUID(),
+        contextId: '',
+        taskId: '',
+        role: Role.ROLE_USER,
+        parts: [textPart(text)],
+        metadata: { [uri]: params },
+        extensions: [uri],
+        referenceTaskIds: []
+    };
+}
+/** What an inbox message says of itself under the extension URI; anything else there is ignored. */
+function inboxParams(message: Message): { readonly kind: 'message' | 'progress'; readonly busy?: boolean } {
+    const params: unknown = message.metadata?.[INBOX_EXTENSION];
+    if (typeof params !== 'object' || params === null) {
+        return { kind: 'message' };
+    }
+    const { kind, busy } = params as Record<string, unknown>;
+    return {
+        kind: kind === 'progress' ? 'progress' : 'message',
+        ...(typeof busy === 'boolean' ? { busy } : {})
+    };
 }
 function sendRequest(message: Message) {
     return { tenant: '', message, configuration: undefined, metadata: undefined };
@@ -756,5 +955,5 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
         signal.addEventListener('abort', done, { once: true });
     });
 }
-export { A2AAgent, RESTART_EXTENSION, cardLocation };
+export { A2AAgent, INBOX_EXTENSION, RESTART_EXTENSION, cardLocation };
 export type { A2AAgentInfo, A2AAgentOptions };
