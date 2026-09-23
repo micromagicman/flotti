@@ -2,9 +2,10 @@
 
 Simple ai agents orchestrator for humans.
 
-At this point supavisor **reads and checks** its fleet — the agents it is going to work with. Starting
-local agents over ACP, talking to remote ones over A2A and the dashboard are the next steps of the
-`v0.1.0` milestone; reading the fleet starts nothing by itself.
+At this point supavisor **reads and checks** its fleet — the agents it is going to work with — and has
+the client for talking to remote agents over A2A (see [Talking to a remote agent](#talking-to-a-remote-agent)).
+Starting local agents over ACP and the dashboard are the next steps of the `v0.1.0` milestone; reading
+the fleet starts nothing by itself.
 
 ## Requirements
 
@@ -145,9 +146,45 @@ The manifest names the environment variable that holds the secret, never the sec
 are plain files, they get copied, shown in the dashboard and edited by it. supavisor reads the variable
 when it connects; a value that does not look like a variable name is refused.
 
+## Talking to a remote agent
+
+supavisor speaks A2A through the official SDK, [`@a2a-js/sdk`](https://github.com/a2aproject/a2a-js),
+so the protocol details — transports, the `A2A-Version` header, version 0.3 of the protocol — are the
+SDK's and not supavisor's. For every remote agent the dashboard gets the same events as for a local one
+(`src/agent-events.ts`): the status of the agent and the pieces of the messages.
+
+- **The card.** It is read from `<url>/.well-known/agent-card.json`, or from `url` itself when that
+  names a `.json` file. It is read once on connecting, not before every message: a card whose
+  `Cache-Control` says it is fresh is not asked for at all, and after that it is asked for with
+  `If-None-Match`. When the card offers an extended card, that one is read too.
+- **Versions.** Agents that speak A2A 1.0 and 0.3 both work; the dashboard shows which one is spoken.
+  Of the transports, JSON-RPC and HTTP+JSON are used; gRPC is not.
+- **Answers.** An agent that can stream answers as it goes. One that cannot is asked for its task every
+  two seconds until the task is done.
+- **Broken streams.** A stream the agent closes when the task is done or waits for a person is the
+  normal end. A stream that breaks off while the task is still going is reconnected to — the message is
+  not sent again — up to five times in a row, with growing pauses.
+- **Conversation.** Messages to one agent make one conversation. A task that waits for input shows the
+  agent as waiting, and the next message answers that task. A message sent while the agent is busy waits
+  until it is done.
+- **Cancel** cancels the task the agent is working on.
+- **Restart.** An agent that declares the [restart extension](docs/a2a-restart.md) is asked to restart
+  itself, and supavisor reconnects once it is back. Any other agent cannot be restarted from here, so
+  for it restart means a new conversation.
+
+Not done, on purpose:
+
+- **Push notifications.** They need an address the agent can reach, and supavisor runs on `localhost`;
+  a stream or polling does the same job for the dashboard.
+- **Checking the card signature.** The client reports whether the card is signed, but does not verify
+  the signature: a key fetched from the address the card itself names proves nothing, and the manifest
+  has no field for a key to trust yet.
+- **Security schemes of the card.** How supavisor proves itself is what the manifest says; the schemes
+  the card declares are shown, not acted upon.
+
 ## Why JSON
 
-- **Nothing to install.** supavisor has no runtime dependencies, and `JSON.parse` is built into Node.
+- **Nothing to install.** `JSON.parse` is built into Node.
   YAML or TOML would bring a parser along.
 - **The dashboard writes manifests too.** Editing the fleet from the settings page means rewriting
   `agent.json`; JSON survives a read-modify-write untouched, while the comments YAML or TOML would
