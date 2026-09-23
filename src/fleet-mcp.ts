@@ -269,7 +269,13 @@ class FleetMcpServer {
         if (!fleet.agents().some((agent) => agent.id === to)) {
             return failure(`there is no agent "${to}" in the fleet; list_agents names them`);
         }
-        const delivery = await fleet.send(to, message, { from });
+        let delivery: Delivery;
+        try {
+            delivery = await fleet.send(to, message, { from });
+        } catch (error) {
+            // The fleet changed under the call: the sender or the receiver is gone.
+            delivery = { agentId: to, result: 'failed', error: error instanceof Error ? error.message : String(error) };
+        }
         if (delivery.result === 'failed') {
             return failure(`"${to}" did not get it: ${delivery.error ?? 'no reason given'}`);
         }

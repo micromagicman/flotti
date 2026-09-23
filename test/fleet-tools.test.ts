@@ -108,6 +108,18 @@ describe('fleet tools: what they do', () => {
             'bob -> carol: FYI\n\nForwarded from agent "alice":\n\nreview #7, please'
         ]);
     });
+    it('says so when the fleet refuses the message', async () => {
+        const server = await toolsServer();
+        server.serve({
+            agents: () => directory(['alice', 'bob']).agents(),
+            send: () => {
+                throw new Error('There is no agent "alice" in the fleet.');
+            }
+        });
+        const answer = await callTool(server, server.access('alice').token, 'send_message', { to: 'bob', text: 'hi' });
+        ok(answer.isError);
+        match(answer.text, /"bob" did not get it: There is no agent "alice"/);
+    });
     it('says what is wrong as a tool error the agent can read', async () => {
         const server = await toolsServer();
         server.serve(directory(['alice', 'bob']));
@@ -159,9 +171,7 @@ describe('fleet tools: an agent writes to another', { timeout: 30_000 }, () => {
         const received = await bob.next((event) => event.type === 'message' && event.role === 'user');
         deepStrictEqual(pick(received), { text: 'ping from alice', from: 'alice' });
         await eventually(() => bob.recorded('session/prompt').length > 0);
-        const prompt = String(bob.recorded('session/prompt')[0]?.['text']);
-        match(prompt, /^\[Message from agent "alice" of the flotti fleet\. To answer it, use the flotti tool send_message/);
-        match(prompt, /\n\nping from alice$/);
+        strictEqual(bob.recorded('session/prompt')[0]?.['text'], '[from alice] ping from alice');
         ok(alice.events.some((event) => event.type === 'message' && event.role === 'agent' && /mcp: "bob" (has it|is busy)/.test(event.text)));
         await supervisor.stop();
     });

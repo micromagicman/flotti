@@ -12,6 +12,18 @@
     --wait: #bf6a02;
     --bad: #cf222e;
     --off: #8c959f;
+    /*
+     * Colours of agents, for the messages they send one another (#23): white
+     * text on each is 4.5:1 or more. Kept away from the status colours — no
+     * green, amber, red, nor the blue of work.
+     */
+    --agent-ink: #ffffff;
+    --agent-0: #0f7b6c;
+    --agent-1: #b3407a;
+    --agent-2: #6f42c1;
+    --agent-3: #0b6e99;
+    --agent-4: #4b5bbd;
+    --agent-5: #455a64;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     color-scheme: light dark;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -32,6 +44,13 @@
         --wait: #e3a008;
         --bad: #f85149;
         --off: #6e7681;
+        /* A shade lighter, still 4.5:1 with white text, and 3:1 at least against the panel. */
+        --agent-0: #12806f;
+        --agent-1: #bf4583;
+        --agent-2: #7c52cc;
+        --agent-3: #0c76a3;
+        --agent-4: #5667c8;
+        --agent-5: #546e7a;
     }
 }
 * { box-sizing: border-box; }
@@ -133,6 +152,33 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .message { padding: 8px 12px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); }
 .message-user { background: var(--user); align-self: flex-end; }
+/* A message one agent sent another: an envelope with a bar in the sender's colour (#23). */
+/* overflow: hidden rounds the bar off at the corners; flex-shrink: 0 keeps it from letting the feed squeeze the message flat. */
+.message-peer, .message-sent { padding: 0; overflow: hidden; flex-shrink: 0; border: 1px solid var(--agent-color); }
+.message-peer > .text, .message-sent > .text { padding: 8px 12px; }
+.envelope-bar {
+    background: var(--agent-color);
+    color: var(--agent-ink);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    padding: 3px 12px;
+}
+.agent-color-0 { --agent-color: var(--agent-0); }
+.agent-color-1 { --agent-color: var(--agent-1); }
+.agent-color-2 { --agent-color: var(--agent-2); }
+.agent-color-3 { --agent-color: var(--agent-3); }
+.agent-color-4 { --agent-color: var(--agent-4); }
+.agent-color-5 { --agent-color: var(--agent-5); }
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
 .thought { color: var(--muted); font-size: 13px; }
 .progress { font-size: 13px; color: var(--muted); padding: 2px 10px; border-left: 3px solid var(--busy); white-space: pre-wrap; overflow-wrap: anywhere; }
 .thought summary, .raw summary { cursor: pointer; font-size: 12px; }

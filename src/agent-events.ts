@@ -50,11 +50,17 @@ type AgentEventBody =
         readonly text: string;
         readonly append: boolean;
         /**
-         * A `user` message another agent of the fleet sent — its id — rather
-         * than a person. The text is what that agent wrote, without the lines
-         * flotti adds for the receiving agent (see {@link fromAgentPrompt}).
+         * Id of the agent of the fleet that sent this message through flotti
+         * (`role: 'user'`): it goes where a person's message goes, and the tab
+         * shows who sent it. Absent for a message a person sent.
          */
         readonly from?: string;
+        /**
+         * Id of the agent of the fleet this message of the agent is for
+         * (`role: 'agent'`): flotti sends it on to that agent, and the tab of the
+         * sender shows it as sent there. Absent for an answer to a person.
+         */
+        readonly to?: string;
     }
     /** A piece of the agent's reasoning, shown apart from its answer. */
     | { readonly type: 'thought'; readonly text: string }
@@ -102,9 +108,9 @@ type AgentEvent = AgentEventBody & {
     readonly time: string;
 };
 type AgentEventListener = (event: AgentEvent) => void;
-/** How a message is sent: on behalf of whom. */
+/** Who a message is from, when it is not a person. */
 type SendOptions = {
-    /** Id of the agent of the fleet that sends it; absent for a person. */
+    /** Id of the agent of the fleet that sends the message; see the `from` of a `message` event. */
     readonly from?: string;
 };
 /** An agent of the fleet as the dashboard drives it, local or remote. */
@@ -124,8 +130,8 @@ interface FleetAgent {
      * arrives as events, down to `turn-end`. Rejects when the message never
      * reached the agent — not started, stopped, gone before its turn.
      *
-     * `from` is the id of the agent of the fleet that sent it, when not a
-     * person: its `message` event carries it, and the agent is told who wrote.
+     * A message another agent sends goes the same way, with `from` naming the
+     * sender: the agent is told who it is from, and its `message` event says so.
      */
     send(text: string, options?: SendOptions): Promise<void>;
     /** Asks the agent to drop what it is working on; does nothing when it is not busy. */
@@ -175,19 +181,7 @@ class AgentEvents {
         this.listeners.clear();
     }
 }
-/**
- * What an agent is given when another agent of the fleet writes to it: who
- * wrote, and how to answer — the answer of its turn goes to the person
- * watching it, not back to the sender.
- */
-function fromAgentPrompt(from: string, text: string, hasTools = true): string {
-    const how = hasTools
-        ? ` To answer it, use the flotti tool send_message with to "${from}", or reply; `
-            + `what you say here goes to the person watching you, not to "${from}".`
-        : '';
-    return `[Message from agent "${from}" of the flotti fleet.${how}]\n\n${text}`;
-}
-export { AgentEvents, fromAgentPrompt };
+export { AgentEvents };
 export type {
     AgentEvent,
     AgentEventBody,

@@ -12,7 +12,7 @@ import {
     withA2AExtensions
 } from '@a2a-js/sdk/client';
 import type { Client } from '@a2a-js/sdk/client';
-import { AgentEvents, fromAgentPrompt } from './agent-events.js';
+import { AgentEvents } from './agent-events.js';
 import type { AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
 import type { Environment } from './manifest.js';
 import { SshConnection } from './ssh.js';
@@ -212,7 +212,12 @@ class A2AAgent implements FleetAgent {
         this.setStatus('idle');
         this.openInbox();
     }
-    send(text: string, { from }: SendOptions = {}): Promise<void> {
+    /**
+     * A message from another agent carries the sender under the inbox extension
+     * URI in its metadata (docs/a2a-inbox.md); an agent that does not offer the
+     * inbox gets it as `[from <id>]` in front of the text as well.
+     */
+    send(text: string, options: SendOptions = {}): Promise<void> {
         const client = this.client;
         if (client === undefined) {
             return Promise.reject(new Error(`Agent ${this.agentId} is not connected; start it first.`));
@@ -224,7 +229,7 @@ class A2AAgent implements FleetAgent {
             accepted = resolve;
             refused = reject;
         });
-        const turn = this.queue.then(() => this.runTurn(client, { text, from }, signal, accepted, refused));
+        const turn = this.queue.then(() => this.runTurn(client, text, options.from, signal, accepted, refused));
         this.queue = turn.catch(() => undefined);
         return delivery;
     }
@@ -403,7 +408,8 @@ class A2AAgent implements FleetAgent {
     /** One message and everything the agent does about it, until the turn is over. */
     private async runTurn(
         client: Client,
-        { text, from }: { readonly text: string; readonly from: string | undefined },
+        text: string,
+        from: string | undefined,
         signal: AbortSignal,
         accepted: () => void,
         refused: (error: unknown) => void
@@ -412,15 +418,13 @@ class A2AAgent implements FleetAgent {
             refused(new Error(`Agent ${this.agentId} was stopped before the message was sent.`));
             return;
         }
-        // The fleet tools are for the agents flotti starts: one with a loop of its own is only told who wrote.
-        const message = this.userMessage(from === undefined ? text : fromAgentPrompt(from, text, false));
+        const message = this.userMessage(text, from);
         this.answering = message.taskId === '' ? undefined : this.task;
         let delivered = false;
         const deliver = () => {
             if (!delivered) {
                 delivered = true;
-                const sender = from === undefined ? {} : { from };
-                this.events.emit({ type: 'message', role: 'user', messageId: message.messageId, text, append: false, ...sender });
+                this.events.emit({ type: 'message', role: 'user', messageId: message.messageId, text, append: false, ...(from === undefined ? {} : { from }) });
                 accepted();
             }
         };
@@ -799,7 +803,7 @@ class A2AAgent implements FleetAgent {
             }
             this.shown.add(id);
         } else {
-            this.showMessage(message);
+            this.showMessage(message, params.to);
         }
         if (params.busy !== undefined) {
             this.busyOnItsOwn = params.busy;
@@ -813,7 +817,8 @@ class A2AAgent implements FleetAgent {
     private log(text: string): void {
         this.events.emit({ type: 'log', source: 'flotti', text });
     }
-    private showMessage(message: Message): void {
+    /** A message of the agent; `to` — the agent of the fleet it is for, when it is not for a person. */
+    private showMessage(message: Message, to?: string): void {
         const id = message.messageId || randomUUID();
         if (this.shown.has(id)) {
             return;
@@ -821,7 +826,7 @@ class A2AAgent implements FleetAgent {
         this.shown.add(id);
         const text = partsText(message.parts);
         if (text !== '') {
-            this.events.emit({ type: 'message', role: 'agent', messageId: id, text, append: false });
+            this.events.emit({ type: 'message', role: 'agent', messageId: id, text, append: false, ...(to === undefined ? {} : { to }) });
         }
     }
     private showArtifact(taskId: string, artifactId: string, parts: readonly Part[], append: boolean): void {
@@ -830,18 +835,22 @@ class A2AAgent implements FleetAgent {
             this.events.emit({ type: 'message', role: 'agent', messageId: `${taskId}/${artifactId}`, text, append });
         }
     }
-    /** A message from a person; it answers the task when the task is waiting for one. */
-    private userMessage(text: string): Message {
+    /**
+     * A message from a person, or from another agent of the fleet when `from`
+     * names it; it answers the task when the task is waiting for one.
+     */
+    private userMessage(text: string, from?: string): Message {
         const task = this.task;
         const waiting = task !== undefined && INTERRUPTED_STATES.includes(task.state);
+        const told = from === undefined || this.card?.inbox === true ? text : `[from ${from}] ${text}`;
         return {
             messageId: randomUUID(),
             contextId: this.contextId ?? '',
             taskId: waiting ? task.id : '',
             role: Role.ROLE_USER,
-            parts: [textPart(text)],
-            metadata: undefined,
-            extensions: [],
+            parts: [textPart(told)],
+            metadata: from === undefined ? undefined : { [INBOX_EXTENSION]: { from } },
+            extensions: from === undefined ? [] : [INBOX_EXTENSION],
             referenceTaskIds: []
         };
     }
@@ -993,15 +1002,16 @@ function extensionRequest(uri: string, text: string, params: Record<string, unkn
     };
 }
 /** What an inbox message says of itself under the extension URI; anything else there is ignored. */
-function inboxParams(message: Message): { readonly kind: 'message' | 'progress'; readonly busy?: boolean } {
+function inboxParams(message: Message): { readonly kind: 'message' | 'progress'; readonly busy?: boolean; readonly to?: string } {
     const params: unknown = message.metadata?.[INBOX_EXTENSION];
     if (typeof params !== 'object' || params === null) {
         return { kind: 'message' };
     }
-    const { kind, busy } = params as Record<string, unknown>;
+    const { kind, busy, to } = params as Record<string, unknown>;
     return {
         kind: kind === 'progress' ? 'progress' : 'message',
-        ...(typeof busy === 'boolean' ? { busy } : {})
+        ...(typeof busy === 'boolean' ? { busy } : {}),
+        ...(typeof to === 'string' && to !== '' ? { to } : {})
     };
 }
 function sendRequest(message: Message) {

@@ -220,11 +220,20 @@ class Supervisor {
     /**
      * Sends a message to one agent; says whether it was taken, waits in line, or failed.
      *
-     * @param options `from` — the agent of the fleet that sends it, when not a person:
-     *     the fleet tools send so, and the `message` event of the receiver carries it.
+     * A message from another agent of the fleet names it in `from`: the
+     * receiver is told who it is from, and its tab shows the message as sent by
+     * that agent. This is how one agent writes to another, whatever carries the
+     * words to flotti — the A2A inbox (`to` of a `message` event), or a tool of
+     * flotti the agent calls.
+     *
+     * @throws UnknownAgentError when either agent is not in the fleet.
      */
     send(agentId: string, text: string, options: SendOptions = {}): Promise<Delivery> {
-        return this.deliver(this.member(agentId), text, options);
+        const member = this.member(agentId);
+        if (options.from !== undefined) {
+            this.member(options.from);
+        }
+        return this.deliver(member, text, options);
     }
     /**
      * Sends one message to many agents, each on its own: an agent that is down
@@ -294,14 +303,37 @@ class Supervisor {
             });
             member.offset += 1;
         }
-        member.unsubscribe = member.running.subscribe((event) => this.keep(member, event));
+        member.unsubscribe = member.running.subscribe((event) => {
+            this.keep(member, event);
+            if (event.type === 'message' && event.role === 'agent' && event.to !== undefined) {
+                this.forward(member, event.to, event.text);
+            }
+        });
         return member;
     }
     private announce(): void {
         this.notify({ type: 'fleet', agents: this.agents() });
     }
     private keep(member: Member, received: AgentEvent): void {
-        const event = member.offset === 0 ? received : { ...received, seq: received.seq + member.offset };
+        this.store(member, member.offset === 0 ? received : { ...received, seq: received.seq + member.offset });
+    }
+    /**
+     * Puts a line of flotti's own into the tab of an agent, between its events:
+     * it takes the next number, and the agent's events after it move one up.
+     */
+    private say(member: Member, text: string): void {
+        const agentId = member.agent.id;
+        member.offset += 1;
+        this.store(member, {
+            type: 'log',
+            source: 'flotti',
+            text,
+            agentId,
+            seq: (this.lastSeq.get(agentId) ?? 0) + 1,
+            time: new Date().toISOString()
+        });
+    }
+    private store(member: Member, event: AgentEvent): void {
         this.lastSeq.set(event.agentId, event.seq);
         member.history.push(event);
         if (member.history.length > this.historyLimit) {
@@ -320,16 +352,47 @@ class Supervisor {
         }
     }
     /**
+     * Sends on what an agent said to another one. The sender does not wait for
+     * the receiver: a message that cannot be delivered is a line in the tab of
+     * the sender, saying why.
+     */
+    private forward(sender: Member, to: string, text: string): void {
+        const from = sender.agent.id;
+        const receiver = this.members.get(to);
+        const failed = (why: string): void => {
+            // Still in the fleet: it may have been removed while the message went.
+            if (this.members.get(from) === sender) {
+                this.say(sender, `could not deliver the message to "${to}": ${why}`);
+            }
+        };
+        if (receiver === undefined) {
+            failed('there is no such agent in the fleet');
+        } else if (receiver === sender) {
+            failed('an agent does not send messages to itself');
+        } else {
+            void this.hand(receiver, text, { from }).then((delivery) => {
+                if (delivery.result === 'failed') {
+                    failed(delivery.error ?? 'the agent did not take it');
+                }
+            });
+        }
+    }
+    /** Hands the message over; resolves once the agent took it or it failed, however long that takes. */
+    private hand(member: Member, text: string, options: SendOptions): Promise<Delivery> {
+        const agentId = member.agent.id;
+        return member.running.send(text, options).then(
+            (): Delivery => ({ agentId, result: 'taken' }),
+            (error: unknown): Delivery => ({ agentId, result: 'failed', error: describeError(error) })
+        );
+    }
+    /**
      * Hands the message over and answers within `queuedAfterMs`: an agent busy
      * with another message takes it only later, and the answer does not wait
      * for that — a `delivery` notice tells how it ended.
      */
     private deliver(member: Member, text: string, options: SendOptions = {}): Promise<Delivery> {
         const agentId = member.agent.id;
-        const sent = member.running.send(text, options).then(
-            (): Delivery => ({ agentId, result: 'taken' }),
-            (error: unknown): Delivery => ({ agentId, result: 'failed', error: describeError(error) })
-        );
+        const sent = this.hand(member, text, options);
         return new Promise((resolve) => {
             let answered = false;
             const timer = setTimeout(() => {

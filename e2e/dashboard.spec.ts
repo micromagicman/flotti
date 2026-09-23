@@ -38,19 +38,20 @@ function localAgent(fleet: string, id: string, adapter?: string): void {
 /**
  * What the remote agent says of its own when asked to `write later`: a line of
  * progress and then a message, through the inbox — after the turn is over.
+ * Asked to `write to claude`, it sends a message to that agent the same way.
  */
 async function remoteAgent(fleet: string, id: string): Promise<void> {
-    let inbox: ((text: string, kind: string) => void) | undefined;
+    let inbox: ((text: string, kind: string, to?: string) => void) | undefined;
     remote = await new FakeAgent({
         streaming: true,
         extensions: [INBOX_EXTENSION],
         script: async (context, bus) => {
             bus.publish(task(context, TaskState.TASK_STATE_WORKING));
-            if (context.userMessage.metadata?.[INBOX_EXTENSION] !== undefined) {
+            if ((context.userMessage.metadata?.[INBOX_EXTENSION] as { action?: string } | undefined)?.action === 'subscribe') {
                 let count = 0;
-                inbox = (text, kind) => bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_WORKING, {
+                inbox = (text, kind, to) => bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_WORKING, {
                     ...agentMessage(text, context, `own-${++count}`),
-                    metadata: { [INBOX_EXTENSION]: { kind } }
+                    metadata: { [INBOX_EXTENSION]: { kind, ...(to === undefined ? {} : { to }) } }
                 }));
                 await new Promise(() => undefined);
             }
@@ -61,6 +62,9 @@ async function remoteAgent(fleet: string, id: string): Promise<void> {
                     inbox?.('Checking the pipeline', 'progress');
                     inbox?.('The merge request is ready', 'message');
                 }, 100);
+            }
+            if (said(context) === 'write to claude') {
+                setTimeout(() => inbox?.('Please rerun the e2e job', 'message', 'claude'), 100);
             }
         }
     }).listen();
@@ -149,6 +153,18 @@ test('what an agent says of its own shows in its tab, local and remote alike', a
     await expect(feed(page, 'eva')).toContainText('echo: write later');
     await expect(feed(page, 'eva').locator('.progress')).toHaveText('Checking the pipeline');
     await expect(feed(page, 'eva').locator('.message-agent').last()).toContainText('The merge request is ready');
+});
+test('an agent writes to another: both tabs show who wrote to whom, apart from what a person typed', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'eva', 'write to claude');
+    const sent = feed(page, 'eva').locator('.message-sent');
+    await expect(sent.locator('.envelope-bar')).toContainText('eva → claude');
+    await expect(sent).toContainText('Please rerun the e2e job');
+    await tab(page, 'claude').click();
+    const received = feed(page, 'claude').locator('.message-peer');
+    await expect(received.locator('.envelope-bar')).toContainText('eva → claude');
+    await expect(received).toContainText('Please rerun the e2e job');
+    await expect(feed(page, 'claude')).toContainText('you said: [from eva] Please rerun the e2e job');
 });
 test('a broadcast reaches every agent picked, and each answers in its own tab', async ({ page }) => {
     await page.goto(url);

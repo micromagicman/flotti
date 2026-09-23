@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Dispatch } from 'react';
 import type { AgentSummary } from '../../../src/dashboard-protocol.js';
+import type { AgentColors } from '../agent-colors.js';
 import { api } from '../api.js';
 import type { AgentFeed } from '../feed.js';
 import type { FleetAction } from '../fleet-state.js';
@@ -10,6 +11,9 @@ import { StatusBadge } from './StatusBadge.js';
 type AgentPanelProps = {
     readonly agent: AgentSummary;
     readonly feed: AgentFeed;
+    /** The whole fleet, and the colour of each agent: for the messages agents send one another. */
+    readonly agents: readonly AgentSummary[];
+    readonly colors: AgentColors;
     readonly dispatch: Dispatch<FleetAction>;
 };
 /** Restart and cancel answer at once; what happens next shows in the status. */
@@ -58,7 +62,7 @@ function AgentHeader({ agent, feed }: { readonly agent: AgentSummary; readonly f
         </header>
     );
 }
-function AgentPanel({ agent, feed, dispatch }: AgentPanelProps) {
+function AgentPanel({ agent, feed, agents, colors, dispatch }: AgentPanelProps) {
     const answer = (requestId: string, optionId?: string): void => {
         dispatch({ type: 'permission-answered', agentId: agent.id, requestId });
         void api.answerPermission(agent.id, requestId, optionId).catch(() => undefined);
@@ -66,7 +70,7 @@ function AgentPanel({ agent, feed, dispatch }: AgentPanelProps) {
     return (
         <section className="agent-panel" aria-label={agent.name}>
             <AgentHeader agent={agent} feed={feed} />
-            <Feed items={feed.items} agentName={agent.name} onAnswer={answer} />
+            <Feed items={feed.items} agentId={agent.id} agentName={agent.name} agents={agents} colors={colors} onAnswer={answer} />
             <Composer
                 label={`Message to ${agent.name}`}
                 placeholder={`Message ${agent.name}…`}

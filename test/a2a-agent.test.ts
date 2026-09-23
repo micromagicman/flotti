@@ -446,7 +446,8 @@ async function inboxAgent(options: Partial<FakeAgentOptions> = {}) {
         extensions: [INBOX_EXTENSION],
         ...options,
         script: async (context, bus) => {
-            if (context.userMessage.metadata?.[INBOX_EXTENSION] !== undefined) {
+            const params = context.userMessage.metadata?.[INBOX_EXTENSION] as { action?: string } | undefined;
+            if (params?.action === 'subscribe') {
                 subscriptions.push(context);
                 inbox = { bus, context };
                 bus.publish(task(context, TaskState.TASK_STATE_WORKING));
@@ -497,6 +498,46 @@ describe('A2AAgent: what the agent says of its own (the inbox extension)', () =>
         await reaches(client, 'idle');
         deepStrictEqual(events.flatMap(event => event.type === 'progress' ? [event.text] : []), ['Running the tests', 'Tests are green']);
         deepStrictEqual(messages(events), []);
+    });
+});
+describe('A2AAgent: messages between agents of the fleet', () => {
+    it('says which agent a message of its own is for', async () => {
+        const { agent, post, isOpen } = await inboxAgent();
+        const { client, events } = connect(agent);
+        await client.start();
+        await eventually(isOpen);
+        post('Please rerun the e2e job', 'to-1', { [INBOX_EXTENSION]: { to: 'builder' } });
+        post('Done here', 'to-2', { [INBOX_EXTENSION]: { to: '' } });
+        await eventually(() => messages(events).length === 2);
+        deepStrictEqual(events.flatMap(event => event.type === 'message' ? [[event.role, event.text, event.to]] : []), [
+            ['agent', 'Please rerun the e2e job', 'builder'],
+            ['agent', 'Done here', undefined]
+        ]);
+    });
+    it('tells the agent which agent a message is from, in the metadata', async () => {
+        const { agent, isOpen } = await inboxAgent();
+        const { client, events } = connect(agent);
+        await client.start();
+        await eventually(isOpen);
+        await client.send('rerun the tests', { from: 'reviewer' });
+        await eventually(() => turnEnds(events).length === 1);
+        const sent = agent.received.at(-1)?.params['message'] as { parts?: unknown; metadata?: Record<string, unknown> };
+        deepStrictEqual(sent.metadata?.[INBOX_EXTENSION], { from: 'reviewer' });
+        deepStrictEqual(events.flatMap(event => event.type === 'message' ? [[event.role, event.text, event.from]] : []), [
+            ['user', 'rerun the tests', 'reviewer'],
+            ['agent', 'echo: rerun the tests', undefined]
+        ]);
+    });
+    it('names the sender in the text as well to an agent without the inbox', async () => {
+        const agent = await fake({ script: echo });
+        const { client, events } = connect(agent);
+        await client.start();
+        await client.send('rerun the tests', { from: 'reviewer' });
+        await eventually(() => turnEnds(events).length === 1);
+        deepStrictEqual(events.flatMap(event => event.type === 'message' ? [[event.role, event.text, event.from]] : []), [
+            ['user', 'rerun the tests', 'reviewer'],
+            ['agent', 'echo: [from reviewer] rerun the tests', undefined]
+        ]);
     });
 });
 describe('A2AAgent: keeping the inbox open', () => {

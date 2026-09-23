@@ -29,6 +29,12 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   one with the published token and keeps it up, reopening it after a drop. The dashboard shows the
   state of the connection and why it failed. In a manifest, `"ssh": "user@host"` takes the place of
   `url`; the contract for agents is in [docs/a2a-ssh.md](docs/a2a-ssh.md) (#22).
+- **Agents write to one another.** A remote agent names another agent of the fleet in `to` of an inbox
+  message, and flotti delivers it to that agent as a message from the sender: an A2A agent gets `from`
+  in the metadata, an ACP agent `[from <id>]` in front of the text. In the receiver's tab the message
+  stands on the person's side as an envelope with a bar "SENDER → RECEIVER" in the sender's colour;
+  the sender's tab shows the same envelope, and a line when it could not be delivered. Each agent gets
+  a colour of its own, picked at random and kept (#23).
 
 ## [0.1.0] — MVP
 

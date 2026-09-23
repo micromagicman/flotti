@@ -355,8 +355,9 @@ and `session/load`. A bare Claude Code or Codex sees them as `mcp__flotti__…`:
 | `forward`      | forwards the last message another agent sent, as it was, to another agent; `comment` goes before it |
 
 A message sent so reaches the other agent like one from a person, but from that agent: its `message`
-event has `from` — the sender's id — and the agent is told who wrote and how to answer. What it says in
-its turn goes to its own tab, not back to the sender: an answer to an agent is a `send_message` too.
+event has `from` — the sender's id — and the agent gets it as `[from <id>] <text>`, the way every
+message from an agent reaches it (#23). What it says in its turn goes to its own tab, not back to the
+sender: an answer to an agent is a `send_message` or a `reply` too.
 Messages queue as a person's do; a tool call does not wait for the answer.
 
 The server speaks MCP over HTTP (the streamable transport, with plain JSON answers) on a free port of

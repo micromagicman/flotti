@@ -18,7 +18,7 @@ import type {
 import { AcpMessages, acpPermissionEvent, acpUpdateEvents } from './acp-events.js';
 import { prepareHandover } from './acp-adapters.js';
 import type { Handover } from './acp-adapters.js';
-import { AgentEvents, fromAgentPrompt } from './agent-events.js';
+import { AgentEvents } from './agent-events.js';
 import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
 import { MCP_PATH, MCP_SERVER_NAME } from './fleet-mcp.js';
 import type { FleetToolsAccess } from './fleet-mcp.js';
@@ -82,7 +82,7 @@ const INVALID_PARAMS = -32602;
 class PermanentFailure extends Error {}
 type Turn = {
     readonly text: string;
-    /** Id of the agent of the fleet that sent it; absent for a person. */
+    /** The agent of the fleet that sent the message; absent for a person. */
     readonly from?: string;
     /** The message went to the agent: {@link LocalAgentProcess.send} resolves. */
     readonly accepted: () => void;
@@ -233,13 +233,16 @@ class LocalAgentProcess implements FleetAgent {
      * how it ended comes as a `turn-end` event with the ACP stop reason —
      * `end_turn`, `cancelled`, … Rejects when the message never went: the
      * agent is not running, or stopped before its turn.
+     *
+     * A message from another agent reaches the agent as `[from <id>] <text>`:
+     * ACP has no place for a sender, and the id is what the agent answers to.
      */
-    send(text: string, { from }: SendOptions = {}): Promise<void> {
+    send(text: string, options: SendOptions = {}): Promise<void> {
         if (this.lifecycle !== 'running' && this.lifecycle !== 'starting' && this.lifecycle !== 'backoff') {
             return Promise.reject(new Error(`agent "${this.agentId}" is ${this.lifecycle}; start it first`));
         }
         return new Promise((resolve, reject) => {
-            this.queue.push({ text, ...(from === undefined ? {} : { from }), accepted: resolve, refused: reject });
+            this.queue.push({ text, ...(options.from === undefined ? {} : { from: options.from }), accepted: resolve, refused: reject });
             this.pump();
         });
     }
@@ -572,7 +575,7 @@ class LocalAgentProcess implements FleetAgent {
         this.showStatus();
         run.connection.agent.request(acp.methods.agent.session.prompt, {
             sessionId: this.session,
-            prompt: [{ type: 'text', text: turn.from === undefined ? turn.text : fromAgentPrompt(turn.from, turn.text) }]
+            prompt: [{ type: 'text', text: turn.from === undefined ? turn.text : `[from ${turn.from}] ${turn.text}` }]
         }).then(
             (response) => this.endTurn(turn, response.stopReason),
             (error: unknown) => {

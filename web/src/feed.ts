@@ -5,7 +5,17 @@
  */
 import type { AgentEvent, AgentStatus, PermissionOption, ToolCallStatus } from '../../src/agent-events.js';
 type FeedItem =
-    | { readonly kind: 'message'; readonly key: string; readonly role: 'user' | 'agent'; readonly messageId: string; readonly text: string }
+    | {
+        readonly kind: 'message';
+        readonly key: string;
+        readonly role: 'user' | 'agent';
+        readonly messageId: string;
+        readonly text: string;
+        /** Id of the agent that sent it, when not a person: shown on the person's side, marked with the sender. */
+        readonly from?: string;
+        /** Id of the agent this message of the agent went to, when it went to another agent and not to a person. */
+        readonly to?: string;
+    }
     | { readonly kind: 'thought'; readonly key: string; readonly text: string }
     | { readonly kind: 'progress'; readonly key: string; readonly text: string }
     | {
@@ -73,7 +83,15 @@ function withMessage(items: readonly FeedItem[], event: AgentEvent & { type: 'me
     const index = lastIndex(items, (item) => item.kind === 'message' && item.messageId === event.messageId);
     const found = index > turnStart ? items[index] : undefined;
     if (found?.kind !== 'message') {
-        return [...items, { kind: 'message', key: `m${event.seq}`, role: event.role, messageId: event.messageId, text: event.text }];
+        return [...items, {
+            kind: 'message',
+            key: `m${event.seq}`,
+            role: event.role,
+            messageId: event.messageId,
+            text: event.text,
+            ...(event.from === undefined ? {} : { from: event.from }),
+            ...(event.to === undefined ? {} : { to: event.to })
+        }];
     }
     return replaced(items, index, { ...found, text: event.append ? found.text + event.text : event.text });
 }
