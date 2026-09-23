@@ -31,5 +31,8 @@
   "devDependencies": {
     "@types/node": "^26.5.1",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@a2a-js/sdk": "^1.2.0"
   }
 }
