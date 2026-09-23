@@ -42,6 +42,19 @@ describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
         const seqs = harness.events.map((event) => event.seq);
         deepStrictEqual(seqs, seqs.map((_, index) => index + 1));
     });
+    it('tells the agent which agent a message is from, in front of the text', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        const from = harness.lastSeq;
+        await harness.agent.send('rerun the tests', { from: 'reviewer' });
+        await harness.next((event) => event.seq > from && event.type === 'turn-end');
+        deepStrictEqual(harness.events.filter((event) => event.seq > from).flatMap((event) =>
+            (event.type === 'message' ? [[event.role, event.text, event.from]] : [])), [
+            ['user', 'rerun the tests', 'reviewer'],
+            ['agent', 'you said: [from reviewer] rerun the tests', undefined]
+        ]);
+        await harness.agent.stop();
+    });
     it('turns the agent stderr into log events and keeps it with the ACP trace in logs/', async () => {
         const harness = new Harness();
         await harness.agent.start();

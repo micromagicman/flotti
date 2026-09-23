@@ -5,6 +5,7 @@ import { SettingsPanel } from './components/SettingsPanel.js';
 import { Sidebar } from './components/Sidebar.js';
 import { useFleet } from './connection.js';
 import type { Link } from './fleet-state.js';
+import { useAgentColors } from './use-agent-colors.js';
 import { useAttention } from './use-attention.js';
 import type { Permission } from './use-attention.js';
 /** The tab is kept in the address, so a reload opens the same one. */
@@ -41,6 +42,7 @@ function App() {
     const [state, dispatch] = useFleet();
     const [tab, setTab] = useTab();
     const attention = useAttention(state, setTab);
+    const colors = useAgentColors(state.agents.map((summary) => summary.id));
     const [seenSeq, setSeenSeq] = useState<Record<string, number>>({});
     const agent = state.agents.find((candidate) => candidate.id === tab)
         ?? (tab === BROADCAST || tab === SETTINGS ? undefined : state.agents[0]);
@@ -75,7 +77,7 @@ function App() {
                     ? <SettingsPanel agents={live} />
                     : agent === undefined || feed === undefined
                         ? <BroadcastPanel agents={live} deliveries={state.deliveries} empty={state.agents.length === 0} onSettings={() => setTab(SETTINGS)} />
-                        : <AgentPanel key={agent.id} agent={agent} feed={feed} dispatch={dispatch} />}
+                        : <AgentPanel key={agent.id} agent={agent} feed={feed} agents={state.agents} colors={colors} dispatch={dispatch} />}
             </main>
         </div>
     );
