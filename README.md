@@ -2,26 +2,82 @@
 
 Simple ai agents orchestrator for humans.
 
-At this point flotti **reads and checks** its fleet — the agents it is going to work with — and
-talks to them: it **runs a local agent** over ACP (starts it, talks to it, restarts it when it falls
-over) and **talks to a remote agent** over A2A (see [Talking to a remote agent](#talking-to-a-remote-agent)).
-Both are driven by code for now; the dashboard is the next step of the `v0.1.0` milestone, and reading
-the fleet starts nothing by itself.
+flotti runs a fleet of AI agents and gives you one page to work with them: a tab per agent with its
+status and live output, a field to write to it, a button to restart it, and a broadcast to write to
+all of them at once. It **runs local agents** over ACP (starts them, talks to them, restarts them when
+they fall over) and **talks to remote agents** over A2A (see
+[Talking to a remote agent](#talking-to-a-remote-agent)).
 
 ## Requirements
 
 Node.js 20.11 or newer.
 
-## Build and run
+## Run
 
 ```bash
-npm ci
-npm run build
-node build/index.js [--fleet <dir>]
+npx flotti run      # starts the fleet and the dashboard: http://127.0.0.1:4870/
+npx flotti stop     # stops them, from any terminal
 ```
 
-`node build/index.js` prints the agents it found and exits with `0`; on any problem with the fleet it
-prints one sentence explaining it and exits with a non-zero code.
+That is the whole command line; everything else is done in the dashboard. Both commands take
+`--fleet <dir>` (see [Where the fleet comes from](#where-the-fleet-comes-from)); `run` also takes
+`--port <port>` or `FLOTTI_PORT`.
+
+- **`flotti run`** reads the fleet, starts every agent, serves the dashboard and stays in the
+  foreground until it is stopped: Ctrl+C, a `SIGTERM`, or `flotti stop`. It stops its agents before
+  it exits. An agent that fails to start does not stop the others: its tab says why, and the restart
+  button tries again. One fleet is run by one flotti: a second `flotti run` of the same fleet refuses.
+- **`flotti stop`** finds the flotti that runs the fleet by `.flotti-run.json` in the fleet directory,
+  asks it to stop, and waits until it has — up to 30 s. It asks over the dashboard rather than with a
+  signal, because on Windows a signal kills at once and would leave the agents running. With nothing
+  running it says so and exits with `0`.
+
+On any problem with the fleet flotti prints one sentence explaining it and exits with a non-zero
+code, see [When something is wrong with it](#when-something-is-wrong-with-it).
+
+From the source: `npm ci`, `npm run build`, then `node build/index.js run`.
+
+## The dashboard
+
+It listens on `127.0.0.1` only and has no login: it is for the person at this machine.
+
+- **A tab per agent**, local ones first: its name, its status — `starting`, `idle`, `working`, `waiting
+  for you`, `error`, `stopped` — and a dot when it has said something since you last looked.
+  `waiting for you` — a permission to grant, an answer the agent asked for — stands out the most.
+- **Inside the tab**: the agent's output as it comes — messages, collapsed reasoning, tool calls with
+  their progress, permission requests with the options the agent offered, diagnostics, and whatever
+  else the protocol said, raw and collapsed. Below it, a field to write to the agent: Enter sends,
+  Shift+Enter makes a new line. A message to a busy agent waits in line, and the field says so.
+  **Restart** restarts the agent — a local one keeps its session when it can, a remote one is asked to
+  restart itself or starts a new conversation (see [Lifecycle](#lifecycle) and
+  [Talking to a remote agent](#talking-to-a-remote-agent)); **Cancel** drops the message in work.
+- **All agents** sends one message to every agent you leave ticked. Each gets it on its own, so an
+  agent that is down or busy holds nobody up; the page shows, agent by agent, whether the message was
+  delivered, waits in line or failed, and the answers come in each agent's tab.
+
+The server is the one source of truth and the page only follows it: every event of an agent has a
+number, and a page that connects — or reconnects after losing the connection — says which it has seen
+and gets only the rest. So a reload or a second window shows the same history; flotti keeps the last
+5000 events of each agent while it runs.
+
+### What the page talks to
+
+The page reads over a WebSocket and acts over plain HTTP; the types are in `src/dashboard-protocol.ts`.
+
+| Request                                       | What it does                                           |
+|-----------------------------------------------|--------------------------------------------------------|
+| `GET /api/agents`                             | the agents and their statuses                          |
+| `POST /api/agents/<id>/messages` `{text}`     | a message to one agent: `taken`, `queued` or `failed`  |
+| `POST /api/broadcast` `{text, agents?}`       | one message to these agents, or to all; a result each  |
+| `POST /api/agents/<id>/restart`               | restarts the agent; answers at once, the status follows |
+| `POST /api/agents/<id>/cancel`                | drops the message in work                              |
+| `POST /api/agents/<id>/permissions/<request>` `{optionId?}` | answers a permission request; no option refuses it |
+| `/ws`                                         | `fleet` first; the page answers `subscribe` with the last number it has seen of each agent, and gets the events after them, then live ones |
+
+With no login, the server guards against other web pages rather than against people: it answers only
+to the host names of this machine (a page elsewhere cannot rebind a name of its own to `127.0.0.1`),
+takes actions only as JSON (a form of another site cannot send it), and refuses a WebSocket opened
+from another site.
 
 ## The fleet
 
@@ -311,10 +367,19 @@ non-zero exit code — never a stack trace:
 | The manifest names another id                          | `…/agent.json: id is "claude", but the agent directory is "agent"; …`                 |
 | A secret where a variable name is expected             | `…/agent.json: auth.tokenEnv must name an environment variable …`                     |
 | A local and a remote agent share an id                 | `…/remote/eva: the id "eva" is already taken by the local agent …`                    |
+| The dashboard port is taken                            | `Port 4870 is taken, so the dashboard cannot start.` plus how to pick another         |
+| The fleet is already run by another flotti             | `flotti already runs this fleet (process …, dashboard …).`                            |
 
 ## Development
 
 ```bash
-npm test        # compiles with tsc and runs the checks in build-test/
-npm run typecheck
+npm test          # compiles with tsc and runs the checks in build-test/
+npm run typecheck # the server, the tests and the page
+npm run lint
+npm run dev:web   # the page with hot reload, talking to a `flotti run` on the default port
+npm run test:e2e  # builds, starts flotti with pretend agents and drives the dashboard in Chromium
 ```
+
+The page is React, built by Vite from `web/` into `build/web`, which the server serves. `test:e2e`
+uses Playwright's Chromium — `npx playwright install chromium` once; `FLOTTI_E2E_CHROMIUM=<path>`
+points it at another Chromium instead.
