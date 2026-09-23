@@ -6,6 +6,9 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Added
 
+- **The history of a tab survives a restart.** Every event of an agent — messages, tool calls,
+  permission requests, status lines — is written to `.flotti-history.jsonl` in its directory and read
+  back when flotti starts; the last 5000 events of each agent are kept (#28).
 - **Remote agents over SSH, in one step.** Settings → **Connect over SSH** takes `user@host` and
   nothing else: flotti asks the host which agents it publishes, adds them, opens an SSH tunnel to each
   one with the published token and keeps it up, reopening it after a drop. The dashboard shows the

@@ -151,7 +151,7 @@ async function runFleet(options: RunOptions = {}): Promise<Running> {
     const port = options.dashboard?.port ?? dashboardPort(argv, options.env ?? process.env);
     const token = randomBytes(24).toString('hex');
     const file = new RunFile(claimFleet(fleet), token);
-    const supervisor = new Supervisor(fleet, options.supervisor);
+    const supervisor = new Supervisor(fleet, { persistHistory: true, ...options.supervisor });
     const settings = new FleetSettings(fleet, supervisor, {
         env: options.env ?? process.env,
         onSwitch: (next) => file.move(next)
