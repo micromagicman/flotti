@@ -1,12 +1,12 @@
 /**
- * What supavisor does with a local agent that stopped:
+ * What flotti does with a local agent that stopped:
  * - `always`     — restart it whatever the exit code was;
  * - `on-failure` — restart it only after a non-zero exit code or a lost heartbeat;
  * - `never`      — leave it stopped.
  */
 type RestartPolicy = 'always' | 'on-failure' | 'never';
 /**
- * Which ACP adapter the `command` of a local agent starts. It tells supavisor how
+ * Which ACP adapter the `command` of a local agent starts. It tells flotti how
  * to hand the model, the system prompt and the skills over to it; an agent without
  * one is driven by plain ACP only.
  */
@@ -14,7 +14,7 @@ type LocalAgentAdapter = 'claude-code' | 'codex';
 /** How a remote agent is reached. Only A2A for now. */
 type RemoteProtocol = 'a2a';
 /**
- * How supavisor proves itself to a remote agent. The secret itself never sits in
+ * How flotti proves itself to a remote agent. The secret itself never sits in
  * the manifest: the manifest names the environment variable that holds it, and
  * the variable is read when the connection is made.
  */
@@ -36,7 +36,7 @@ type AgentBase = {
     readonly manifestPath: string;
 };
 /**
- * An agent supavisor starts itself, from `<fleet>/local/<id>/`. The optional
+ * An agent flotti starts itself, from `<fleet>/local/<id>/`. The optional
  * fields of the manifest are already filled with the documented defaults.
  */
 type LocalAgent = AgentBase & {
@@ -59,9 +59,9 @@ type LocalAgent = AgentBase & {
     readonly heartbeatTimeoutSec: number;
     /** Absolute path of `system-prompt.md`, when the agent has one. */
     readonly systemPromptFile?: string;
-    /** Absolute path of the agent's own skills; supavisor creates it and never reads it. */
+    /** Absolute path of the agent's own skills; flotti creates it and never reads it. */
     readonly skillsDirectory: string;
-    /** Absolute path of the agent's memory bank; supavisor creates it and never reads it. */
+    /** Absolute path of the agent's memory bank; flotti creates it and never reads it. */
     readonly memoryDirectory: string;
 };
 /** An agent that runs elsewhere and is reached over the network, from `<fleet>/remote/<id>/`. */
@@ -74,9 +74,9 @@ type RemoteAgent = AgentBase & {
     readonly auth: RemoteAuth;
 };
 type Agent = LocalAgent | RemoteAgent;
-/** Which of the three ways gave supavisor the fleet directory. */
+/** Which of the three ways gave flotti the fleet directory. */
 type FleetSource = 'argument' | 'environment' | 'default';
-/** Fleet directory supavisor decided to read, and why that one. */
+/** Fleet directory flotti decided to read, and why that one. */
 type FleetLocation = {
     /** Absolute path, with `~` already expanded. */
     readonly path: string;

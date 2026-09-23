@@ -8,7 +8,7 @@ import { loadFleet } from '../src/fleet.js';
 import type { LoadFleetOptions } from '../src/fleet.js';
 import type { Fleet } from '../src/types.js';
 const HOME = '/home/eva';
-const workspace = mkdtempSync(join(tmpdir(), 'supavisor-fleet-'));
+const workspace = mkdtempSync(join(tmpdir(), 'flotti-fleet-'));
 after(() => rmSync(workspace, { recursive: true, force: true }));
 let made = 0;
 /** A fresh, empty fleet directory. */

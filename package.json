@@ -1,5 +1,5 @@
 {
-  "name": "supavisor",
+  "name": "flotti",
   "version": "0.1.0",
   "main": "build/index.js",
   "type": "module",
@@ -14,7 +14,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/micromagicman/supavisor.git"
+    "url": "git+https://github.com/micromagicman/flotti.git"
   },
   "keywords": [
     "supervisor",
@@ -25,9 +25,9 @@
   "author": "micromagicman",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/micromagicman/supavisor/issues"
+    "url": "https://github.com/micromagicman/flotti/issues"
   },
-  "homepage": "https://github.com/micromagicman/supavisor#readme",
+  "homepage": "https://github.com/micromagicman/flotti#readme",
   "description": "Simple ai agents orchestrator for humans",
   "devDependencies": {
     "@stylistic/eslint-plugin": "^5.10.0",

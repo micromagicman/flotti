@@ -8,7 +8,7 @@ import { LocalAgentProcess } from '../src/local-agent.js';
 import type { LocalAgentOptions } from '../src/local-agent.js';
 import type { LocalAgent } from '../src/types.js';
 const FAKE_AGENT = fileURLToPath(new URL('./fake-acp-agent.js', import.meta.url));
-const workspace = mkdtempSync(join(tmpdir(), 'supavisor-agent-'));
+const workspace = mkdtempSync(join(tmpdir(), 'flotti-agent-'));
 const started: LocalAgentProcess[] = [];
 after(async () => {
     await Promise.all(started.map((agent) => agent.stop()));

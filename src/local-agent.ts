@@ -25,19 +25,19 @@ import type { LocalAgent } from './types.js';
  * - `stopped`  — not started, or stopped by a person;
  * - `starting` — the process is up, and the ACP handshake and the session are not done yet;
  * - `running`  — the session is ready for messages;
- * - `backoff`  — it stopped when it should not have, and supavisor waits before the next try;
+ * - `backoff`  — it stopped when it should not have, and flotti waits before the next try;
  * - `stopping` — being stopped by a person;
  * - `exited`   — it stopped by itself, and the restart policy says to leave it so;
- * - `fatal`    — supavisor gave up: it keeps failing, or fails in a way a retry cannot fix.
+ * - `fatal`    — flotti gave up: it keeps failing, or fails in a way a retry cannot fix.
  */
 type LifecycleState = 'stopped' | 'starting' | 'running' | 'backoff' | 'stopping' | 'exited' | 'fatal';
-/** What supavisor needs besides the manifest. The defaults suit people; tests pass small numbers. */
+/** What flotti needs besides the manifest. The defaults suit people; tests pass small numbers. */
 type LocalAgentOptions = {
     /** Environment the agent inherits before the manifest adds to it; defaults to `process.env`. */
     readonly env?: Readonly<Record<string, string | undefined>>;
     /** A process that stops sooner than this after its start counts as a failed start. */
     readonly startSecs?: number;
-    /** Failed starts in a row before supavisor gives up and goes `fatal`. */
+    /** Failed starts in a row before flotti gives up and goes `fatal`. */
     readonly maxRetries?: number;
     /** First delay before a restart; every failed start in a row doubles it. */
     readonly backoffBaseMs?: number;
@@ -61,8 +61,8 @@ const DEFAULTS = {
     cancelTimeoutMs: 5000,
     stopTimeoutMs: 5000
 };
-/** Extension request supavisor sends to see the agent is alive; any answer, an error too, will do. */
-const HEARTBEAT_METHOD = '_supavisor/heartbeat';
+/** Extension request flotti sends to see the agent is alive; any answer, an error too, will do. */
+const HEARTBEAT_METHOD = '_flotti/heartbeat';
 /** JSON-RPC errors a retry cannot fix: the agent wants a login, or refuses what the manifest asks for. */
 const AUTH_REQUIRED = -32000;
 const INVALID_PARAMS = -32602;
@@ -84,9 +84,9 @@ type Run = {
     capabilities?: InitializeResponse;
     lastSeen: number;
     heartbeat?: NodeJS.Timeout;
-    /** Set when supavisor itself ends the process: then its exit is no surprise. */
+    /** Set when flotti itself ends the process: then its exit is no surprise. */
     stopping: boolean;
-    /** Why supavisor ended the process, when it did so because something went wrong. */
+    /** Why flotti ended the process, when it did so because something went wrong. */
     failure?: string;
     permanent: boolean;
     /** While `session/load` replays the history, its updates are not news. */
@@ -95,7 +95,7 @@ type Run = {
     stderrLog?: WriteStream;
 };
 /**
- * A local agent: supavisor starts it as a child process speaking ACP over
+ * A local agent: flotti starts it as a child process speaking ACP over
  * stdio, holds one session with it, restarts it by its policy and turns
  * everything it says into the fleet's agent events.
  */
@@ -330,7 +330,7 @@ class LocalAgentProcess implements FleetAgent {
         child.stderr?.setEncoding('utf8');
         child.stderr?.on('data', (chunk: string) => this.onStderr(run, chunk));
         for (const note of handover.notes) {
-            this.emit({ type: 'log', source: 'supavisor', text: note });
+            this.emit({ type: 'log', source: 'flotti', text: note });
         }
         return run;
     }
@@ -343,7 +343,7 @@ class LocalAgentProcess implements FleetAgent {
             Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
             Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>
         ));
-        const connection = acp.client({ name: 'supavisor' })
+        const connection = acp.client({ name: 'flotti' })
             .onRequest(acp.methods.client.session.requestPermission, (context) => this.onPermission(run, context.params))
             .onNotification(acp.methods.client.session.update, (context) => this.onUpdate(run, context.params))
             .connect(stream);
@@ -400,7 +400,7 @@ class LocalAgentProcess implements FleetAgent {
             if (previous !== undefined) {
                 this.emit({
                     type: 'log',
-                    source: 'supavisor',
+                    source: 'flotti',
                     text: 'the agent can neither resume nor load a session: a new one is started, the context is lost'
                 });
             }
@@ -424,7 +424,7 @@ class LocalAgentProcess implements FleetAgent {
         if (option === undefined) {
             this.emit({
                 type: 'log',
-                source: 'supavisor',
+                source: 'flotti',
                 text: `model "${model}" is not applied: the agent offers no model option`
             });
             return;
@@ -474,7 +474,7 @@ class LocalAgentProcess implements FleetAgent {
         this.active = undefined;
         this.cancelPermissions();
         if (reason === undefined) {
-            this.emit({ type: 'log', source: 'supavisor', text: `the message failed: ${message(error)}` });
+            this.emit({ type: 'log', source: 'flotti', text: `the message failed: ${message(error)}` });
             this.emit({ type: 'turn-end', reason: 'error' });
         } else {
             this.emit({ type: 'turn-end', reason });
@@ -552,7 +552,7 @@ class LocalAgentProcess implements FleetAgent {
         return { readable: inbound.readable, writable: outbound.writable };
     }
     /**
-     * ACP has no heartbeat, so supavisor asks, from the answer to `initialize`
+     * ACP has no heartbeat, so flotti asks, from the answer to `initialize`
      * on: an extension request every third of the timeout. Any message from the agent counts as a sign of life — the
      * "method not found" answer too. Silence longer than the timeout is a lost
      * agent: it is killed, and its policy decides the rest.

@@ -8,10 +8,10 @@ import {
 } from './fleet.js';
 import { MANIFEST_FILE, SAMPLE_LOCAL_MANIFEST } from './manifest.js';
 import type { Agent, Fleet } from './types.js';
-const HELP = `supavisor — simple ai agents orchestrator for humans
+const HELP = `flotti — simple ai agents orchestrator for humans
 
 Usage:
-  supavisor [${FLEET_PATH_ARGUMENT} <dir>]
+  flotti [${FLEET_PATH_ARGUMENT} <dir>]
 
 Options:
   ${FLEET_PATH_ARGUMENT} <dir>      Fleet directory to read.
@@ -22,7 +22,7 @@ Fleet directory, in this order:
   2. ${FLEET_PATH_VARIABLE}=<dir>
   3. ${DEFAULT_FLEET_PATH}
 
-Every agent is a directory: local/<id>/ for agents supavisor starts itself,
+Every agent is a directory: local/<id>/ for agents flotti starts itself,
 remote/<id>/ for agents it reaches over A2A. Each holds ${MANIFEST_FILE}; README.md
 explains the fields in full — JSON has no comments to explain them in place.`;
 function describe(agent: Agent): string {

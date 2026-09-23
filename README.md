@@ -1,8 +1,8 @@
-# supavisor
+# flotti
 
 Simple ai agents orchestrator for humans.
 
-At this point supavisor **reads and checks** its fleet — the agents it is going to work with — and
+At this point flotti **reads and checks** its fleet — the agents it is going to work with — and
 talks to them: it **runs a local agent** over ACP (starts it, talks to it, restarts it when it falls
 over) and **talks to a remote agent** over A2A (see [Talking to a remote agent](#talking-to-a-remote-agent)).
 Both are driven by code for now; the dashboard is the next step of the `v0.1.0` milestone, and reading
@@ -28,8 +28,8 @@ prints one sentence explaining it and exits with a non-zero code.
 Every agent is a directory, and the directory name is the agent id:
 
 ```
-~/.supavisor/agents/
-├── local/                  agents supavisor starts itself
+~/.flotti/agents/
+├── local/                  agents flotti starts itself
 │   └── claude/
 │       ├── agent.json      the manifest
 │       ├── system-prompt.md  optional
@@ -45,29 +45,29 @@ Every agent is a directory, and the directory name is the agent id:
 - Entries whose names start with `.` are skipped, so `.DS_Store` and the like do no harm. Anything else
   in `local/` or `remote/` must be an agent directory.
 - `local/` and `remote/` may be absent — that group is simply empty.
-- `skills/` and `memory/` belong to the agent: supavisor creates them when they are missing and never
+- `skills/` and `memory/` belong to the agent: flotti creates them when they are missing and never
   reads them. It hands them to the agent, as told in [Running a local agent](#running-a-local-agent).
-- `logs/` is where supavisor keeps what a running agent said; see the same section.
+- `logs/` is where flotti keeps what a running agent said; see the same section.
 
 ### Where the fleet comes from
 
 The first of these that is set wins:
 
 1. `--fleet <dir>` (also `--fleet=<dir>`);
-2. the `SUPAVISOR_FLEET` environment variable;
-3. `~/.supavisor/agents` — the default.
+2. the `FLOTTI_FLEET` environment variable;
+3. `~/.flotti/agents` — the default.
 
 Pointing at another directory is how tests and several fleets on one machine keep apart. A leading `~`
-is expanded by supavisor itself, from `HOME` (or `USERPROFILE` on Windows), because under `npx` there
+is expanded by flotti itself, from `HOME` (or `USERPROFILE` on Windows), because under `npx` there
 is no shell to do it. A relative path is resolved against the current directory.
 
 A missing default directory is an empty fleet — that is what the first run looks like. A missing
-directory named by `--fleet` or `SUPAVISOR_FLEET` is an error: it is most likely a typo.
+directory named by `--fleet` or `FLOTTI_FLEET` is an error: it is most likely a typo.
 
 ## The manifest: `agent.json`
 
 JSON, and JSON has no comments — so the fields are explained here rather than in the file. Fields
-supavisor does not know are ignored, so a manifest written for a later version still works with this
+flotti does not know are ignored, so a manifest written for a later version still works with this
 one.
 
 ### A local agent
@@ -88,7 +88,7 @@ The smallest one:
 | `name`                | no       | non-empty string                | the id                         | Name shown to people.                                                            |
 | `description`         | no       | non-empty string                | —                              | One line about the agent.                                                        |
 | `id`                  | no       | non-empty string                | —                              | If given, must equal the directory name; the directory is what counts.            |
-| `adapter`             | no       | `claude-code`, `codex`          | —                              | Which ACP adapter `command` starts, so supavisor knows how to hand over the model, the system prompt and the skills. Without it the agent gets plain ACP only. |
+| `adapter`             | no       | `claude-code`, `codex`          | —                              | Which ACP adapter `command` starts, so flotti knows how to hand over the model, the system prompt and the skills. Without it the agent gets plain ACP only. |
 | `model`               | no       | non-empty string                | the adapter's own default      | Model the agent is asked to use.                                                 |
 | `workdir`             | no       | non-empty string                | the agent directory            | Directory the agent is started in; a relative one is taken from the agent directory, `~` is expanded. |
 | `env`                 | no       | object of strings               | `{}`                           | Variables added to the agent environment.                                        |
@@ -98,7 +98,7 @@ The smallest one:
 The system prompt is not a field: it is the file `system-prompt.md` next to the manifest. A prompt is
 prose, often long, and a JSON string is a poor place to write prose in.
 
-What supavisor does with `adapter`, `model`, `restart` and `heartbeatTimeoutSec` is in
+What flotti does with `adapter`, `model`, `restart` and `heartbeatTimeoutSec` is in
 [Running a local agent](#running-a-local-agent).
 
 A full example:
@@ -132,7 +132,7 @@ A full example:
 |---------------|----------|------------------|--------------------|-------------------------------------------------|
 | `url`         | yes      | `http:` or `https:` address | —       | Where the agent is.                             |
 | `protocol`    | no       | `a2a`            | `a2a`              | How to talk to it; A2A is the only one for now.  |
-| `auth`        | no       | object, below    | `{"type": "none"}` | How supavisor proves itself to the agent.        |
+| `auth`        | no       | object, below    | `{"type": "none"}` | How flotti proves itself to the agent.           |
 | `name`        | no       | non-empty string | the id             | Name shown to people.                            |
 | `description` | no       | non-empty string | —                  | One line about the agent.                        |
 | `id`          | no       | non-empty string | —                  | If given, must equal the directory name.         |
@@ -145,12 +145,12 @@ A full example:
   variable in that header.
 
 The manifest names the environment variable that holds the secret, never the secret itself: manifests
-are plain files, they get copied, shown in the dashboard and edited by it. supavisor reads the variable
+are plain files, they get copied, shown in the dashboard and edited by it. flotti reads the variable
 when it connects; a value that does not look like a variable name is refused.
 
 ## Running a local agent
 
-supavisor starts `command` with `arguments` in `workdir` as a child process and talks
+flotti starts `command` with `arguments` in `workdir` as a child process and talks
 [ACP](https://agentclientprotocol.com) to it over stdio: `initialize`, then one session, then a
 `session/prompt` for every message. Claude Code and Codex speak ACP through adapters:
 
@@ -161,13 +161,13 @@ supavisor starts `command` with `arguments` in `workdir` as a child process and 
 
 Pin the adapter version: adapters move and change — both have already changed their package names
 once. Keep `-y`: without it `npx` asks whether to install, and it asks on stdin, which belongs to ACP.
-Log in to Claude Code or Codex the usual way before: supavisor keeps no keys, and an agent that wants a
+Log in to Claude Code or Codex the usual way before: flotti keeps no keys, and an agent that wants a
 login stops at once with a message saying so.
 
 ### What the agent gets from its directory
 
 ACP has a standard way for the model only; the system prompt and the skills each adapter takes its own
-way, so supavisor needs `adapter` to know which.
+way, so flotti needs `adapter` to know which.
 
 | What                | `claude-code`                                                            | `codex`                                                                               | no `adapter`   |
 |---------------------|--------------------------------------------------------------------------|---------------------------------------------------------------------------------------|----------------|
@@ -190,10 +190,10 @@ The states follow supervisord:
 | `stopped`  | not started, or stopped by a person                                             |
 | `starting` | the process is up; `initialize` and the session are not done yet                |
 | `running`  | the session is ready for messages                                               |
-| `backoff`  | it stopped when it should not have; supavisor waits before the next try         |
+| `backoff`  | it stopped when it should not have; flotti waits before the next try            |
 | `stopping` | being stopped by a person                                                       |
 | `exited`   | it stopped, and `restart` says to leave it so                                   |
-| `fatal`    | supavisor gave up; only a person starts it again                                |
+| `fatal`    | flotti gave up; only a person starts it again                                   |
 
 - **Restart policy.** `always` restarts after any exit, `on-failure` — after a non-zero exit code, a
   lost heartbeat or a message that would not cancel, `never` — never.
@@ -205,7 +205,7 @@ The states follow supervisord:
   `session/load` — the history it replays is not shown again. An agent that can do neither gets a new
   session, and a log event says the context is lost. A message that was in work when the process died
   fails; restarting does not send it again.
-- **Heartbeat.** ACP has none, so supavisor asks: from the answer to `initialize` on, it sends an
+- **Heartbeat.** ACP has none, so flotti asks: from the answer to `initialize` on, it sends an
   extension request every third of `heartbeatTimeoutSec`. Any message from the agent counts as a sign
   of life, the "method not found" answer too. Silence longer than `heartbeatTimeoutSec` is a lost
   agent: it is killed, and the policy decides the rest.
@@ -227,9 +227,9 @@ as a remote agent — see [One interface for every agent](#one-interface-for-eve
 
 ## Talking to a remote agent
 
-supavisor speaks A2A through the official SDK, [`@a2a-js/sdk`](https://github.com/a2aproject/a2a-js),
+flotti speaks A2A through the official SDK, [`@a2a-js/sdk`](https://github.com/a2aproject/a2a-js),
 so the protocol details — transports, the `A2A-Version` header, version 0.3 of the protocol — are the
-SDK's and not supavisor's. In code it is `A2AAgent` (`src/a2a-agent.ts`), a `FleetAgent` like a local
+SDK's and not flotti's. In code it is `A2AAgent` (`src/a2a-agent.ts`), a `FleetAgent` like a local
 agent: the dashboard gets the same events and drives it the same way.
 
 - **The card.** It is read from `<url>/.well-known/agent-card.json`, or from `url` itself when that
@@ -248,17 +248,17 @@ agent: the dashboard gets the same events and drives it the same way.
   until it is done.
 - **Cancel** cancels the task the agent is working on.
 - **Restart.** An agent that declares the [restart extension](docs/a2a-restart.md) is asked to restart
-  itself, and supavisor reconnects once it is back. Any other agent cannot be restarted from here, so
+  itself, and flotti reconnects once it is back. Any other agent cannot be restarted from here, so
   for it restart means a new conversation.
 
 Not done, on purpose:
 
-- **Push notifications.** They need an address the agent can reach, and supavisor runs on `localhost`;
+- **Push notifications.** They need an address the agent can reach, and flotti runs on `localhost`;
   a stream or polling does the same job for the dashboard.
 - **Checking the card signature.** The client reports whether the card is signed, but does not verify
   the signature: a key fetched from the address the card itself names proves nothing, and the manifest
   has no field for a key to trust yet.
-- **Security schemes of the card.** How supavisor proves itself is what the manifest says; the schemes
+- **Security schemes of the card.** How flotti proves itself is what the manifest says; the schemes
   the card declares are shown, not acted upon.
 
 ## One interface for every agent
@@ -298,9 +298,9 @@ or permission requests — an A2A agent asks a person by pausing its task, and t
 Every case is reported as one sentence naming the file and the place inside it, and ends with a
 non-zero exit code — never a stack trace:
 
-| Case                                                   | Example of what supavisor prints                                                     |
+| Case                                                   | Example of what flotti prints                                                        |
 |--------------------------------------------------------|--------------------------------------------------------------------------------------|
-| `--fleet`/`SUPAVISOR_FLEET` points at nothing          | `Fleet directory not found: …`                                                       |
+| `--fleet`/`FLOTTI_FLEET` points at nothing             | `Fleet directory not found: …`                                                       |
 | A file where an agent directory is expected            | `…/local/claude.json: every agent is a directory with agent.json in it, …`           |
 | A directory name that cannot be an id                  | `…/local/my agent: "my agent" cannot be an agent id — …`                              |
 | An agent directory without `agent.json`                | `Agent manifest not found: …` plus a manifest to start from                           |

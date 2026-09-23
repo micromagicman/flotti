@@ -7,7 +7,7 @@ type ConfigurationErrorKind =
     | 'invalid-argument'
     /** `~` cannot be expanded: the environment has no home directory. */
     | 'unresolved-home'
-    /** The fleet directory named by `--fleet` or `SUPAVISOR_FLEET` does not exist. */
+    /** The fleet directory named by `--fleet` or `FLOTTI_FLEET` does not exist. */
     | 'missing-fleet'
     /** Something that has to be a directory is not one. */
     | 'not-a-directory'

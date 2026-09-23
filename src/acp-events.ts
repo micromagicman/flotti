@@ -31,7 +31,7 @@ class AcpMessages {
  * dashboard, never dropped.
  *
  * `user_message_chunk` is raw too: the message a person sent is already an
- * event, supavisor records it when it sends it, and adapters echo it back.
+ * event, flotti records it when it sends it, and adapters echo it back.
  */
 function acpUpdateEvents(update: SessionUpdate, messages: AcpMessages): AgentEventBody[] {
     switch (update.sessionUpdate) {
