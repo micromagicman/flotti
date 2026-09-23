@@ -3,7 +3,7 @@
  * the message is what a human reads.
  */
 type ConfigurationErrorKind =
-    /** `--fleet` was given without a path. */
+    /** `--fleet` was given without a path, or `--port` with something that is not a port. */
     | 'invalid-argument'
     /** `~` cannot be expanded: the environment has no home directory. */
     | 'unresolved-home'
@@ -28,7 +28,11 @@ type ConfigurationErrorKind =
     /** The manifest names an id other than its directory. */
     | 'id-mismatch'
     /** A local and a remote agent share one id. */
-    | 'duplicate-agent-id';
+    | 'duplicate-agent-id'
+    /** `flotti run` found another flotti running the same fleet. */
+    | 'already-running'
+    /** The dashboard port is taken by another program. */
+    | 'port-in-use';
 type ConfigurationErrorOptions = {
     /** File or directory the complaint is about, when one is already known. */
     readonly path?: string;
