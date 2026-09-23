@@ -27,6 +27,15 @@ function scheduleReconnect(link: Socket): void {
     link.attempt += 1;
     link.timer = setTimeout(() => connect(link), delay);
 }
+function receive(link: Socket, socket: WebSocket, message: MessageEvent<string>): void {
+    const parsed = JSON.parse(message.data) as ServerMessage;
+    link.dispatch({ type: 'server', message: parsed });
+    if (parsed.type === 'fleet') {
+        // The fleet goes first; now say what this page has seen, and get the rest.
+        const subscribe: ClientMessage = { type: 'subscribe', since: seen(link.state()) };
+        socket.send(JSON.stringify(subscribe));
+    }
+}
 function connect(link: Socket): void {
     link.dispatch({ type: 'link', link: 'connecting' });
     const socket = new WebSocket(socketUrl());
@@ -37,15 +46,7 @@ function connect(link: Socket): void {
         link.attempt = 0;
         link.dispatch({ type: 'link', link: 'open' });
     };
-    socket.onmessage = (message: MessageEvent<string>) => {
-        const parsed = JSON.parse(message.data) as ServerMessage;
-        link.dispatch({ type: 'server', message: parsed });
-        if (parsed.type === 'fleet') {
-            // The fleet goes first; now say what this page has seen, and get the rest.
-            const subscribe: ClientMessage = { type: 'subscribe', since: seen(link.state()) };
-            socket.send(JSON.stringify(subscribe));
-        }
-    };
+    socket.onmessage = (message: MessageEvent<string>) => receive(link, socket, message);
     socket.onclose = () => {
         clearTimeout(handshake);
         link.dispatch({ type: 'link', link: 'closed' });

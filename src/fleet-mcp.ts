@@ -149,21 +149,8 @@ class FleetMcpServer {
         });
     }
     private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
-        const path = new URL(request.url ?? '/', 'http://localhost').pathname;
-        if (path !== MCP_PATH) {
-            respond(response, 404, { error: 'not found' });
-            return;
-        }
-        const caller = this.caller(request);
+        const caller = this.admit(request, response);
         if (caller === undefined) {
-            response.setHeader('WWW-Authenticate', 'Bearer');
-            respond(response, 401, { error: 'the token of an agent of the fleet is required' });
-            return;
-        }
-        if (request.method !== 'POST') {
-            // No stream from the server: every answer comes with its request.
-            response.setHeader('Allow', 'POST');
-            respond(response, 405, { error: 'POST only' });
             return;
         }
         let body: unknown;
@@ -173,6 +160,34 @@ class FleetMcpServer {
             respond(response, 400, rpcError(null, -32700, 'the body is not JSON'));
             return;
         }
+        await this.answerBody(caller, body, response);
+    }
+    /**
+     * The agent calling, when the request is one the tools take; otherwise the
+     * request is answered with why not, and there is no caller.
+     */
+    private admit(request: IncomingMessage, response: ServerResponse): string | undefined {
+        const path = new URL(request.url ?? '/', 'http://localhost').pathname;
+        if (path !== MCP_PATH) {
+            respond(response, 404, { error: 'not found' });
+            return undefined;
+        }
+        const caller = this.caller(request);
+        if (caller === undefined) {
+            response.setHeader('WWW-Authenticate', 'Bearer');
+            respond(response, 401, { error: 'the token of an agent of the fleet is required' });
+            return undefined;
+        }
+        if (request.method !== 'POST') {
+            // No stream from the server: every answer comes with its request.
+            response.setHeader('Allow', 'POST');
+            respond(response, 405, { error: 'POST only' });
+            return undefined;
+        }
+        return caller;
+    }
+    /** Answers one JSON-RPC message or a batch of them, the way it came. */
+    private async answerBody(caller: string, body: unknown, response: ServerResponse): Promise<void> {
         const requests = Array.isArray(body) ? body as JsonRpcRequest[] : [body as JsonRpcRequest];
         const answers = (await Promise.all(requests.map((item) => this.answer(caller, item))))
             .filter((answer) => answer !== undefined);
@@ -205,29 +220,26 @@ class FleetMcpServer {
         const fields = isObject(params) ? params : {};
         switch (method) {
             case 'initialize':
-                return {
-                    protocolVersion: PROTOCOL_VERSIONS.find((known) => known === fields['protocolVersion'])
-                        ?? PROTOCOL_VERSIONS[0],
-                    capabilities: { tools: {} },
-                    serverInfo: { name: MCP_SERVER_NAME, version: '1' },
-                    instructions: `You are "${caller}", one agent of a flotti fleet. These tools let you see the other `
-                        + 'agents and write to them.'
-                };
+                return initializeResult(caller, fields);
             case 'ping':
                 return {};
             case 'tools/list':
                 return { tools: TOOLS };
             case 'tools/call':
-                return this.tool(caller, String(fields['name'] ?? ''), isObject(fields['arguments']) ? fields['arguments'] : {})
-                    .catch((error: unknown) => {
-                        if (error instanceof ArgumentError) {
-                            return failure(error.message);
-                        }
-                        throw error;
-                    });
+                return this.callTool(caller, fields);
             default:
                 throw new RpcError(-32601, `no method ${method}`);
         }
+    }
+    /** `tools/call`: arguments the tool cannot take come back as an error result, not a protocol error. */
+    private callTool(caller: string, fields: Record<string, unknown>): Promise<ToolResult> {
+        return this.tool(caller, String(fields['name'] ?? ''), isObject(fields['arguments']) ? fields['arguments'] : {})
+            .catch((error: unknown) => {
+                if (error instanceof ArgumentError) {
+                    return failure(error.message);
+                }
+                throw error;
+            });
     }
     private async tool(caller: string, name: string, args: ToolArguments): Promise<ToolResult> {
         const fleet = this.fleet;
@@ -240,27 +252,33 @@ class FleetMcpServer {
                     agent.id === caller ? { ...agent, you: true } : agent), null, 2));
             case 'send_message':
                 return this.send(fleet, caller, stringArgument(args, 'to'), stringArgument(args, 'text'));
-            case 'reply': {
-                const last = this.received.get(caller);
-                if (last === undefined) {
-                    return failure('no agent has written to you yet; use send_message and name the agent');
-                }
-                return this.send(fleet, caller, last.from, stringArgument(args, 'text'));
-            }
-            case 'forward': {
-                const last = this.received.get(caller);
-                if (last === undefined) {
-                    return failure('no agent has written to you yet: there is nothing to forward');
-                }
-                const comment = typeof args['comment'] === 'string' && args['comment'].trim() !== ''
-                    ? `${args['comment'].trim()}\n\n`
-                    : '';
-                return this.send(fleet, caller, stringArgument(args, 'to'),
-                    `${comment}Forwarded from agent "${last.from}":\n\n${last.text}`);
-            }
+            case 'reply':
+                return this.reply(fleet, caller, args);
+            case 'forward':
+                return this.forward(fleet, caller, args);
             default:
                 throw new RpcError(-32602, `no tool ${name}`);
         }
+    }
+    /** The `reply` tool: to the agent whose message came last. */
+    private async reply(fleet: FleetDirectory, caller: string, args: ToolArguments): Promise<ToolResult> {
+        const last = this.received.get(caller);
+        if (last === undefined) {
+            return failure('no agent has written to you yet; use send_message and name the agent');
+        }
+        return this.send(fleet, caller, last.from, stringArgument(args, 'text'));
+    }
+    /** The `forward` tool: the last message, as it was, with a comment before it if one is given. */
+    private async forward(fleet: FleetDirectory, caller: string, args: ToolArguments): Promise<ToolResult> {
+        const last = this.received.get(caller);
+        if (last === undefined) {
+            return failure('no agent has written to you yet: there is nothing to forward');
+        }
+        const comment = typeof args['comment'] === 'string' && args['comment'].trim() !== ''
+            ? `${args['comment'].trim()}\n\n`
+            : '';
+        return this.send(fleet, caller, stringArgument(args, 'to'),
+            `${comment}Forwarded from agent "${last.from}":\n\n${last.text}`);
     }
     private async send(fleet: FleetDirectory, from: string, to: string, message: string): Promise<ToolResult> {
         if (to === from) {
@@ -269,13 +287,7 @@ class FleetMcpServer {
         if (!fleet.agents().some((agent) => agent.id === to)) {
             return failure(`there is no agent "${to}" in the fleet; list_agents names them`);
         }
-        let delivery: Delivery;
-        try {
-            delivery = await fleet.send(to, message, { from });
-        } catch (error) {
-            // The fleet changed under the call: the sender or the receiver is gone.
-            delivery = { agentId: to, result: 'failed', error: error instanceof Error ? error.message : String(error) };
-        }
+        const delivery = await deliver(fleet, from, to, message);
         if (delivery.result === 'failed') {
             return failure(`"${to}" did not get it: ${delivery.error ?? 'no reason given'}`);
         }
@@ -284,6 +296,26 @@ class FleetMcpServer {
             ? `"${to}" has it. Its answer comes to you as a message from "${to}".`
             : `"${to}" is busy: the message waits in line and reaches it once it is done.`);
     }
+}
+/** Sends through the fleet; a send that throws is a failed delivery. */
+async function deliver(fleet: FleetDirectory, from: string, to: string, message: string): Promise<Delivery> {
+    try {
+        return await fleet.send(to, message, { from });
+    } catch (error) {
+        // The fleet changed under the call: the sender or the receiver is gone.
+        return { agentId: to, result: 'failed', error: error instanceof Error ? error.message : String(error) };
+    }
+}
+/** The answer to `initialize`: the protocol version, the capabilities and who the caller is. */
+function initializeResult(caller: string, fields: Record<string, unknown>): object {
+    return {
+        protocolVersion: PROTOCOL_VERSIONS.find((known) => known === fields['protocolVersion'])
+            ?? PROTOCOL_VERSIONS[0],
+        capabilities: { tools: {} },
+        serverInfo: { name: MCP_SERVER_NAME, version: '1' },
+        instructions: `You are "${caller}", one agent of a flotti fleet. These tools let you see the other `
+            + 'agents and write to them.'
+    };
 }
 function stringArgument(args: ToolArguments, name: string): string {
     const value = args[name];

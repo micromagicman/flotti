@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { AgentSummary } from '../../src/dashboard-protocol.js';
 import { AgentPanel } from './components/AgentPanel.js';
 import { BroadcastPanel } from './components/BroadcastPanel.js';
 import { SettingsPanel } from './components/SettingsPanel.js';
@@ -38,31 +39,58 @@ function NotifyButton({ permission, onAsk }: { readonly permission: Permission; 
         ? <button type="button" className="notify" onClick={onAsk} title="A notification when an agent waits for you and flotti is out of sight">Notify me</button>
         : null;
 }
-function App() {
-    const [state, dispatch] = useFleet();
-    const [tab, setTab] = useTab();
-    const attention = useAttention(state, setTab);
-    const colors = useAgentColors(state.agents.map((summary) => summary.id));
+function useSeenSeq(agent: AgentSummary | undefined, shownSeq: number | undefined): Record<string, number> {
     const [seenSeq, setSeenSeq] = useState<Record<string, number>>({});
-    const agent = state.agents.find((candidate) => candidate.id === tab)
-        ?? (tab === BROADCAST || tab === SETTINGS ? undefined : state.agents[0]);
-    const feed = agent === undefined ? undefined : state.feeds[agent.id];
-    const shownSeq = feed?.lastSeq;
-    const live = state.agents.map((summary) => ({ ...summary, status: state.feeds[summary.id]?.status ?? summary.status }));
     useEffect(() => {
         if (agent !== undefined && shownSeq !== undefined) {
             setSeenSeq((seen) => (seen[agent.id] === shownSeq ? seen : { ...seen, [agent.id]: shownSeq }));
         }
     }, [agent, shownSeq]);
+    return seenSeq;
+}
+function useAppModel() {
+    const [state, dispatch] = useFleet();
+    const [tab, setTab] = useTab();
+    const attention = useAttention(state, setTab);
+    const colors = useAgentColors(state.agents.map((summary) => summary.id));
+    const agent = state.agents.find((candidate) => candidate.id === tab)
+        ?? (tab === BROADCAST || tab === SETTINGS ? undefined : state.agents[0]);
+    const feed = agent === undefined ? undefined : state.feeds[agent.id];
+    const shownSeq = feed?.lastSeq;
+    const seenSeq = useSeenSeq(agent, shownSeq);
+    const live = state.agents.map((summary) => ({ ...summary, status: state.feeds[summary.id]?.status ?? summary.status }));
+    return { state, dispatch, tab, setTab, attention, colors, seenSeq, agent, feed, live };
+}
+type AppModel = ReturnType<typeof useAppModel>;
+function Topbar({ attention, link }: { readonly attention: ReturnType<typeof useAttention>; readonly link: Link }) {
+    return (
+        <header className="topbar">
+            <span className="brand">flotti</span>
+            <span className="topbar-side">
+                <NotifyButton permission={attention.permission} onAsk={attention.askPermission} />
+                <span className={`link link-${link}`} role="status">{LINK_TEXT[link]}</span>
+            </span>
+        </header>
+    );
+}
+function Main({ model }: { readonly model: AppModel }) {
+    const { state, dispatch, tab, setTab, colors, agent, feed, live } = model;
+    return (
+        <main className="main">
+            {tab === SETTINGS
+                ? <SettingsPanel agents={live} />
+                : agent === undefined || feed === undefined
+                    ? <BroadcastPanel agents={live} deliveries={state.deliveries} empty={state.agents.length === 0} onSettings={() => setTab(SETTINGS)} />
+                    : <AgentPanel key={agent.id} agent={agent} feed={feed} agents={state.agents} colors={colors} dispatch={dispatch} />}
+        </main>
+    );
+}
+function App() {
+    const model = useAppModel();
+    const { state, tab, setTab, attention, seenSeq, agent } = model;
     return (
         <div className="app">
-            <header className="topbar">
-                <span className="brand">flotti</span>
-                <span className="topbar-side">
-                    <NotifyButton permission={attention.permission} onAsk={attention.askPermission} />
-                    <span className={`link link-${state.link}`} role="status">{LINK_TEXT[state.link]}</span>
-                </span>
-            </header>
+            <Topbar attention={attention} link={state.link} />
             <Sidebar
                 agents={state.agents}
                 feeds={state.feeds}
@@ -72,13 +100,7 @@ function App() {
                 settingsId={SETTINGS}
                 onSelect={setTab}
             />
-            <main className="main">
-                {tab === SETTINGS
-                    ? <SettingsPanel agents={live} />
-                    : agent === undefined || feed === undefined
-                        ? <BroadcastPanel agents={live} deliveries={state.deliveries} empty={state.agents.length === 0} onSettings={() => setTab(SETTINGS)} />
-                        : <AgentPanel key={agent.id} agent={agent} feed={feed} agents={state.agents} colors={colors} dispatch={dispatch} />}
-            </main>
+            <Main model={model} />
         </div>
     );
 }

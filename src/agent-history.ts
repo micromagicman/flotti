@@ -43,13 +43,8 @@ class HistoryFile {
      * is one whose number does not grow: the numbers of an agent only grow.
      */
     load(): AgentEvent[] {
-        let contents: string;
-        try {
-            contents = readFileSync(this.path, 'utf8');
-        } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-                this.fail('read', error);
-            }
+        const contents = this.read();
+        if (contents === undefined) {
             return [];
         }
         const events: AgentEvent[] = [];
@@ -62,6 +57,17 @@ class HistoryFile {
         }
         this.lines = lines.filter((line) => line.trim() !== '').length;
         return events.slice(-this.limit);
+    }
+    /** The whole file; nothing when there is none yet or it cannot be read. */
+    private read(): string | undefined {
+        try {
+            return readFileSync(this.path, 'utf8');
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+                this.fail('read', error);
+            }
+            return undefined;
+        }
     }
     /**
      * Writes one more event down.

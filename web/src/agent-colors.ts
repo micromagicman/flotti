@@ -6,6 +6,19 @@
 /** How many colours there are: `.agent-color-0` … in styles.css. */
 const PALETTE_SIZE = 6;
 type AgentColors = Readonly<Record<string, number>>;
+/** Counts in `uses` the valid colours `ids` already have; returns the ids that have none. */
+function countKept(ids: readonly string[], colors: AgentColors, uses: number[]): string[] {
+    const fresh: string[] = [];
+    for (const id of ids) {
+        const color = colors[id];
+        if (color !== undefined && Number.isInteger(color) && color >= 0 && color < PALETTE_SIZE) {
+            uses[color] = (uses[color] ?? 0) + 1;
+        } else {
+            fresh.push(id);
+        }
+    }
+    return fresh;
+}
 /**
  * Gives every agent of `ids` a colour. An agent keeps the colour it had; a new
  * one gets a random colour out of those the fewest agents of `ids` have, so a
@@ -17,15 +30,7 @@ type AgentColors = Readonly<Record<string, number>>;
 function assignColors(ids: readonly string[], kept: AgentColors, random: () => number = Math.random): AgentColors {
     const colors: Record<string, number> = { ...kept };
     const uses = new Array<number>(PALETTE_SIZE).fill(0);
-    const fresh: string[] = [];
-    for (const id of ids) {
-        const color = colors[id];
-        if (color !== undefined && Number.isInteger(color) && color >= 0 && color < PALETTE_SIZE) {
-            uses[color] = (uses[color] ?? 0) + 1;
-        } else {
-            fresh.push(id);
-        }
-    }
+    const fresh = countKept(ids, colors, uses);
     for (const id of fresh) {
         const fewest = Math.min(...uses);
         const free = uses.flatMap((count, color) => (count === fewest ? [color] : []));

@@ -270,6 +270,40 @@ class Supervisor {
      * before, and a line says where that ends.
      */
     private join(agent: Agent, history: AgentEvent[], file?: HistoryFile): Member {
+        const { offset, historyFile, restoredAny } = this.restoreHistory(agent, history, file);
+        const member: Member = {
+            agent,
+            running: this.createAgent(agent),
+            history,
+            offset,
+            file: historyFile,
+            unsubscribe: () => undefined
+        };
+        this.members.set(agent.id, member);
+        if (restoredAny) {
+            this.markRestored(member);
+        }
+        this.listen(member);
+        return member;
+    }
+    /** Keeps every event of the member's agent, and forwards what it says to another agent. */
+    private listen(member: Member): void {
+        member.unsubscribe = member.running.subscribe((event) => {
+            this.keep(member, event);
+            if (event.type === 'message' && event.role === 'agent' && event.to !== undefined) {
+                this.forward(member, event.to, event.text);
+            }
+        });
+    }
+    /**
+     * Opens the history file of an agent that has none yet and, when the
+     * given history is empty, fills it with what the file kept from before.
+     */
+    private restoreHistory(
+        agent: Agent,
+        history: AgentEvent[],
+        file: HistoryFile | undefined
+    ): { offset: number; historyFile: HistoryFile | undefined; restoredAny: boolean } {
         let offset = this.lastSeq.get(agent.id) ?? 0;
         let historyFile = file;
         let restoredAny = false;
@@ -283,33 +317,19 @@ class Supervisor {
                 restoredAny = true;
             }
         }
-        const member: Member = {
-            agent,
-            running: this.createAgent(agent),
-            history,
-            offset,
-            file: historyFile,
-            unsubscribe: () => undefined
-        };
-        this.members.set(agent.id, member);
-        if (restoredAny) {
-            this.keep(member, {
-                type: 'log',
-                source: 'flotti',
-                text: 'flotti was started again; everything above is from before.',
-                agentId: agent.id,
-                seq: 1,
-                time: new Date().toISOString()
-            });
-            member.offset += 1;
-        }
-        member.unsubscribe = member.running.subscribe((event) => {
-            this.keep(member, event);
-            if (event.type === 'message' && event.role === 'agent' && event.to !== undefined) {
-                this.forward(member, event.to, event.text);
-            }
+        return { offset, historyFile, restoredAny };
+    }
+    /** The line that says where the restored history ends. */
+    private markRestored(member: Member): void {
+        this.keep(member, {
+            type: 'log',
+            source: 'flotti',
+            text: 'flotti was started again; everything above is from before.',
+            agentId: member.agent.id,
+            seq: 1,
+            time: new Date().toISOString()
         });
-        return member;
+        member.offset += 1;
     }
     private announce(): void {
         this.notify({ type: 'fleet', agents: this.agents() });

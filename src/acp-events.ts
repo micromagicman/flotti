@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { RequestPermissionRequest, SessionUpdate } from '@agentclientprotocol/sdk';
 import type { AgentEventBody, PermissionOption } from './agent-events.js';
+type ToolCallUpdate = Extract<SessionUpdate, { sessionUpdate: 'tool_call' | 'tool_call_update' }>;
 /**
  * Gives the pieces of the agent's answers the ids the event model wants. ACP
  * may leave a chunk without `messageId`, and then it belongs to the message
@@ -46,25 +47,31 @@ function acpUpdateEvents(update: SessionUpdate, messages: AcpMessages): AgentEve
             }
             break;
         case 'tool_call':
-            return [{
-                type: 'tool-call',
-                toolCallId: update.toolCallId,
-                title: update.title,
-                ...(update.status ? { status: update.status } : {}),
-                raw: update
-            }];
         case 'tool_call_update':
-            return [{
-                type: 'tool-call',
-                toolCallId: update.toolCallId,
-                ...(update.title ? { title: update.title } : {}),
-                ...(update.status ? { status: update.status } : {}),
-                raw: update
-            }];
+            return [toolCallEvent(update)];
         default:
             break;
     }
     return [{ type: 'raw', protocol: 'acp', payload: update }];
+}
+/** A tool call, or a change to one: only a new call is sure to have a title. */
+function toolCallEvent(update: ToolCallUpdate): AgentEventBody {
+    if (update.sessionUpdate === 'tool_call') {
+        return {
+            type: 'tool-call',
+            toolCallId: update.toolCallId,
+            title: update.title,
+            ...(update.status ? { status: update.status } : {}),
+            raw: update
+        };
+    }
+    return {
+        type: 'tool-call',
+        toolCallId: update.toolCallId,
+        ...(update.title ? { title: update.title } : {}),
+        ...(update.status ? { status: update.status } : {}),
+        raw: update
+    };
 }
 /** The permission request as an event; `requestId` is how the answer finds its way back. */
 function acpPermissionEvent(requestId: string, request: RequestPermissionRequest): AgentEventBody {

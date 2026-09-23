@@ -78,21 +78,20 @@ function withAdapter(draft: Draft, adapter: LocalAgentAdapter | ''): Draft {
     }
     return { ...draft, adapter, command: PRESETS[adapter].command, arguments: PRESETS[adapter].arguments.join('\n') };
 }
-function fromConfig(config: AgentConfig): Draft {
-    const common = { ...EMPTY, kind: config.kind, id: config.id, name: config.name ?? '', description: config.description ?? '' };
-    if (config.kind === 'remote') {
-        const auth = config.auth ?? { type: 'none' };
-        return {
-            ...common,
-            sshTarget: config.ssh?.target ?? '',
-            sshAgent: config.ssh?.agent ?? '',
-            url: config.url ?? '',
-            authType: auth.type,
-            tokenEnv: auth.type === 'bearer' ? auth.tokenEnv : '',
-            header: auth.type === 'api-key' ? auth.header : '',
-            valueEnv: auth.type === 'api-key' ? auth.valueEnv : ''
-        };
-    }
+function fromRemoteConfig(common: Draft, config: RemoteAgentConfig): Draft {
+    const auth = config.auth ?? { type: 'none' };
+    return {
+        ...common,
+        sshTarget: config.ssh?.target ?? '',
+        sshAgent: config.ssh?.agent ?? '',
+        url: config.url ?? '',
+        authType: auth.type,
+        tokenEnv: auth.type === 'bearer' ? auth.tokenEnv : '',
+        header: auth.type === 'api-key' ? auth.header : '',
+        valueEnv: auth.type === 'api-key' ? auth.valueEnv : ''
+    };
+}
+function fromLocalConfig(common: Draft, config: LocalAgentConfig): Draft {
     return {
         ...common,
         adapter: config.adapter ?? '',
@@ -107,45 +106,59 @@ function fromConfig(config: AgentConfig): Draft {
         systemPrompt: config.systemPrompt ?? ''
     };
 }
+function fromConfig(config: AgentConfig): Draft {
+    const common = { ...EMPTY, kind: config.kind, id: config.id, name: config.name ?? '', description: config.description ?? '' };
+    if (config.kind === 'remote') {
+        return fromRemoteConfig(common, config);
+    }
+    return fromLocalConfig(common, config);
+}
 function optional<K extends string, V>(key: K, value: V | undefined | ''): Partial<Record<K, V>> {
     return value === undefined || value === '' ? {} : { [key]: value } as Record<K, V>;
 }
-/**
- * The manifest the draft says. The server checks it the way `flotti run`
- * does; here only what text fields cannot say on their own is checked.
- *
- * @throws Error when a line of the environment has no `=`, or the timeout is not a number.
- */
-function toConfig(draft: Draft): AgentConfig {
-    const common = {
+function commonConfig(draft: Draft) {
+    return {
         id: draft.id.trim(),
         ...optional('name', draft.name.trim()),
         ...optional('description', draft.description.trim())
     };
-    if (draft.kind === 'remote') {
-        const auth: RemoteAuth = draft.authType === 'bearer'
-            ? { type: 'bearer', tokenEnv: draft.tokenEnv.trim() }
-            : draft.authType === 'api-key'
-                ? { type: 'api-key', header: draft.header.trim(), valueEnv: draft.valueEnv.trim() }
-                : { type: 'none' };
-        const target = draft.sshTarget.trim();
-        const remote: RemoteAgentConfig = target === ''
-            ? { kind: 'remote', ...common, url: draft.url.trim(), auth }
-            : { kind: 'remote', ...common, ssh: { target, ...optional('agent', draft.sshAgent.trim()) }, auth };
-        return remote;
-    }
+}
+type CommonConfig = ReturnType<typeof commonConfig>;
+function toRemoteConfig(draft: Draft, common: CommonConfig): RemoteAgentConfig {
+    const auth: RemoteAuth = draft.authType === 'bearer'
+        ? { type: 'bearer', tokenEnv: draft.tokenEnv.trim() }
+        : draft.authType === 'api-key'
+            ? { type: 'api-key', header: draft.header.trim(), valueEnv: draft.valueEnv.trim() }
+            : { type: 'none' };
+    const target = draft.sshTarget.trim();
+    const remote: RemoteAgentConfig = target === ''
+        ? { kind: 'remote', ...common, url: draft.url.trim(), auth }
+        : { kind: 'remote', ...common, ssh: { target, ...optional('agent', draft.sshAgent.trim()) }, auth };
+    return remote;
+}
+/** @throws Error when a line has no `=`. */
+function parseEnv(text: string): Record<string, string> {
     const env: Record<string, string> = {};
-    for (const line of lines(draft.env)) {
+    for (const line of lines(text)) {
         const at = line.indexOf('=');
         if (at <= 0) {
             throw new Error(`Environment: "${line}" is not NAME=value.`);
         }
         env[line.slice(0, at).trim()] = line.slice(at + 1);
     }
+    return env;
+}
+/** @throws Error when the timeout is not a positive number. */
+function parseTimeout(draft: Draft): string {
     const timeout = draft.heartbeatTimeoutSec.trim();
     if (timeout !== '' && !(Number(timeout) > 0)) {
         throw new Error(`Heartbeat timeout: "${timeout}" is not a positive number of seconds.`);
     }
+    return timeout;
+}
+function toLocalConfig(draft: Draft, common: CommonConfig): LocalAgentConfig {
+    const env = parseEnv(draft.env);
+    const timeout = parseTimeout(draft);
     const local: LocalAgentConfig = {
         kind: 'local',
         ...common,
@@ -161,6 +174,19 @@ function toConfig(draft: Draft): AgentConfig {
         systemPrompt: draft.systemPrompt
     };
     return local;
+}
+/**
+ * The manifest the draft says. The server checks it the way `flotti run`
+ * does; here only what text fields cannot say on their own is checked.
+ *
+ * @throws Error when a line of the environment has no `=`, or the timeout is not a number.
+ */
+function toConfig(draft: Draft): AgentConfig {
+    const common = commonConfig(draft);
+    if (draft.kind === 'remote') {
+        return toRemoteConfig(draft, common);
+    }
+    return toLocalConfig(draft, common);
 }
 export { PRESETS, fromConfig, newDraft, toConfig, withAdapter };
 export type { Draft };

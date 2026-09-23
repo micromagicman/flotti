@@ -10,6 +10,7 @@ import type {
     AnyMessage,
     InitializeResponse,
     McpServer,
+    NewSessionRequest,
     RequestPermissionRequest,
     RequestPermissionResponse,
     SessionConfigOption,
@@ -89,6 +90,8 @@ type Turn = {
     /** The message never got to the agent: {@link LocalAgentProcess.send} rejects. */
     readonly refused: (error: Error) => void;
 };
+/** What is run to start the agent process, and where. */
+type Invocation = { command: string; arguments: string[]; cwd?: string; env: NodeJS.ProcessEnv };
 /** One life of the agent process, from spawn to exit. */
 type Run = {
     readonly child: ChildProcess;
@@ -284,29 +287,15 @@ class LocalAgentProcess implements FleetAgent {
     private async launch(): Promise<void> {
         this.clearBackoff();
         this.setLifecycle('starting', this.retries === 0 ? 'starting' : `starting, try ${this.retries + 1}`);
-        let handover: Handover;
-        let run: Run;
-        try {
-            // An agent on another host gets no variable of this machine: only what its manifest sets.
-            handover = prepareHandover(
-                this.agent,
-                this.agent.ssh === undefined ? { ...this.env, ...this.agent.env } : this.agent.env
-            );
-            run = this.spawn(handover);
-        } catch (error) {
-            this.giveUp(`cannot start: ${message(error)}`);
+        const started = this.spawnRun();
+        if (started === undefined) {
             return;
         }
+        const { handover, run } = started;
         try {
             await this.handshake(run, handover);
         } catch (error) {
-            if (run.connection?.signal.aborted && !isPermanent(error)) {
-                // The process closed its output: its exit, due any moment, tells more than the closed connection.
-                return;
-            }
-            if (run === this.run && !run.stopping) {
-                this.fail(run, message(error), error instanceof PermanentFailure || isPermanent(error));
-            }
+            this.onHandshakeError(run, error);
             return;
         }
         if (run !== this.run || run.stopping) {
@@ -315,10 +304,45 @@ class LocalAgentProcess implements FleetAgent {
         this.setLifecycle('running', 'ready');
         this.pump();
     }
+    /** Prepares the handover and starts the process; a failure here is `fatal` at once. */
+    private spawnRun(): { handover: Handover; run: Run } | undefined {
+        try {
+            // An agent on another host gets no variable of this machine: only what its manifest sets.
+            const handover = prepareHandover(
+                this.agent,
+                this.agent.ssh === undefined ? { ...this.env, ...this.agent.env } : this.agent.env
+            );
+            const run = this.spawn(handover);
+            return { handover, run };
+        } catch (error) {
+            this.giveUp(`cannot start: ${message(error)}`);
+            return undefined;
+        }
+    }
+    private onHandshakeError(run: Run, error: unknown): void {
+        if (run.connection?.signal.aborted && !isPermanent(error)) {
+            // The process closed its output: its exit, due any moment, tells more than the closed connection.
+            return;
+        }
+        if (run === this.run && !run.stopping) {
+            this.fail(run, message(error), error instanceof PermanentFailure || isPermanent(error));
+        }
+    }
     private spawn(handover: Handover): Run {
-        const posix = process.platform !== 'win32';
         const how = this.command(handover);
-        const child = spawn(how.command, how.arguments, {
+        const child = this.spawnChild(how);
+        const logs = this.openLogs();
+        const exited = this.watchExit(child, how.command, () => run);
+        const run = newRun(child, exited, logs);
+        this.watchRemoteStart(run);
+        this.run = run;
+        this.watchStdio(run);
+        this.showNotes(handover);
+        return run;
+    }
+    private spawnChild(how: Invocation): ChildProcess {
+        const posix = process.platform !== 'win32';
+        return spawn(how.command, how.arguments, {
             ...(how.cwd === undefined ? {} : { cwd: how.cwd }),
             env: how.env,
             stdio: ['pipe', 'pipe', 'pipe'],
@@ -327,44 +351,39 @@ class LocalAgentProcess implements FleetAgent {
             detached: posix,
             windowsHide: true
         });
-        const logs = this.openLogs();
-        const exited = new Promise<void>((resolve) => {
+    }
+    /** Settles once the process is gone, and hands its end to {@link onExit}. */
+    private watchExit(child: ChildProcess, command: string, runOf: () => Run): Promise<void> {
+        return new Promise<void>((resolve) => {
             child.once('exit', (code, signal) => {
                 resolve();
-                this.onExit(run, code, signal);
+                this.onExit(runOf(), code, signal);
             });
             child.once('error', (error: NodeJS.ErrnoException) => {
                 if (child.pid === undefined) {
+                    const run = runOf();
                     // Never started: there will be no exit event.
                     resolve();
                     run.failure = error.code === 'ENOENT'
-                        ? `command not found: ${how.command}`
-                        : `cannot start ${how.command}: ${error.message}`;
+                        ? `command not found: ${command}`
+                        : `cannot start ${command}: ${error.message}`;
                     run.permanent = true;
                     this.onExit(run, null, null);
                 }
             });
         });
-        const run: Run = {
-            child,
-            spawnedAt: Date.now(),
-            exited,
-            lastSeen: Date.now(),
-            stopping: false,
-            permanent: false,
-            replaying: false,
-            ...logs
-        };
-        this.watchRemoteStart(run);
-        this.run = run;
+    }
+    private watchStdio(run: Run): void {
+        const { child } = run;
         child.stdin?.on('error', () => undefined);
         child.stdout?.on('error', () => undefined);
         child.stderr?.setEncoding('utf8');
         child.stderr?.on('data', (chunk: string) => this.onStderr(run, chunk));
+    }
+    private showNotes(handover: Handover): void {
         for (const note of handover.notes) {
             this.emit({ type: 'log', source: 'flotti', text: note });
         }
-        return run;
     }
     /** On an SSH host, standard error says where the command runs: {@link Run.place} waits for it. */
     private watchRemoteStart(run: Run): void {
@@ -382,7 +401,7 @@ class LocalAgentProcess implements FleetAgent {
      * it on the host — with the environment of the manifest only, and a reverse
      * tunnel for the fleet tools.
      */
-    private command(handover: Handover): { command: string; arguments: string[]; cwd?: string; env: NodeJS.ProcessEnv } {
+    private command(handover: Handover): Invocation {
         if (this.agent.ssh === undefined) {
             return {
                 command: this.agent.command,
@@ -391,7 +410,10 @@ class LocalAgentProcess implements FleetAgent {
                 env: { ...this.env, ...this.agent.env, ...handover.env }
             };
         }
-        const args = remoteCommandArguments(parseTarget(this.agent.ssh), {
+        return this.remoteCommand(this.agent.ssh, handover);
+    }
+    private remoteCommand(target: string, handover: Handover): Invocation {
+        const args = remoteCommandArguments(parseTarget(target), {
             command: this.agent.command,
             arguments: this.agent.arguments,
             env: { ...this.agent.env, ...handover.env },
@@ -405,6 +427,19 @@ class LocalAgentProcess implements FleetAgent {
         };
     }
     private async handshake(run: Run, handover: Handover): Promise<void> {
+        const connection = this.connect(run);
+        const capabilities = await connection.agent.request(acp.methods.agent.initialize, {
+            protocolVersion: acp.PROTOCOL_VERSION,
+            clientCapabilities: {}
+        });
+        run.capabilities = capabilities;
+        // Not sooner: before its first answer the agent may still be downloading under npx.
+        this.startHeartbeat(run);
+        const place = run.place === undefined ? undefined : await this.remotePlace(run.place);
+        await this.applyModel(run, await this.openSession(run, connection, capabilities, handover, place));
+    }
+    /** Speaks ACP over the process's stdio; the connection becomes the run's. */
+    private connect(run: Run): acp.ClientConnection {
         const { child } = run;
         if (child.stdin === null || child.stdout === null) {
             throw new Error('the agent process has no stdio');
@@ -418,15 +453,7 @@ class LocalAgentProcess implements FleetAgent {
             .onNotification(acp.methods.client.session.update, (context) => this.onUpdate(run, context.params))
             .connect(stream);
         run.connection = connection;
-        const capabilities = await connection.agent.request(acp.methods.agent.initialize, {
-            protocolVersion: acp.PROTOCOL_VERSION,
-            clientCapabilities: {}
-        });
-        run.capabilities = capabilities;
-        // Not sooner: before its first answer the agent may still be downloading under npx.
-        this.startHeartbeat(run);
-        const place = run.place === undefined ? undefined : await this.remotePlace(run.place);
-        await this.applyModel(run, await this.openSession(run, connection, capabilities, handover, place));
+        return connection;
     }
     /** Waits until the host said where the command runs; a host that does not say in time is a failed start. */
     private async remotePlace(place: Promise<RemotePlace>): Promise<RemotePlace> {
@@ -453,11 +480,7 @@ class LocalAgentProcess implements FleetAgent {
             return [];
         }
         if (capabilities.agentCapabilities?.mcpCapabilities?.http !== true) {
-            this.emit({
-                type: 'log',
-                source: 'flotti',
-                text: 'the fleet tools are not given: the agent takes no MCP server over HTTP'
-            });
+            this.log('the fleet tools are not given: the agent takes no MCP server over HTTP');
             return [];
         }
         const port = place?.reversePort ?? tools.port;
@@ -480,47 +503,72 @@ class LocalAgentProcess implements FleetAgent {
         place: RemotePlace | undefined
     ): Promise<SessionConfigOption[] | null | undefined> {
         const agentCapabilities = capabilities.agentCapabilities;
-        const directories = agentCapabilities?.sessionCapabilities?.additionalDirectories
+        const common = this.sessionParameters(capabilities, handover, place);
+        const previous = this.session;
+        if (previous !== undefined && agentCapabilities?.sessionCapabilities?.resume) {
+            return await this.resumeSession(connection, common, previous);
+        }
+        if (previous !== undefined && agentCapabilities?.loadSession) {
+            return await this.loadSession(run, connection, common, previous);
+        }
+        return await this.newSession(connection, common, previous !== undefined);
+    }
+    /** What `session/new`, `session/resume` and `session/load` have in common. */
+    private sessionParameters(
+        capabilities: InitializeResponse,
+        handover: Handover,
+        place: RemotePlace | undefined
+    ): NewSessionRequest {
+        const directories = capabilities.agentCapabilities?.sessionCapabilities?.additionalDirectories
             ? { additionalDirectories: [...handover.additionalDirectories] }
             : {};
-        const common = {
+        return {
             cwd: place?.cwd ?? this.agent.workdir,
             mcpServers: this.mcpServers(capabilities, place),
             ...directories,
             ...(handover.meta === undefined ? {} : { _meta: { ...handover.meta } })
         };
-        const previous = this.session;
-        let configOptions: SessionConfigOption[] | null | undefined;
-        if (previous !== undefined && agentCapabilities?.sessionCapabilities?.resume) {
+    }
+    private async resumeSession(
+        connection: acp.ClientConnection,
+        common: NewSessionRequest,
+        previous: string
+    ): Promise<SessionConfigOption[] | null | undefined> {
+        const response = await connection.agent.request(
+            acp.methods.agent.session.resume,
+            { ...common, sessionId: previous }
+        );
+        return response.configOptions;
+    }
+    /** `session/load`: the agent replays the history, which is not news. */
+    private async loadSession(
+        run: Run,
+        connection: acp.ClientConnection,
+        common: NewSessionRequest,
+        previous: string
+    ): Promise<SessionConfigOption[] | null | undefined> {
+        run.replaying = true;
+        try {
             const response = await connection.agent.request(
-                acp.methods.agent.session.resume,
+                acp.methods.agent.session.load,
                 { ...common, sessionId: previous }
             );
-            configOptions = response.configOptions;
-        } else if (previous !== undefined && agentCapabilities?.loadSession) {
-            run.replaying = true;
-            try {
-                const response = await connection.agent.request(
-                    acp.methods.agent.session.load,
-                    { ...common, sessionId: previous }
-                );
-                configOptions = response.configOptions;
-            } finally {
-                run.replaying = false;
-            }
-        } else {
-            if (previous !== undefined) {
-                this.emit({
-                    type: 'log',
-                    source: 'flotti',
-                    text: 'the agent can neither resume nor load a session: a new one is started, the context is lost'
-                });
-            }
-            const response = await connection.agent.request(acp.methods.agent.session.new, common);
-            this.session = response.sessionId;
-            configOptions = response.configOptions;
+            return response.configOptions;
+        } finally {
+            run.replaying = false;
         }
-        return configOptions;
+    }
+    private async newSession(
+        connection: acp.ClientConnection,
+        common: NewSessionRequest,
+        lost: boolean
+    ): Promise<SessionConfigOption[] | null | undefined> {
+        if (lost) {
+            this.log('the agent can neither resume nor load a session: a new one is started, the context is lost');
+        }
+        const response = await connection.agent.request(acp.methods.agent.session.new, common);
+        this.session = response.sessionId;
+        return response.configOptions;
     }
     /**
      * Asks for the manifest's model through the session's `model` config option
@@ -534,17 +582,16 @@ class LocalAgentProcess implements FleetAgent {
         const option = configOptions?.find((candidate: SessionConfigOption) =>
             candidate.category === 'model' || candidate.id === 'model');
         if (option === undefined) {
-            this.emit({
-                type: 'log',
-                source: 'flotti',
-                text: `model "${model}" is not applied: the agent offers no model option`
-            });
+            this.log(`model "${model}" is not applied: the agent offers no model option`);
             return;
         }
+        await this.setModel(run.connection, this.session, option.id, model);
+    }
+    private async setModel(connection: acp.ClientConnection, sessionId: string, configId: string, model: string): Promise<void> {
         try {
-            await run.connection.agent.request(acp.methods.agent.session.setConfigOption, {
-                sessionId: this.session,
-                configId: option.id,
+            await connection.agent.request(acp.methods.agent.session.setConfigOption, {
+                sessionId,
+                configId,
                 value: model
             });
         } catch (error) {
@@ -563,6 +610,12 @@ class LocalAgentProcess implements FleetAgent {
         }
         this.active = turn;
         this.messages.reset();
+        this.showUserMessage(turn);
+        turn.accepted();
+        this.showStatus();
+        this.prompt(run, run.connection, this.session, turn);
+    }
+    private showUserMessage(turn: Turn): void {
         this.emit({
             type: 'message',
             role: 'user',
@@ -571,10 +624,11 @@ class LocalAgentProcess implements FleetAgent {
             append: false,
             ...(turn.from === undefined ? {} : { from: turn.from })
         });
-        turn.accepted();
-        this.showStatus();
-        run.connection.agent.request(acp.methods.agent.session.prompt, {
-            sessionId: this.session,
+    }
+    /** Sends the message as `session/prompt`; its answer, or its failure, ends the turn. */
+    private prompt(run: Run, connection: acp.ClientConnection, sessionId: string, turn: Turn): void {
+        connection.agent.request(acp.methods.agent.session.prompt, {
+            sessionId,
             prompt: [{ type: 'text', text: turn.from === undefined ? turn.text : `[from ${turn.from}] ${turn.text}` }]
         }).then(
             (response) => this.endTurn(turn, response.stopReason),
@@ -658,9 +712,7 @@ class LocalAgentProcess implements FleetAgent {
     }
     /** Sees every message both ways: for the trace file, and as a sign of life. */
     private tap(run: Run, stream: acp.Stream): acp.Stream {
-        const record = (direction: 'in' | 'out', message: AnyMessage): void => {
-            run.trace?.write(`${JSON.stringify({ time: new Date().toISOString(), direction, message })}\n`);
-        };
+        const record = (direction: 'in' | 'out', message: AnyMessage): void => traceMessage(run, direction, message);
         const inbound = new TransformStream<AnyMessage, AnyMessage>({
             transform(message, controller) {
                 run.lastSeen = Date.now();
@@ -723,13 +775,7 @@ class LocalAgentProcess implements FleetAgent {
         }
     }
     private onExit(run: Run, code: number | null, signal: NodeJS.Signals | null): void {
-        if (run.heartbeat !== undefined) {
-            clearInterval(run.heartbeat);
-        }
-        run.settlePlace?.(new Error('the process ended before the host said where it runs'));
-        run.connection?.close();
-        run.trace?.end();
-        run.stderrLog?.end();
+        this.closeRun(run);
         if (run !== this.run) {
             return;
         }
@@ -739,6 +785,20 @@ class LocalAgentProcess implements FleetAgent {
         if (run.stopping) {
             return;
         }
+        this.afterExit(run, code, how);
+    }
+    /** Lets go of what the ended run held. */
+    private closeRun(run: Run): void {
+        if (run.heartbeat !== undefined) {
+            clearInterval(run.heartbeat);
+        }
+        run.settlePlace?.(new Error('the process ended before the host said where it runs'));
+        run.connection?.close();
+        run.trace?.end();
+        run.stderrLog?.end();
+    }
+    /** After a stop nobody asked for: gives up, leaves it `exited`, or restarts it — by its policy. */
+    private afterExit(run: Run, code: number | null, how: string): void {
         if (run.permanent) {
             this.giveUp(how);
             return;
@@ -749,6 +809,10 @@ class LocalAgentProcess implements FleetAgent {
             this.setLifecycle('exited', how);
             return;
         }
+        this.scheduleRestart(run, how);
+    }
+    /** Waits longer after every failed start in a row, and gives up after too many. */
+    private scheduleRestart(run: Run, how: string): void {
         const lived = Date.now() - run.spawnedAt;
         this.retries = lived < this.options.startSecs * 1000 ? this.retries + 1 : 1;
         if (this.retries > this.options.maxRetries) {
@@ -811,21 +875,7 @@ class LocalAgentProcess implements FleetAgent {
     }
     /** The status people see follows from the lifecycle and from what the agent is busy with. */
     private showStatus(detail?: string): void {
-        let status: AgentStatus;
-        switch (this.lifecycle) {
-            case 'starting':
-            case 'backoff':
-                status = 'starting';
-                break;
-            case 'running':
-                status = this.permissions.size > 0 ? 'waiting' : this.active !== undefined ? 'working' : 'idle';
-                break;
-            case 'fatal':
-                status = 'error';
-                break;
-            default:
-                status = 'stopped';
-        }
+        const status = this.currentStatus();
         const shown = detail ?? (status === this.shownStatus ? this.shownDetail : undefined);
         if (status === this.shownStatus && shown === this.shownDetail) {
             return;
@@ -834,8 +884,25 @@ class LocalAgentProcess implements FleetAgent {
         this.shownDetail = shown;
         this.emit({ type: 'status', status, ...(shown === undefined ? {} : { reason: shown }) });
     }
+    private currentStatus(): AgentStatus {
+        switch (this.lifecycle) {
+            case 'starting':
+            case 'backoff':
+                return 'starting';
+            case 'running':
+                return this.permissions.size > 0 ? 'waiting' : this.active !== undefined ? 'working' : 'idle';
+            case 'fatal':
+                return 'error';
+            default:
+                return 'stopped';
+        }
+    }
     private emit(body: AgentEventBody): void {
         this.events.emit(body);
+    }
+    /** A line of flotti's own in the agent's log. */
+    private log(text: string): void {
+        this.emit({ type: 'log', source: 'flotti', text });
     }
     private openLogs(): { trace?: WriteStream; stderrLog?: WriteStream } {
         if (this.logDirectory === null) {
@@ -848,6 +915,22 @@ class LocalAgentProcess implements FleetAgent {
         stderrLog.on('error', () => undefined);
         return { trace, stderrLog };
     }
+}
+function newRun(child: ChildProcess, exited: Promise<void>, logs: { trace?: WriteStream; stderrLog?: WriteStream }): Run {
+    return {
+        child,
+        spawnedAt: Date.now(),
+        exited,
+        lastSeen: Date.now(),
+        stopping: false,
+        permanent: false,
+        replaying: false,
+        ...logs
+    };
+}
+/** One line of `acp.jsonl`. */
+function traceMessage(run: Run, direction: 'in' | 'out', message: AnyMessage): void {
+    run.trace?.write(`${JSON.stringify({ time: new Date().toISOString(), direction, message })}\n`);
 }
 function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
     const pid = child.pid;

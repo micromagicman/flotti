@@ -25,7 +25,7 @@ import { settingsFile, writeSettings } from './settings.js';
 import { SshError, discover, parseTarget } from './ssh.js';
 import type { PublishedAgent, SshTarget } from './ssh.js';
 import type { Supervisor } from './supervisor.js';
-import type { Agent, Fleet, FleetLocation } from './types.js';
+import type { Agent, Fleet, FleetLocation, RemoteAgent } from './types.js';
 /** Manifest fields the settings page edits; any other field of the file is kept as it is. */
 const LOCAL_FIELDS = [
     'name',
@@ -48,6 +48,8 @@ const REMOTE_FIELDS = ['name', 'description', 'url', 'ssh', 'auth'] as const;
  */
 const TRASH_DIRECTORY = '.trash';
 type Fields = Record<string, unknown>;
+/** What the config of every agent has, local or remote. */
+type CommonConfig = { readonly id: string; readonly name?: string; readonly description?: string };
 type FleetSettingsOptions = {
     /** Environment for `~` and the settings file; `process.env` by default. */
     readonly env?: Environment;
@@ -154,6 +156,78 @@ function sameDestination(target: string, place: SshTarget): boolean {
         return false;
     }
 }
+/** The `user@host` of a request to add agents over SSH, trimmed. */
+function sshTarget(body: unknown): string {
+    const given = isObject(body) ? body['target'] : undefined;
+    if (typeof given !== 'string' || given.trim() === '') {
+        throw new ConfigurationError('missing-field', 'target is missing: write where the agent is, as user@host.');
+    }
+    return given.trim();
+}
+/** `user@host` taken apart; a malformed one is a configuration error. */
+function sshPlace(target: string): SshTarget {
+    try {
+        return parseTarget(target);
+    } catch (error) {
+        throw new ConfigurationError('wrong-type', `${(error as Error).message}.`, { cause: error });
+    }
+}
+/** The remote agent of the fleet that already reaches the published agent over SSH, if there is one. */
+function alreadyInFleet(fleet: readonly Agent[], place: SshTarget, agent: PublishedAgent): Agent | undefined {
+    return fleet.find((member) => member.kind === 'remote'
+        && member.ssh !== undefined
+        && sameDestination(member.ssh.target, place)
+        && (member.ssh.agent ?? agent.id) === agent.id);
+}
+/** @throws ConfigurationError when every agent the host publishes was in the fleet already. */
+function requireAdded(added: readonly AgentSummary[], present: readonly string[], place: SshTarget): void {
+    if (added.length === 0) {
+        throw new ConfigurationError(
+            'duplicate-agent-id',
+            `Every agent ${place.destination} publishes is in the fleet already: ${present.join(', ')}.`
+        );
+    }
+}
+/** The path of a request to switch the fleet directory: absolute, or starting with `~`, trimmed. */
+function fleetPath(body: unknown): string {
+    const { path } = (isObject(body) ? body : {}) as { path?: unknown };
+    if (typeof path !== 'string' || path.trim() === '') {
+        throw new ConfigurationError('missing-field', 'path is missing: name the fleet directory.');
+    }
+    const given = path.trim();
+    if (!isAbsolute(given) && given !== '~' && !given.startsWith('~/') && !given.startsWith('~\\')) {
+        throw new ConfigurationError(
+            'invalid-argument',
+            `"${given}" is a relative path; give an absolute one, or one starting with ~`
+        );
+    }
+    return given;
+}
+/** @throws ConfigurationError when something that is not a directory is at the path. */
+function requireFleetDirectory(target: string): void {
+    if (exists(target) && !statSync(target).isDirectory()) {
+        throw new ConfigurationError('not-a-directory', `${target}: the fleet directory must be a directory`, {
+            path: target
+        });
+    }
+}
+/** Checks the manifest the way `flotti run` would. */
+function checkManifest(kind: Agent['kind'], manifest: Fields, context: ManifestContext): void {
+    if (kind === 'local') {
+        readLocalManifest(manifest, context);
+    } else {
+        readRemoteManifest(manifest, context);
+    }
+}
+/** Writes `system-prompt.md` of a local agent, or removes it when there is no prompt. */
+function writeSystemPrompt(directory: string, prompt: string | undefined): void {
+    const promptPath = join(directory, SYSTEM_PROMPT_FILE);
+    if (prompt === undefined) {
+        rmSync(promptPath, { force: true });
+    } else {
+        writeAtomically(promptPath, prompt.endsWith('\n') ? prompt : `${prompt}\n`);
+    }
+}
 /** The manifest as the file says it, for the page to edit: defaults are not filled in. */
 function readConfig(agent: Agent): AgentConfig {
     const fields = readJson(agent.manifestPath);
@@ -163,15 +237,23 @@ function readConfig(agent: Agent): AgentConfig {
         ...(pick<string>(fields, 'description', isString) === undefined ? {} : { description: fields['description'] as string })
     };
     if (agent.kind === 'remote') {
-        const url = pick<string>(fields, 'url', isString);
-        const config: RemoteAgentConfig = {
-            kind: 'remote',
-            ...common,
-            ...(agent.ssh === undefined ? { url: url ?? '' } : { ssh: agent.ssh }),
-            ...(isObject(fields['auth']) ? { auth: fields['auth'] as unknown as RemoteAgentConfig['auth'] } : {})
-        };
-        return config;
+        return remoteConfig(agent, fields, common);
     }
+    return localConfig(agent, fields, common);
+}
+/** {@link readConfig} of a remote agent. */
+function remoteConfig(agent: RemoteAgent, fields: Fields, common: CommonConfig): RemoteAgentConfig {
+    const url = pick<string>(fields, 'url', isString);
+    const config: RemoteAgentConfig = {
+        kind: 'remote',
+        ...common,
+        ...(agent.ssh === undefined ? { url: url ?? '' } : { ssh: agent.ssh }),
+        ...(isObject(fields['auth']) ? { auth: fields['auth'] as unknown as RemoteAgentConfig['auth'] } : {})
+    };
+    return config;
+}
+/** {@link readConfig} of a local agent. */
+function localConfig(agent: Agent, fields: Fields, common: CommonConfig): LocalAgentConfig {
     const optional: Fields = {};
     for (const field of LOCAL_FIELDS) {
         if (field !== 'name' && field !== 'description' && field !== 'command' && fields[field] !== undefined) {
@@ -251,58 +333,37 @@ class FleetSettings {
      * @throws ConfigurationError saying why: the address, SSH itself, or what the host publishes.
      */
     async addOverSsh(body: unknown): Promise<SshAgentsResponse> {
-        const given = isObject(body) ? body['target'] : undefined;
-        if (typeof given !== 'string' || given.trim() === '') {
-            throw new ConfigurationError('missing-field', 'target is missing: write where the agent is, as user@host.');
-        }
-        const target = given.trim();
+        const target = sshTarget(body);
         const { place, published } = await this.published(target);
         const fleet = this.supervisor.agents().map((summary) => this.supervisor.agent(summary.id));
         const present: string[] = [];
         const added: AgentSummary[] = [];
         for (const agent of published) {
-            const already = fleet.find((member) => member.kind === 'remote'
-                && member.ssh !== undefined
-                && sameDestination(member.ssh.target, place)
-                && (member.ssh.agent ?? agent.id) === agent.id);
+            const already = alreadyInFleet(fleet, place, agent);
             if (already !== undefined) {
                 present.push(already.id);
                 continue;
             }
-            const id = this.freeId(agent.id, place.host);
-            const manifest: Fields = {
-                name: agent.name ?? agent.id,
-                ...(agent.description === undefined ? {} : { description: agent.description }),
-                ssh: { target, agent: agent.id }
-            };
-            this.supervisor.add(this.write('remote', id, manifest, undefined));
-            added.push(this.summary(id));
+            added.push(this.addPublished(target, place, agent));
         }
-        if (added.length === 0) {
-            throw new ConfigurationError(
-                'duplicate-agent-id',
-                `Every agent ${place.destination} publishes is in the fleet already: ${present.join(', ')}.`
-            );
-        }
+        requireAdded(added, present, place);
         return { added, ...(present.length === 0 ? {} : { present }) };
+    }
+    /** Writes a remote agent reached through a tunnel to one the host publishes, and starts it. */
+    private addPublished(target: string, place: SshTarget, agent: PublishedAgent): AgentSummary {
+        const id = this.freeId(agent.id, place.host);
+        const manifest: Fields = {
+            name: agent.name ?? agent.id,
+            ...(agent.description === undefined ? {} : { description: agent.description }),
+            ssh: { target, agent: agent.id }
+        };
+        this.supervisor.add(this.write('remote', id, manifest, undefined));
+        return this.summary(id);
     }
     /** What the host publishes; at least one agent, or a reason why not. */
     private async published(target: string): Promise<{ place: SshTarget; published: PublishedAgent[] }> {
-        let place: SshTarget;
-        try {
-            place = parseTarget(target);
-        } catch (error) {
-            throw new ConfigurationError('wrong-type', `${(error as Error).message}.`, { cause: error });
-        }
-        let published: PublishedAgent[];
-        try {
-            published = await (this.options.discover ?? ((at: SshTarget) => discover(at)))(place);
-        } catch (error) {
-            if (error instanceof SshError) {
-                throw new ConfigurationError('ssh-failed', `${error.message}.`, { cause: error });
-            }
-            throw error;
-        }
+        const place = sshPlace(target);
+        const published = await this.discoverOn(place);
         if (published.length === 0) {
             throw new ConfigurationError(
                 'ssh-failed',
@@ -311,6 +372,17 @@ class FleetSettings {
             );
         }
         return { place, published };
+    }
+    /** Asks the host which agents it publishes; an SSH failure is a configuration error. */
+    private async discoverOn(place: SshTarget): Promise<PublishedAgent[]> {
+        try {
+            return await (this.options.discover ?? ((at: SshTarget) => discover(at)))(place);
+        } catch (error) {
+            if (error instanceof SshError) {
+                throw new ConfigurationError('ssh-failed', `${error.message}.`, { cause: error });
+            }
+            throw error;
+        }
     }
     /** The id itself when it is free, else the id with the host, else with a number. */
     private freeId(id: string, host: string): string {
@@ -375,23 +447,9 @@ class FleetSettings {
      * @throws ConfigurationError when the directory holds a fleet `flotti run` would refuse.
      */
     async switchTo(body: unknown): Promise<FleetInfo> {
-        const { path } = (isObject(body) ? body : {}) as { path?: unknown };
-        if (typeof path !== 'string' || path.trim() === '') {
-            throw new ConfigurationError('missing-field', 'path is missing: name the fleet directory.');
-        }
-        const given = path.trim();
-        if (!isAbsolute(given) && given !== '~' && !given.startsWith('~/') && !given.startsWith('~\\')) {
-            throw new ConfigurationError(
-                'invalid-argument',
-                `"${given}" is a relative path; give an absolute one, or one starting with ~`
-            );
-        }
+        const given = fleetPath(body);
         const target = resolveFleetLocation({ argv: ['--fleet', given], env: this.env }).path;
-        if (exists(target) && !statSync(target).isDirectory()) {
-            throw new ConfigurationError('not-a-directory', `${target}: the fleet directory must be a directory`, {
-                path: target
-            });
-        }
+        requireFleetDirectory(target);
         mkdirSync(target, { recursive: true });
         const fleet = loadFleet({ argv: ['--fleet', target], env: this.env });
         if (target !== this.location.path) {
@@ -420,20 +478,11 @@ class FleetSettings {
             env: this.env,
             hasSystemPrompt: prompt !== undefined
         };
-        if (kind === 'local') {
-            readLocalManifest(manifest, context);
-        } else {
-            readRemoteManifest(manifest, context);
-        }
+        checkManifest(kind, manifest, context);
         mkdirSync(directory, { recursive: true });
         writeAtomically(context.manifestPath, `${JSON.stringify(manifest, null, 4)}\n`);
         if (kind === 'local') {
-            const promptPath = join(directory, SYSTEM_PROMPT_FILE);
-            if (prompt === undefined) {
-                rmSync(promptPath, { force: true });
-            } else {
-                writeAtomically(promptPath, prompt.endsWith('\n') ? prompt : `${prompt}\n`);
-            }
+            writeSystemPrompt(directory, prompt);
         }
         const agent = readAgent(this.location.path, kind, id, this.env);
         prepareAgent(agent);

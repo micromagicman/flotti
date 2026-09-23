@@ -122,17 +122,32 @@ function publishedAgent(id: string, value: unknown, where: string): PublishedAge
         throw new SshError(`${where} must be a JSON object`);
     }
     const fields = value as Record<string, unknown>;
-    const text = (field: string): string | undefined => {
-        const item = fields[field];
-        if (item === undefined) {
-            return undefined;
-        }
-        if (typeof item !== 'string' || item.trim() === '') {
-            throw new SshError(`${where}: ${field} must be a non-empty string`);
-        }
-        return item;
+    const url = publishedUrl(fields, where);
+    const name = publishedText(fields, 'name', where);
+    const description = publishedText(fields, 'description', where);
+    const token = publishedText(fields, 'token', where);
+    return {
+        id,
+        url,
+        ...(name === undefined ? {} : { name }),
+        ...(description === undefined ? {} : { description }),
+        ...(token === undefined ? {} : { token })
     };
-    const url = text('url');
+}
+/** A text field of a published file; `undefined` when it is absent. */
+function publishedText(fields: Record<string, unknown>, field: string, where: string): string | undefined {
+    const item = fields[field];
+    if (item === undefined) {
+        return undefined;
+    }
+    if (typeof item !== 'string' || item.trim() === '') {
+        throw new SshError(`${where}: ${field} must be a non-empty string`);
+    }
+    return item;
+}
+/** The address a published file says its agent listens on: required, and http: or https:. */
+function publishedUrl(fields: Record<string, unknown>, where: string): string {
+    const url = publishedText(fields, 'url', where);
     if (url === undefined) {
         throw new SshError(`${where}: url is missing — the address the agent listens on, e.g. http://127.0.0.1:18741/`);
     }
@@ -145,16 +160,7 @@ function publishedAgent(id: string, value: unknown, where: string): PublishedAge
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
         throw new SshError(`${where}: url must be an http: address, got "${url}"`);
     }
-    const name = text('name');
-    const description = text('description');
-    const token = text('token');
-    return {
-        id,
-        url,
-        ...(name === undefined ? {} : { name }),
-        ...(description === undefined ? {} : { description }),
-        ...(token === undefined ? {} : { token })
-    };
+    return url;
 }
 /**
  * Picks the agent the manifest means: the named one, or the only one there is.
@@ -183,8 +189,27 @@ function pickPublished(target: SshTarget, published: readonly PublishedAgent[], 
 }
 /** What `ssh` printed on failure, said so a person knows what to do. */
 function describeFailure(target: SshTarget, code: number | null, stderr: string): string {
+    const last = lastSaid(code, stderr);
+    const host = target.host;
+    const access = describeAccessFailure(target, stderr, last);
+    if (access !== undefined) {
+        return access;
+    }
+    if (/Connection refused|timed out|No route to host|Network is unreachable|Connection closed|Connection reset/i.test(stderr)) {
+        return `Cannot reach ${host} over SSH (${last})`;
+    }
+    if (/forwarding failed|cannot listen|Address already in use/i.test(stderr)) {
+        return `The SSH tunnel to ${host} could not be set up (${last})`;
+    }
+    return `SSH to ${target.destination} failed: ${last}`;
+}
+/** The last thing `ssh` said that is not a routine warning, or how it ended. */
+function lastSaid(code: number | null, stderr: string): string {
     const said = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '' && !/^Warning: Permanently added/.test(line));
-    const last = said.at(-1) ?? (code === null ? 'ssh was stopped' : `ssh exited with code ${code}`);
+    return said.at(-1) ?? (code === null ? 'ssh was stopped' : `ssh exited with code ${code}`);
+}
+/** A failure about which host it is and whether it lets the user in; `undefined` for any other. */
+function describeAccessFailure(target: SshTarget, stderr: string, last: string): string | undefined {
     const host = target.host;
     if (/Permission denied/i.test(stderr)) {
         return `${target.destination} did not accept the SSH key: add your public key to ~/.ssh/authorized_keys `
@@ -197,13 +222,7 @@ function describeFailure(target: SshTarget, code: number | null, stderr: string)
         return `The host key of ${host} changed since the last time; if that is expected, remove the old one `
             + `with ssh-keygen -R ${host} (${last})`;
     }
-    if (/Connection refused|timed out|No route to host|Network is unreachable|Connection closed|Connection reset/i.test(stderr)) {
-        return `Cannot reach ${host} over SSH (${last})`;
-    }
-    if (/forwarding failed|cannot listen|Address already in use/i.test(stderr)) {
-        return `The SSH tunnel to ${host} could not be set up (${last})`;
-    }
-    return `SSH to ${target.destination} failed: ${last}`;
+    return undefined;
 }
 type RunResult = { readonly code: number | null; readonly stdout: string; readonly stderr: string };
 function run(command: string, args: readonly string[], signal?: AbortSignal): Promise<RunResult> {
@@ -262,6 +281,8 @@ function tunnelArguments(target: SshTarget, remote: URL, localPort: number, opti
     ];
 }
 type TunnelListener = (reason: string) => void;
+/** What became of `ssh` while the tunnel comes up: why it could not start, or why it went. */
+type TunnelState = { failed?: Error; exited?: string };
 /**
  * `ssh -N -L`: a local port on the loopback that leads to an address as the
  * host sees it. The tunnel says when it is gone — the host went away, the
@@ -308,6 +329,13 @@ class SshTunnel {
         });
     }
     private async start(target: SshTarget, remote: URL, options: SshOptions): Promise<void> {
+        const child = this.spawnSsh(target, remote, options);
+        const state = this.watch(child, target, options);
+        const deadline = Date.now() + (options.readyTimeoutMs ?? 20_000);
+        await this.waitReady(target, deadline, state);
+    }
+    /** Starts `ssh -N -L` and keeps the tail of what it says. */
+    private spawnSsh(target: SshTarget, remote: URL, options: SshOptions): ChildProcess {
         const args = tunnelArguments(target, remote, this.localPort, options);
         const child = spawn(options.command ?? 'ssh', [...(options.prefix ?? []), ...args], {
             stdio: ['ignore', 'ignore', 'pipe'],
@@ -318,31 +346,41 @@ class SshTunnel {
             // The last few lines are all a reason needs.
             this.stderr = (this.stderr + chunk.toString('utf8')).slice(-4_000);
         });
-        let exited: string | undefined;
-        let failed: Error | undefined;
+        return child;
+    }
+    /** Notes why ssh could not start or why it went, and tells the listeners when the tunnel is gone. */
+    private watch(child: ChildProcess, target: SshTarget, options: SshOptions): TunnelState {
+        const state: TunnelState = {};
         child.once('error', (error: NodeJS.ErrnoException) => {
-            failed = error.code === 'ENOENT'
+            state.failed = error.code === 'ENOENT'
                 ? new SshError(`There is no "${options.command ?? 'ssh'}" on this machine; flotti needs the OpenSSH client for remote agents over SSH`)
                 : error;
         });
         child.once('exit', (code) => {
-            exited = describeFailure(target, code, this.stderr);
-            if (this.child === child && !this.closing) {
-                this.child = undefined;
-                for (const listener of [...this.listeners]) {
-                    listener(exited);
-                }
-            }
+            state.exited = describeFailure(target, code, this.stderr);
+            this.gone(child, state.exited);
         });
-        const deadline = Date.now() + (options.readyTimeoutMs ?? 20_000);
-        for (;;) {
-            if (failed !== undefined) {
-                await this.close();
-                throw failed;
+        return state;
+    }
+    /** Tells the listeners the tunnel is gone, unless it was closed or replaced. */
+    private gone(child: ChildProcess, reason: string): void {
+        if (this.child === child && !this.closing) {
+            this.child = undefined;
+            for (const listener of [...this.listeners]) {
+                listener(reason);
             }
-            if (exited !== undefined) {
+        }
+    }
+    /** Resolves once the local port answers; throws when ssh failed, went or took too long. */
+    private async waitReady(target: SshTarget, deadline: number, state: TunnelState): Promise<void> {
+        for (;;) {
+            if (state.failed !== undefined) {
+                await this.close();
+                throw state.failed;
+            }
+            if (state.exited !== undefined) {
                 this.closing = true;
-                throw new SshError(exited);
+                throw new SshError(state.exited);
             }
             if (await accepts(this.localPort)) {
                 return;
@@ -473,6 +511,27 @@ function isLoopback(hostname: string): boolean {
     return hostname === 'localhost' || hostname === '[::1]' || /^127(\.\d{1,3}){3}$/.test(hostname);
 }
 /**
+ * The endpoint of a published agent reached down a tunnel: its own address,
+ * with every request to that address sent to the local port instead.
+ */
+function tunnelEndpoint(published: PublishedAgent, remote: URL, localPort: number): RemoteEndpoint {
+    const local = `127.0.0.1:${localPort}`;
+    return {
+        url: published.url,
+        ...(published.token === undefined ? {} : { headers: { Authorization: `Bearer ${published.token}` } }),
+        rewrite: (url: URL) => {
+            const sameHost = url.hostname === remote.hostname || (isLoopback(url.hostname) && isLoopback(remote.hostname));
+            if (!sameHost || url.port !== remote.port || url.protocol !== remote.protocol) {
+                return undefined;
+            }
+            const moved = new URL(url.href);
+            moved.protocol = 'http:';
+            moved.host = local;
+            return moved;
+        }
+    };
+}
+/**
  * A remote agent reached over SSH: asks the host what it publishes, opens the
  * tunnel to the agent and sends every request to the agent's address — the
  * one its card names too — down the tunnel instead.
@@ -497,21 +556,14 @@ class SshConnection implements RemoteConnection {
             await tunnel.close();
             throw new Error('the connection was closed while the SSH tunnel was being opened');
         }
-        const local = `127.0.0.1:${tunnel.localPort}`;
-        const endpoint: RemoteEndpoint = {
-            url: published.url,
-            ...(published.token === undefined ? {} : { headers: { Authorization: `Bearer ${published.token}` } }),
-            rewrite: (url: URL) => {
-                const sameHost = url.hostname === remote.hostname || (isLoopback(url.hostname) && isLoopback(remote.hostname));
-                if (!sameHost || url.port !== remote.port || url.protocol !== remote.protocol) {
-                    return undefined;
-                }
-                const moved = new URL(url.href);
-                moved.protocol = 'http:';
-                moved.host = local;
-                return moved;
-            }
-        };
+        const endpoint = tunnelEndpoint(published, remote, tunnel.localPort);
+        this.watch(tunnel);
+        this.tunnel = tunnel;
+        this.endpoint = endpoint;
+        return endpoint;
+    }
+    /** Tells the listeners when the tunnel, while it is still this connection's, drops by itself. */
+    private watch(tunnel: SshTunnel): void {
         tunnel.onClose((reason: string) => {
             if (this.tunnel !== tunnel) {
                 return;
@@ -522,9 +574,6 @@ class SshConnection implements RemoteConnection {
                 listener(`the SSH tunnel dropped: ${reason}`);
             }
         });
-        this.tunnel = tunnel;
-        this.endpoint = endpoint;
-        return endpoint;
     }
     onDrop(listener: (reason: string) => void): () => void {
         this.listeners.add(listener);

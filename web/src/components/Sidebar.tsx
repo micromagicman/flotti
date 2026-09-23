@@ -11,51 +11,63 @@ type SidebarProps = {
     readonly settingsId: string;
     readonly onSelect: (tab: string) => void;
 };
+type SideTabProps = {
+    readonly className: string;
+    readonly selected: boolean;
+    readonly onClick: () => void;
+    readonly name: string;
+    readonly hint: string;
+};
+/** A tab that is not an agent's: the broadcast one and the settings one. */
+function SideTab({ className, selected, onClick, name, hint }: SideTabProps) {
+    return (
+        <button
+            type="button"
+            role="tab"
+            className={className}
+            aria-selected={selected}
+            onClick={onClick}
+        >
+            <span className="tab-name">{name}</span>
+            <span className="tab-hint">{hint}</span>
+        </button>
+    );
+}
+type AgentTabProps = {
+    readonly agent: AgentSummary;
+    readonly feed: AgentFeed | undefined;
+    readonly seenSeq: Readonly<Record<string, number>>;
+    readonly selected: string;
+    readonly onSelect: (tab: string) => void;
+};
+function AgentTab({ agent, feed, seenSeq, selected, onSelect }: AgentTabProps) {
+    const status = feed?.status ?? agent.status;
+    const unread = agent.id !== selected && (feed?.lastSeq ?? 0) > (seenSeq[agent.id] ?? 0);
+    return (
+        <button
+            type="button"
+            role="tab"
+            className={`tab tab-${status}`}
+            aria-selected={agent.id === selected}
+            data-agent={agent.id}
+            onClick={() => onSelect(agent.id)}
+        >
+            <span className="tab-name">
+                {agent.name}
+                {unread ? <span className="unread" aria-label="new output" /> : null}
+            </span>
+            <StatusBadge status={status} />
+        </button>
+    );
+}
 function Sidebar({ agents, feeds, seenSeq, selected, broadcastId, settingsId, onSelect }: SidebarProps) {
     return (
         <nav className="sidebar" role="tablist" aria-label="Agents" aria-orientation="vertical">
-            <button
-                type="button"
-                role="tab"
-                className="tab tab-broadcast"
-                aria-selected={selected === broadcastId}
-                onClick={() => onSelect(broadcastId)}
-            >
-                <span className="tab-name">All agents</span>
-                <span className="tab-hint">Broadcast</span>
-            </button>
-            {agents.map((agent) => {
-                const feed = feeds[agent.id];
-                const status = feed?.status ?? agent.status;
-                const unread = agent.id !== selected && (feed?.lastSeq ?? 0) > (seenSeq[agent.id] ?? 0);
-                return (
-                    <button
-                        key={agent.id}
-                        type="button"
-                        role="tab"
-                        className={`tab tab-${status}`}
-                        aria-selected={agent.id === selected}
-                        data-agent={agent.id}
-                        onClick={() => onSelect(agent.id)}
-                    >
-                        <span className="tab-name">
-                            {agent.name}
-                            {unread ? <span className="unread" aria-label="new output" /> : null}
-                        </span>
-                        <StatusBadge status={status} />
-                    </button>
-                );
-            })}
-            <button
-                type="button"
-                role="tab"
-                className="tab tab-settings"
-                aria-selected={selected === settingsId}
-                onClick={() => onSelect(settingsId)}
-            >
-                <span className="tab-name">Settings</span>
-                <span className="tab-hint">Fleet and agents</span>
-            </button>
+            <SideTab className="tab tab-broadcast" selected={selected === broadcastId} onClick={() => onSelect(broadcastId)} name="All agents" hint="Broadcast" />
+            {agents.map((agent) => (
+                <AgentTab key={agent.id} agent={agent} feed={feeds[agent.id]} seenSeq={seenSeq} selected={selected} onSelect={onSelect} />
+            ))}
+            <SideTab className="tab tab-settings" selected={selected === settingsId} onClick={() => onSelect(settingsId)} name="Settings" hint="Fleet and agents" />
         </nav>
     );
 }
