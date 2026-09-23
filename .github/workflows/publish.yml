@@ -1,0 +1,82 @@
+# Publishing flotti to npm (issue #25).
+#
+# Two triggers:
+#   - push of a tag `v*` — the normal release path;
+#   - manual run (workflow_dispatch) with an existing tag — to release a tag that was pushed before
+#     this workflow existed (v0.1.0). The workflow file is taken from the branch the run is started
+#     on (it must live in the default branch for the button to appear), the code — from the tag.
+#
+# Before publishing: the tag must match package.json version, NPM_TOKEN must be present, then
+# build and unit tests. Every refusal is a red job with a reason, never a green or skipped one.
+
+name: publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to publish, e.g. v0.1.0'
+        required: true
+        type: string
+
+concurrency:
+  group: publish-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write   # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Check tag form
+        shell: bash
+        run: |
+          case "$TAG" in
+            v[0-9]*) echo "Tag: $TAG" ;;
+            *) echo "::error::Tag '$TAG' is not of the form v<version> — nothing to publish."; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Check version and token
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          wanted="${TAG#v}"
+          actual=$(node -p "require('./package.json').version")
+          if [ "$wanted" != "$actual" ]; then
+            echo "::error::Tag $TAG does not match package.json version $actual — not publishing."
+            exit 1
+          fi
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::Secret NPM_TOKEN is not set in the repository (Settings → Secrets and variables → Actions) — nothing to publish with."
+            exit 1
+          fi
+          echo "Publishing flotti@$actual from $TAG"
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm test
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
