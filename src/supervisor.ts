@@ -1,8 +1,26 @@
 import { A2AAgent } from './a2a-agent.js';
 import type { AgentEvent, FleetAgent } from './agent-events.js';
-import type { AgentSummary, Delivery } from './dashboard-protocol.js';
+import type { AgentSummary, Delivery, Harness } from './dashboard-protocol.js';
 import { LocalAgentProcess } from './local-agent.js';
 import type { Agent, Fleet } from './types.js';
+/**
+ * The harness of an agent, as far as its manifest tells: the adapter of a local
+ * one. A plain ACP agent and a remote A2A one say nothing about it, and the
+ * summary leaves the field out rather than guess.
+ */
+function harnessOf(agent: Agent): { readonly harness?: Harness } {
+    if (agent.kind !== 'local') {
+        return {};
+    }
+    switch (agent.adapter) {
+        case 'claude-code':
+            return { harness: 'claude' };
+        case 'codex':
+            return { harness: 'codex' };
+        case undefined:
+            return {};
+    }
+}
 /** What the supervisor says besides the agents' own events. */
 type SupervisorNotice =
     | { readonly type: 'event'; readonly event: AgentEvent }
@@ -79,6 +97,7 @@ class Supervisor {
                 name: agent.name,
                 kind: agent.kind,
                 ...(agent.description === undefined ? {} : { description: agent.description }),
+                ...harnessOf(agent),
                 status: running.status
             }));
     }

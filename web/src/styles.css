@@ -104,6 +104,8 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .agent-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; flex: 1; }
 .agent-title h1, .broadcast h1 { font-size: 18px; margin: 0; }
 .kind, .reason, .muted, .description { color: var(--muted); font-size: 12px; }
+.harness { font-family: var(--mono); font-size: 12px; padding: 0 6px; border: 1px solid var(--border); border-radius: 4px; }
+.harness-unknown { font-family: inherit; color: var(--muted); border-style: dashed; }
 .description { margin: 0; width: 100%; order: 3; }
 .actions { display: flex; gap: 8px; }
 .error { color: var(--bad); font-size: 12px; }
