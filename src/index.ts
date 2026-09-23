@@ -1,35 +1,53 @@
-import {
-    CONFIGURATION_PATH_ARGUMENT,
-    CONFIGURATION_PATH_VARIABLE,
-    DEFAULT_CONFIGURATION_PATH,
-    DEFAULT_HEARTBEAT_TIMEOUT_SEC,
-    DEFAULT_RESTART_POLICY,
-    loadConfiguration
-} from './config.js';
 import { ConfigurationError } from './errors.js';
-import type { Agent } from './types.js';
+import {
+    DEFAULT_FLEET_PATH,
+    FLEET_PATH_ARGUMENT,
+    FLEET_PATH_VARIABLE,
+    loadFleet,
+    prepareFleet
+} from './fleet.js';
+import { MANIFEST_FILE, SAMPLE_LOCAL_MANIFEST } from './manifest.js';
+import type { Agent, Fleet } from './types.js';
 const HELP = `supavisor — simple ai agents orchestrator for humans
 
 Usage:
-  supavisor [${CONFIGURATION_PATH_ARGUMENT} <path>]
+  supavisor [${FLEET_PATH_ARGUMENT} <dir>]
 
 Options:
-  ${CONFIGURATION_PATH_ARGUMENT} <path>   Configuration file to read.
-  -h, --help        Print this help.
+  ${FLEET_PATH_ARGUMENT} <dir>      Fleet directory to read.
+  -h, --help         Print this help.
 
-Configuration file, in this order:
-  1. ${CONFIGURATION_PATH_ARGUMENT} <path>
-  2. ${CONFIGURATION_PATH_VARIABLE}=<path>
-  3. ${DEFAULT_CONFIGURATION_PATH}
+Fleet directory, in this order:
+  1. ${FLEET_PATH_ARGUMENT} <dir>
+  2. ${FLEET_PATH_VARIABLE}=<dir>
+  3. ${DEFAULT_FLEET_PATH}
 
-Every agent needs "name", "command" and "arguments"; "workdir" (supavisor's own
-directory by default), "env" (nothing added by default), "restart"
-("${DEFAULT_RESTART_POLICY}" by default: "always", "on-failure" or "never") and
-"heartbeatTimeoutSec" (${DEFAULT_HEARTBEAT_TIMEOUT_SEC} by default) are optional. README.md explains the
-fields in full — JSON has no comments to explain them in place.`;
+Every agent is a directory: local/<id>/ for agents supavisor starts itself,
+remote/<id>/ for agents it reaches over A2A. Each holds ${MANIFEST_FILE}; README.md
+explains the fields in full — JSON has no comments to explain them in place.`;
 function describe(agent: Agent): string {
+    if (agent.kind === 'remote') {
+        return `  ${agent.id} (remote, ${agent.protocol}): ${agent.url}`;
+    }
     const command = [agent.command, ...agent.arguments].join(' ');
-    return `  ${agent.name}: ${command}`;
+    const adapter = agent.adapter === undefined ? '' : `, ${agent.adapter}`;
+    return `  ${agent.id} (local${adapter}): ${command}`;
+}
+function report(fleet: Fleet, created: readonly string[]): void {
+    const { location } = fleet;
+    if (!fleet.exists) {
+        console.log(`No fleet yet: ${location.path} does not exist.`);
+        console.log(`To add a local agent, create ${location.path}/local/<id>/${MANIFEST_FILE}, for example:`);
+        console.log(SAMPLE_LOCAL_MANIFEST);
+        return;
+    }
+    console.log(`Read ${fleet.agents.length} agent(s) from ${location.path} (${location.source}).`);
+    for (const agent of fleet.agents) {
+        console.log(describe(agent));
+    }
+    for (const path of created) {
+        console.log(`Created ${path}`);
+    }
 }
 function main(argv: readonly string[]): number {
     if (argv.includes('--help') || argv.includes('-h')) {
@@ -37,11 +55,8 @@ function main(argv: readonly string[]): number {
         return 0;
     }
     try {
-        const { location, configuration } = loadConfiguration({ argv });
-        console.log(`Read ${configuration.agents.length} agent(s) from ${location.path} (${location.source}).`);
-        for (const agent of configuration.agents) {
-            console.log(describe(agent));
-        }
+        const fleet = loadFleet({ argv });
+        report(fleet, prepareFleet(fleet));
         return 0;
     } catch (error) {
         if (error instanceof ConfigurationError) {
