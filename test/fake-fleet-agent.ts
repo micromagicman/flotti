@@ -1,5 +1,5 @@
 import { AgentEvents } from '../src/agent-events.js';
-import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent } from '../src/agent-events.js';
+import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from '../src/agent-events.js';
 import type { Agent, Fleet, LocalAgent } from '../src/types.js';
 /**
  * A fleet agent in memory, for the supervisor and the dashboard server: it
@@ -37,15 +37,15 @@ class FakeFleetAgent implements FleetAgent {
             throw new Error('broken');
         }
     }
-    async send(text: string): Promise<void> {
-        this.calls.push(`send ${text}`);
+    async send(text: string, options: SendOptions = {}): Promise<void> {
+        this.calls.push(options.from === undefined ? `send ${text}` : `send ${text} from ${options.from}`);
         if (this.broken) {
             throw new Error(`${this.agentId} is broken`);
         }
         if (this.busy) {
             await new Promise<void>((resolve) => this.held.push(resolve));
         }
-        this.emit({ type: 'message', role: 'user', messageId: `u-${text}`, text, append: false });
+        this.emit({ type: 'message', role: 'user', messageId: `u-${text}`, text, append: false, ...(options.from === undefined ? {} : { from: options.from }) });
         this.emit({ type: 'message', role: 'agent', messageId: `a-${text}`, text: `you said: ${text}`, append: false });
         this.emit({ type: 'turn-end', reason: 'end_turn' });
     }

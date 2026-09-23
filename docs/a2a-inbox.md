@@ -75,8 +75,37 @@ The message may say what it is, under the extension URI in its own metadata:
   `progress` is a line about what the agent is doing, shown as such and not as a message.
 - `busy` — optional: `true` when the agent is busy on its own, `false` when it is done. The tab shows
   the agent as working in between. A message from a person has the last word while it is being worked on.
+- `to` — optional: the id of another agent of the fleet (the name of its directory) the message is for.
+  flotti sends the text on to that agent as a message from this one — see below — and shows it in this
+  agent's tab as sent there. A message that cannot be delivered — no such agent, the agent is stopped —
+  is a line in this agent's tab saying why; the agent itself is not told. `to` goes with `kind: message`
+  only.
 
 Anything else in the metadata is ignored for now.
+
+## Messages from other agents
+
+A message one agent of the fleet sent to another reaches an A2A agent as an ordinary message, with the
+sender under the extension URI in its metadata — `from` is the id of the sending agent, the one to put
+in `to` to answer it:
+
+```json
+{
+    "messageId": "…",
+    "role": "ROLE_USER",
+    "parts": [{"text": "The snapshot test fails, please rerun it after the fix."}],
+    "extensions": ["https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md"],
+    "metadata": {
+        "https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md": {"from": "reviewer"}
+    }
+}
+```
+
+It goes in line with the messages of a person and belongs to the same conversation. The inbox request
+is told from it by `"action": "subscribe"`, not by the extension URI alone. An agent that does
+not declare this extension gets the sender in the text as well, as `[from reviewer] …`; so does a local
+agent over ACP, which has no place for it otherwise. The dashboard shows the message in the receiver's
+tab on the person's side, marked with the sender.
 
 Each message needs a `messageId` of its own: flotti shows a message once, and a snapshot of the task —
 after a reconnect — repeats the history.

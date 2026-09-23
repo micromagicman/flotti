@@ -40,6 +40,18 @@ test('the progress of the agent is a line of its own, shown as it comes', () => 
         { kind: 'progress', key: 'e2', text: 'Tests are green' }
     ]);
 });
+test('a message between agents keeps who sent it and whom it went to', () => {
+    const feed = feedOf(
+        { type: 'message', role: 'user', messageId: 'u', text: 'rerun the tests', append: false, from: 'reviewer' },
+        { type: 'message', role: 'agent', messageId: 'm', text: 'on it', append: false, to: 'reviewer' },
+        { type: 'message', role: 'user', messageId: 'p', text: 'typed by hand', append: false }
+    );
+    deepStrictEqual(feed.items, [
+        { kind: 'message', key: 'm1', role: 'user', messageId: 'u', text: 'rerun the tests', from: 'reviewer' },
+        { kind: 'message', key: 'm2', role: 'agent', messageId: 'm', text: 'on it', to: 'reviewer' },
+        { kind: 'message', key: 'm3', role: 'user', messageId: 'p', text: 'typed by hand' }
+    ]);
+});
 test('updates of a tool call fold into one card', () => {
     const feed = feedOf(
         { type: 'tool-call', toolCallId: 'c', title: 'Read file', status: 'pending' },

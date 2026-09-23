@@ -49,6 +49,18 @@ type AgentEventBody =
         readonly messageId: string;
         readonly text: string;
         readonly append: boolean;
+        /**
+         * Id of the agent of the fleet that sent this message through flotti
+         * (`role: 'user'`): it goes where a person's message goes, and the tab
+         * shows who sent it. Absent for a message a person sent.
+         */
+        readonly from?: string;
+        /**
+         * Id of the agent of the fleet this message of the agent is for
+         * (`role: 'agent'`): flotti sends it on to that agent, and the tab of the
+         * sender shows it as sent there. Absent for an answer to a person.
+         */
+        readonly to?: string;
     }
     /** A piece of the agent's reasoning, shown apart from its answer. */
     | { readonly type: 'thought'; readonly text: string }
@@ -96,6 +108,11 @@ type AgentEvent = AgentEventBody & {
     readonly time: string;
 };
 type AgentEventListener = (event: AgentEvent) => void;
+/** Who a message is from, when it is not a person. */
+type SendOptions = {
+    /** Id of the agent of the fleet that sends the message; see the `from` of a `message` event. */
+    readonly from?: string;
+};
 /** An agent of the fleet as the dashboard drives it, local or remote. */
 interface FleetAgent {
     /** Id of the agent: the name of its directory in the fleet. */
@@ -112,8 +129,11 @@ interface FleetAgent {
      * agent has taken the message, not when it has answered: what comes of it
      * arrives as events, down to `turn-end`. Rejects when the message never
      * reached the agent — not started, stopped, gone before its turn.
+     *
+     * A message another agent sends goes the same way, with `from` naming the
+     * sender: the agent is told who it is from, and its `message` event says so.
      */
-    send(text: string): Promise<void>;
+    send(text: string, options?: SendOptions): Promise<void>;
     /** Asks the agent to drop what it is working on; does nothing when it is not busy. */
     cancel(): Promise<void>;
     /**
@@ -169,5 +189,6 @@ export type {
     AgentStatus,
     FleetAgent,
     PermissionOption,
+    SendOptions,
     ToolCallStatus
 };

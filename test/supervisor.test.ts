@@ -151,3 +151,46 @@ test('another fleet: the old agents stop, the new ones start', async () => {
     deepStrictEqual(supervisor.agents().map((agent) => [agent.id, agent.status]), [['x', 'idle']]);
     deepStrictEqual(notices.filter((notice) => notice.type === 'fleet').length, 1);
 });
+test('a message from another agent goes where a message of a person goes, and says who sent it', async () => {
+    const { supervisor, fakes } = supervised('a', 'b');
+    await supervisor.start();
+    deepStrictEqual(await supervisor.send('b', 'rerun the tests', { from: 'a' }), { agentId: 'b', result: 'taken' });
+    deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send rerun the tests from a']);
+    const message = supervisor.history('b').find((event) => event.type === 'message' && event.role === 'user');
+    strictEqual(message?.type === 'message' ? message.from : undefined, 'a');
+    throws(() => supervisor.send('b', 'hi', { from: 'nobody' }), UnknownAgentError);
+});
+test('what an agent says to another agent is sent on to it, from the sender', async () => {
+    const { supervisor, fakes } = supervised('a', 'b');
+    await supervisor.start();
+    fake(fakes.get('a')).emit({ type: 'message', role: 'agent', messageId: 'm1', text: 'rerun the tests', append: false, to: 'b' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send rerun the tests from a']);
+    const received = supervisor.history('b').find((event) => event.type === 'message' && event.role === 'user');
+    deepStrictEqual(received?.type === 'message' ? [received.text, received.from] : undefined, ['rerun the tests', 'a']);
+    deepStrictEqual(supervisor.history('a').map((event) => event.type), ['status', 'message'], 'the sender sees its message, and nothing else');
+});
+test('a message to another agent that cannot be delivered is a line in the tab of the sender', async () => {
+    const { fleet, fakes, createAgent } = fakeFleet('a', 'b');
+    const supervisor = new Supervisor(fleet, { createAgent });
+    await supervisor.start();
+    fake(fakes.get('b')).broken = true;
+    const a = fake(fakes.get('a'));
+    a.emit({ type: 'message', role: 'agent', messageId: 'm1', text: 'hi', append: false, to: 'nobody' });
+    a.emit({ type: 'message', role: 'agent', messageId: 'm2', text: 'hi', append: false, to: 'a' });
+    a.emit({ type: 'message', role: 'agent', messageId: 'm3', text: 'hi', append: false, to: 'b' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    a.emit({ type: 'turn-end', reason: 'end_turn' });
+    const history = supervisor.history('a', 1);
+    deepStrictEqual(history.map((event) => (event.type === 'log' ? event.text : event.type)), [
+        'message',
+        'could not deliver the message to "nobody": there is no such agent in the fleet',
+        'message',
+        'could not deliver the message to "a": an agent does not send messages to itself',
+        'message',
+        'could not deliver the message to "b": b is broken',
+        'turn-end'
+    ]);
+    deepStrictEqual(history.map((event) => event.seq), [2, 3, 4, 5, 6, 7, 8], 'the lines take numbers of their own, and the events after them go on');
+    deepStrictEqual(a.calls, ['start'], 'the sender is not sent anything');
+});
