@@ -2,9 +2,10 @@
 
 Simple ai agents orchestrator for humans.
 
-At this point supavisor **reads and checks** its fleet — the agents it is going to work with — and has
-the client for talking to remote agents over A2A (see [Talking to a remote agent](#talking-to-a-remote-agent)).
-Starting local agents over ACP and the dashboard are the next steps of the `v0.1.0` milestone; reading
+At this point supavisor **reads and checks** its fleet — the agents it is going to work with — and
+talks to them: it **runs a local agent** over ACP (starts it, talks to it, restarts it when it falls
+over) and **talks to a remote agent** over A2A (see [Talking to a remote agent](#talking-to-a-remote-agent)).
+Both are driven by code for now; the dashboard is the next step of the `v0.1.0` milestone, and reading
 the fleet starts nothing by itself.
 
 ## Requirements
@@ -45,7 +46,8 @@ Every agent is a directory, and the directory name is the agent id:
   in `local/` or `remote/` must be an agent directory.
 - `local/` and `remote/` may be absent — that group is simply empty.
 - `skills/` and `memory/` belong to the agent: supavisor creates them when they are missing and never
-  reads them.
+  reads them. It hands them to the agent, as told in [Running a local agent](#running-a-local-agent).
+- `logs/` is where supavisor keeps what a running agent said; see the same section.
 
 ### Where the fleet comes from
 
@@ -75,7 +77,7 @@ The smallest one:
 ```json
 {
     "command": "npx",
-    "arguments": ["@zed-industries/claude-code-acp"]
+    "arguments": ["-y", "@agentclientprotocol/claude-agent-acp@0.81.1"]
 }
 ```
 
@@ -96,8 +98,8 @@ The smallest one:
 The system prompt is not a field: it is the file `system-prompt.md` next to the manifest. A prompt is
 prose, often long, and a JSON string is a poor place to write prose in.
 
-`adapter`, `model`, `restart` and `heartbeatTimeoutSec` are read and checked now so that the format
-does not change again when agents start being run; nothing acts on them yet.
+What supavisor does with `adapter`, `model`, `restart` and `heartbeatTimeoutSec` is in
+[Running a local agent](#running-a-local-agent).
 
 A full example:
 
@@ -108,7 +110,7 @@ A full example:
     "adapter": "claude-code",
     "model": "opus",
     "command": "npx",
-    "arguments": ["@zed-industries/claude-code-acp"],
+    "arguments": ["-y", "@agentclientprotocol/claude-agent-acp@0.81.1"],
     "workdir": "~/src/app",
     "env": {"LOG_LEVEL": "debug"},
     "restart": "always",
@@ -146,12 +148,89 @@ The manifest names the environment variable that holds the secret, never the sec
 are plain files, they get copied, shown in the dashboard and edited by it. supavisor reads the variable
 when it connects; a value that does not look like a variable name is refused.
 
+## Running a local agent
+
+supavisor starts `command` with `arguments` in `workdir` as a child process and talks
+[ACP](https://agentclientprotocol.com) to it over stdio: `initialize`, then one session, then a
+`session/prompt` for every message. Claude Code and Codex speak ACP through adapters:
+
+| Agent       | `adapter`     | `command` and `arguments`                                          |
+|-------------|---------------|--------------------------------------------------------------------|
+| Claude Code | `claude-code` | `npx`, `["-y", "@agentclientprotocol/claude-agent-acp@0.81.1"]`    |
+| Codex       | `codex`       | `npx`, `["-y", "@agentclientprotocol/codex-acp@1.13.1"]`           |
+
+Pin the adapter version: adapters move and change — both have already changed their package names
+once. Keep `-y`: without it `npx` asks whether to install, and it asks on stdin, which belongs to ACP.
+Log in to Claude Code or Codex the usual way before: supavisor keeps no keys, and an agent that wants a
+login stops at once with a message saying so.
+
+### What the agent gets from its directory
+
+ACP has a standard way for the model only; the system prompt and the skills each adapter takes its own
+way, so supavisor needs `adapter` to know which.
+
+| What                | `claude-code`                                                            | `codex`                                                                               | no `adapter`   |
+|---------------------|--------------------------------------------------------------------------|---------------------------------------------------------------------------------------|----------------|
+| `model`             | the session's `model` config option                                      | the same                                                                              | the same       |
+| `system-prompt.md`  | `_meta.systemPrompt.append` — added to Claude Code's own prompt          | `developer_instructions` in `CODEX_CONFIG` — added to Codex's own prompt              | not passed; a log event says so |
+| `skills/`           | the agent directory is loaded as a local plugin, `_meta.claudeCode.options.plugins` | the link `.agents/skills` → `skills/`, where Codex looks in every workspace root | not passed     |
+| the agent directory | an extra workspace root, when the agent supports them                    | the same                                                                              | —              |
+
+The extra workspace root is what lets the agent read its skills and keep its memory bank in `memory/`.
+A `CODEX_CONFIG` of your own, in `env` or in the environment, is kept; a `developer_instructions` in it
+wins over `system-prompt.md`. The system prompt is read at every start, so an edit takes effect on a
+restart. A model the agent does not offer stops the start at once: a retry would not change the answer.
+
+### Lifecycle
+
+The states follow supervisord:
+
+| State      | Meaning                                                                         |
+|------------|---------------------------------------------------------------------------------|
+| `stopped`  | not started, or stopped by a person                                             |
+| `starting` | the process is up; `initialize` and the session are not done yet                |
+| `running`  | the session is ready for messages                                               |
+| `backoff`  | it stopped when it should not have; supavisor waits before the next try         |
+| `stopping` | being stopped by a person                                                       |
+| `exited`   | it stopped, and `restart` says to leave it so                                   |
+| `fatal`    | supavisor gave up; only a person starts it again                                |
+
+- **Restart policy.** `always` restarts after any exit, `on-failure` — after a non-zero exit code, a
+  lost heartbeat or a message that would not cancel, `never` — never.
+- **Backoff.** The first restart waits 1 s, every next one in a row twice as long, up to 15 s. A
+  process that lived 10 s counts as a good start, and the count starts over; the fourth failed start
+  in a row is `fatal`. So is a failure a retry cannot fix: a command that does not exist, a login the
+  agent wants, a model it refuses.
+- **The session survives a restart** when the agent can pick it up: `session/resume`, or else
+  `session/load` — the history it replays is not shown again. An agent that can do neither gets a new
+  session, and a log event says the context is lost. A message that was in work when the process died
+  fails; restarting does not send it again.
+- **Heartbeat.** ACP has none, so supavisor asks: from the answer to `initialize` on, it sends an
+  extension request every third of `heartbeatTimeoutSec`. Any message from the agent counts as a sign
+  of life, the "method not found" answer too. Silence longer than `heartbeatTimeoutSec` is a lost
+  agent: it is killed, and the policy decides the rest.
+- **Messages** sent while the agent is busy wait in line.
+- **Cancel** sends `session/cancel` and answers the open permission requests with `cancelled`. An agent
+  that does not end the message within 5 s is killed.
+- **Stop** cancels the message in work, then ends the process with SIGTERM and, 5 s later, SIGKILL —
+  to the whole process group, because the adapter starts `claude` or `codex`, and those start MCP
+  servers. **Restart** is stop and start, keeping the session.
+
+### Logs and events
+
+Everything a running agent says is kept in `logs/` of its directory: `acp.jsonl` — every ACP message
+both ways, a JSON line each, for debugging an adapter; `stderr.log` — what the agent writes to stderr.
+The files grow; nothing rotates them yet.
+
+In code, `LocalAgentProcess` (`src/local-agent.ts`) runs one agent. It is a `FleetAgent`, the same
+as a remote agent — see [One interface for every agent](#one-interface-for-every-agent).
+
 ## Talking to a remote agent
 
 supavisor speaks A2A through the official SDK, [`@a2a-js/sdk`](https://github.com/a2aproject/a2a-js),
 so the protocol details — transports, the `A2A-Version` header, version 0.3 of the protocol — are the
-SDK's and not supavisor's. For every remote agent the dashboard gets the same events as for a local one
-(`src/agent-events.ts`): the status of the agent and the pieces of the messages.
+SDK's and not supavisor's. In code it is `A2AAgent` (`src/a2a-agent.ts`), a `FleetAgent` like a local
+agent: the dashboard gets the same events and drives it the same way.
 
 - **The card.** It is read from `<url>/.well-known/agent-card.json`, or from `url` itself when that
   names a `.json` file. It is read once on connecting, not before every message: a card whose
@@ -181,6 +260,28 @@ Not done, on purpose:
   has no field for a key to trust yet.
 - **Security schemes of the card.** How supavisor proves itself is what the manifest says; the schemes
   the card declares are shown, not acted upon.
+
+## One interface for every agent
+
+The dashboard does not know whether an agent is a local process or a remote service: both are a
+`FleetAgent` (`src/agent-events.ts`) — `start`, `send`, `cancel`, `answerPermission`, `restart`, `stop`,
+`status` and `subscribe`. `send` resolves once the agent has taken the message; what comes of it arrives
+as events. Every event carries the agent id, a `seq` that grows by one per agent — so a consumer can ask
+for everything after N — and its time:
+
+| Event        | What it says                                                                                   |
+|--------------|------------------------------------------------------------------------------------------------|
+| `status`     | `starting`, `idle`, `working`, `waiting`, `error` or `stopped`, and why                        |
+| `message`    | a piece of a message: pieces with one `messageId` make one message, `append` adds to its end   |
+| `thought`    | a piece of the agent's reasoning                                                               |
+| `tool-call`  | a tool call started or changed                                                                 |
+| `permission` | the agent waits until a person picks an option                                                 |
+| `turn-end`   | the agent is done with a message: `end_turn`, `cancelled`, `error`, `input_required`, …        |
+| `log`        | a line of diagnostics                                                                          |
+| `raw`        | whatever else the protocol said, untouched                                                     |
+
+A kind of event one protocol has not got simply does not come from it: A2A has no thoughts, tool calls
+or permission requests — an A2A agent asks a person by pausing its task, and the next message answers.
 
 ## Why JSON
 

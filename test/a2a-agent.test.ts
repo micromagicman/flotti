@@ -63,8 +63,21 @@ function reaches(client: A2AAgent, status: AgentStatus): Promise<void> {
 function statuses(events: readonly DashboardEvent[]): string[] {
     return events.flatMap(event => event.type === 'status' ? [event.status] : []);
 }
+function turnEnds(events: readonly DashboardEvent[]): string[] {
+    return events.flatMap(event => event.type === 'turn-end' ? [event.reason] : []);
+}
 function messages(events: readonly DashboardEvent[]) {
     return events.flatMap(event => event.type === 'message' ? [{ role: event.role, text: event.text, append: event.append }] : []);
+}
+/** Waits until the condition holds, checking every 10 ms. */
+async function eventually(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+    const until = Date.now() + timeoutMs;
+    while (!condition()) {
+        if (Date.now() > until) {
+            throw new Error('the condition did not come true in time');
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+    }
 }
 /** Answers every message with one completed task that says the message back. */
 const echo: Script = async (context, bus) => {
@@ -188,6 +201,10 @@ describe('A2AAgent: talking', () => {
             { role: 'agent', text: ', world', append: true }
         ]);
         deepStrictEqual(statuses(events), ['starting', 'idle', 'working', 'idle']);
+        await eventually(() => turnEnds(events).length === 1);
+        deepStrictEqual(turnEnds(events), ['end_turn']);
+        deepStrictEqual(events.map(event => event.seq), events.map((_, index) => index + 1));
+        ok(events.every(event => event.agentId === 'fake'));
         deepStrictEqual(agent.methods(), ['SendStreamingMessage']);
     });
     it('keeps the conversation: the next message carries the context of the first', async () => {
@@ -224,6 +241,8 @@ describe('A2AAgent: a task waiting for input', () => {
         ok(events.some(event => event.type === 'status' && event.status === 'waiting' && event.reason === 'input required'));
         await client.send('the second');
         await reaches(client, 'idle');
+        await eventually(() => turnEnds(events).length === 2);
+        deepStrictEqual(turnEnds(events), ['input_required', 'end_turn']);
         const firstTask = (agent.received[0]?.params['message'] as { taskId?: string }).taskId;
         const answer = agent.received[1]?.params['message'] as { taskId?: string };
         strictEqual(firstTask, undefined);
@@ -338,6 +357,7 @@ describe('A2AAgent: cancel and stop', () => {
         await reaches(client, 'idle');
         ok(agent.methods().includes('CancelTask'));
         ok(events.some(event => event.type === 'status' && event.reason === 'canceled'));
+        await eventually(() => turnEnds(events).includes('cancelled'));
     });
     it('drops the queued messages when stopped', async () => {
         const agent = await fake({

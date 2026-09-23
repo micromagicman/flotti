@@ -13,7 +13,7 @@ import {
 } from '@a2a-js/sdk/client';
 import type { Client } from '@a2a-js/sdk/client';
 import { AgentEvents } from './agent-events.js';
-import type { AgentConnection, AgentEventListener, AgentStatus } from './agent-events.js';
+import type { AgentEventListener, AgentStatus, FleetAgent } from './agent-events.js';
 import type { Environment } from './manifest.js';
 import type { RemoteAgent, RemoteAuth } from './types.js';
 /**
@@ -88,7 +88,7 @@ const INTERRUPTED_STATES: readonly TaskState[] = [
  * offers (JSON-RPC or HTTP+JSON; A2A 0.3 agents are understood too), answers
  * are streamed when the agent can stream and polled when it cannot.
  */
-class A2AAgent implements AgentConnection {
+class A2AAgent implements FleetAgent {
     readonly agentId: string;
     private readonly agent: RemoteAgent;
     private readonly env: Environment;
@@ -99,7 +99,7 @@ class A2AAgent implements AgentConnection {
     private readonly reconnectDelayMs: number;
     private readonly reconnectDelayMaxMs: number;
     private readonly restartTimeoutMs: number;
-    private readonly events = new AgentEvents();
+    private readonly events: AgentEvents;
     private currentStatus: AgentStatus = 'stopped';
     private currentReason: string | undefined;
     private client: Client | undefined;
@@ -117,6 +117,7 @@ class A2AAgent implements AgentConnection {
     constructor(agent: RemoteAgent, options: A2AAgentOptions = {}) {
         this.agentId = agent.id;
         this.agent = agent;
+        this.events = new AgentEvents(agent.id);
         this.env = options.env ?? process.env;
         const base = options.fetch ?? globalThis.fetch;
         this.fetch = createAuthenticatingFetchWithRetry(base, {
@@ -181,6 +182,13 @@ class A2AAgent implements AgentConnection {
         if (this.task?.id === canceled.id) {
             this.apply({ payload: { $case: 'task', value: canceled } });
         }
+    }
+    /**
+     * A2A asks a person through the task itself — `input-required`, answered by
+     * the next message — so there is never a permission request to answer.
+     */
+    answerPermission(): boolean {
+        return false;
     }
     /**
      * Restarts the agent itself when its card offers the restart extension, and
@@ -280,19 +288,14 @@ class A2AAgent implements AgentConnection {
         };
         this.setStatus('working');
         try {
-            if (this.card?.streaming === true) {
-                await this.followStream(client, client.sendMessageStream(sendRequest(message), { signal }), signal, deliver);
-            } else {
-                const result = await client.sendMessage(sendRequest(message), { signal });
-                deliver();
-                const over = 'messageId' in result
-                    ? this.apply({ payload: { $case: 'message', value: result } })
-                    : this.apply({ payload: { $case: 'task', value: result } });
-                if (!over) {
-                    await this.poll(client, signal);
-                }
+            await this.exchange(client, message, signal, deliver);
+            if (delivered) {
+                this.events.emit({ type: 'turn-end', reason: signal.aborted ? 'cancelled' : this.turnEndReason() });
             }
         } catch (error) {
+            if (delivered) {
+                this.events.emit({ type: 'turn-end', reason: signal.aborted ? 'cancelled' : 'error' });
+            }
             if (signal.aborted) {
                 refused(error);
                 return;
@@ -301,6 +304,21 @@ class A2AAgent implements AgentConnection {
             refused(error);
         } finally {
             this.answering = undefined;
+        }
+    }
+    /** Sends the message and follows the answer, streamed or polled, until the turn is over. */
+    private async exchange(client: Client, message: Message, signal: AbortSignal, deliver: () => void): Promise<void> {
+        if (this.card?.streaming === true) {
+            await this.followStream(client, client.sendMessageStream(sendRequest(message), { signal }), signal, deliver);
+            return;
+        }
+        const result = await client.sendMessage(sendRequest(message), { signal });
+        deliver();
+        const over = 'messageId' in result
+            ? this.apply({ payload: { $case: 'message', value: result } })
+            : this.apply({ payload: { $case: 'task', value: result } });
+        if (!over) {
+            await this.poll(client, signal);
         }
     }
     /**
@@ -389,6 +407,27 @@ class A2AAgent implements AgentConnection {
                 }
                 progress.lastError = error;
             }
+        }
+    }
+    /**
+     * How the turn ended, in the words the event model shares with ACP. A turn
+     * without a task was answered with a message and is simply over.
+     */
+    private turnEndReason(): string {
+        switch (this.task?.state) {
+            case undefined:
+            case TaskState.TASK_STATE_COMPLETED:
+                return 'end_turn';
+            case TaskState.TASK_STATE_CANCELED:
+                return 'cancelled';
+            case TaskState.TASK_STATE_REJECTED:
+                return 'refusal';
+            case TaskState.TASK_STATE_INPUT_REQUIRED:
+                return 'input_required';
+            case TaskState.TASK_STATE_AUTH_REQUIRED:
+                return 'auth_required';
+            default:
+                return 'error';
         }
     }
     /** Whether the task of the turn has stopped or paused. */
