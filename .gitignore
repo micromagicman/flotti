@@ -1,5 +1,10 @@
 /.idea/
 /.vscode/
+/build/
+/build-test/
+/node_modules/
+/test-results/
+/playwright-report/
 
 *.iml
 .DS_Store
