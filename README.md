@@ -421,6 +421,9 @@ The page is React, built by Vite from `web/` into `build/web`, which the server 
 uses Playwright's Chromium — `npx playwright install chromium` once; `FLOTTI_E2E_CHROMIUM=<path>`
 points it at another Chromium instead.
 
+The `checks` workflow runs lint, types, the build, `npm test` and `test:e2e` on every pull request
+and on pushes to `main` and `develop`.
+
 ### Releasing
 
 Bump `version` in `package.json`, merge, then push a tag `v<version>` — the `publish` workflow
