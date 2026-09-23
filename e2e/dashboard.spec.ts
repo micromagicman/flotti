@@ -142,6 +142,56 @@ test('answers a permission request from the tab', async ({ page }) => {
     await feed(page, 'codex').getByRole('button', { name: 'Allow' }).click();
     await expect(feed(page, 'codex')).toContainText('permission: yes');
 });
+/**
+ * A pretend Notification, and a page that is out of sight: the headless
+ * browser neither shows notifications nor loses focus by itself.
+ */
+function pretendNotifications(permission: NotificationPermission): void {
+    type Shown = { title: string; body: string | undefined; closed: boolean };
+    const shown: Shown[] = [];
+    let current = permission;
+    class PretendNotification {
+        static get permission(): NotificationPermission {
+            return current;
+        }
+        static requestPermission(): Promise<NotificationPermission> {
+            current = 'granted';
+            return Promise.resolve(current);
+        }
+        onclick: (() => void) | null = null;
+        private readonly record: Shown;
+        constructor(title: string, options?: NotificationOptions) {
+            this.record = { title, body: options?.body, closed: false };
+            shown.push(this.record);
+        }
+        close(): void {
+            this.record.closed = true;
+        }
+    }
+    Object.assign(window, { Notification: PretendNotification, shownNotifications: shown });
+    document.hasFocus = () => false;
+}
+const notifications = (page: Page) => page.evaluate(() => (window as unknown as { shownNotifications: unknown[] }).shownNotifications);
+test('a waiting agent stands out, counts in the title and notifies while the page is out of sight', async ({ page }) => {
+    await page.addInitScript(pretendNotifications, 'granted');
+    await page.goto(url);
+    await expect(page).toHaveTitle('flotti');
+    await say(page, 'codex', 'permission');
+    await expect(tab(page, 'codex')).toHaveClass(/tab-waiting/);
+    await expect(page).toHaveTitle('(1) flotti');
+    await expect.poll(() => notifications(page)).toEqual([expect.objectContaining({ title: 'codex is waiting for you', closed: false })]);
+    await feed(page, 'codex').getByRole('button', { name: 'Allow' }).click();
+    await expect(feed(page, 'codex')).toContainText('permission: yes');
+    await expect(tab(page, 'codex')).not.toHaveClass(/tab-waiting/);
+    await expect(page).toHaveTitle('flotti');
+    await expect.poll(() => notifications(page)).toEqual([expect.objectContaining({ closed: true })]);
+});
+test('asks for permission to notify only when the person clicks for it', async ({ page }) => {
+    await page.addInitScript(pretendNotifications, 'default');
+    await page.goto(url);
+    await page.getByRole('button', { name: 'Notify me' }).click();
+    await expect(page.getByRole('button', { name: 'Notify me' })).toHaveCount(0);
+});
 test('the restart button restarts a local agent and starts over with a remote one', async ({ page }) => {
     await page.goto(url);
     const before = starts('claude');

@@ -5,5 +5,5 @@
         "outDir": "build-test",
         "declaration": false
     },
-    "include": ["src", "test", "web/src/feed.ts"]
+    "include": ["src", "test", "web/src/feed.ts", "web/src/attention.ts"]
 }
