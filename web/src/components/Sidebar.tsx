@@ -8,9 +8,10 @@ type SidebarProps = {
     readonly seenSeq: Readonly<Record<string, number>>;
     readonly selected: string;
     readonly broadcastId: string;
+    readonly settingsId: string;
     readonly onSelect: (tab: string) => void;
 };
-function Sidebar({ agents, feeds, seenSeq, selected, broadcastId, onSelect }: SidebarProps) {
+function Sidebar({ agents, feeds, seenSeq, selected, broadcastId, settingsId, onSelect }: SidebarProps) {
     return (
         <nav className="sidebar" role="tablist" aria-label="Agents" aria-orientation="vertical">
             <button
@@ -45,6 +46,16 @@ function Sidebar({ agents, feeds, seenSeq, selected, broadcastId, onSelect }: Si
                     </button>
                 );
             })}
+            <button
+                type="button"
+                role="tab"
+                className="tab tab-settings"
+                aria-selected={selected === settingsId}
+                onClick={() => onSelect(settingsId)}
+            >
+                <span className="tab-name">Settings</span>
+                <span className="tab-hint">Fleet and agents</span>
+            </button>
         </nav>
     );
 }

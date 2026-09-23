@@ -74,8 +74,8 @@ type RemoteAgent = AgentBase & {
     readonly auth: RemoteAuth;
 };
 type Agent = LocalAgent | RemoteAgent;
-/** Which of the three ways gave flotti the fleet directory. */
-type FleetSource = 'argument' | 'environment' | 'default';
+/** Which of the four ways gave flotti the fleet directory: `settings` is the one the dashboard saved. */
+type FleetSource = 'argument' | 'environment' | 'settings' | 'default';
 /** Fleet directory flotti decided to read, and why that one. */
 type FleetLocation = {
     /** Absolute path, with `~` already expanded. */

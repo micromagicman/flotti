@@ -6,7 +6,7 @@
  */
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,7 +47,11 @@ async function remoteAgent(fleet: string, id: string): Promise<void> {
     writeFileSync(join(directory, 'agent.json'), JSON.stringify({ name: id, url: remote.url }));
 }
 function startFlotti(fleet: string): Promise<string> {
-    flotti = spawn(process.execPath, [CLI, 'run', '--fleet', fleet, '--port', '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    // A home of its own: the settings page saves the fleet directory in ~/.flotti/settings.json.
+    flotti = spawn(process.execPath, [CLI, 'run', '--fleet', fleet, '--port', '0'], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, HOME: workspace, USERPROFILE: workspace }
+    });
     let output = '';
     return new Promise((resolve, reject) => {
         const read = (chunk: Buffer): void => {
@@ -90,7 +94,7 @@ async function say(page: Page, name: string, text: string): Promise<void> {
 }
 test('every agent has a tab with its status', async ({ page }) => {
     await page.goto(url);
-    await expect(page.getByRole('tab')).toHaveText([/All agents/, /claude/, /codex/, /eva/]);
+    await expect(page.getByRole('tab')).toHaveText([/All agents/, /claude/, /codex/, /eva/, /Settings/]);
     for (const name of ['claude', 'codex', 'eva']) {
         await expect(tab(page, name).locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     }
@@ -147,4 +151,85 @@ test('a page opened later gets the history', async ({ page }) => {
     await page.goto(`${url}#/claude`);
     await expect(feed(page, 'claude')).toContainText('you said: hello claude');
     await expect(feed(page, 'claude')).toContainText('you said: ping');
+});
+const settingsRow = (page: Page, id: string) => page.getByRole('list', { name: 'Agents' }).locator(`[data-agent="${id}"]`);
+const field = (page: Page, label: string) => page.getByLabel(label, { exact: true });
+test('adds a local agent in the settings, with no file edited by hand, and it answers in its tab', async ({ page }) => {
+    await page.goto(url);
+    await tab(page, 'Settings').click();
+    await page.getByRole('button', { name: 'Add local agent' }).click();
+    const form = page.getByRole('form', { name: 'New local agent' });
+    await field(page, 'Id').fill('helper');
+    await field(page, 'Name').fill('helper');
+    await field(page, 'Adapter').selectOption({ label: 'Plain ACP' });
+    await field(page, 'Command').fill(process.execPath);
+    await field(page, 'Arguments').fill(FAKE_ACP);
+    const record = join(workspace, 'fleet', 'local', 'helper', 'record.jsonl');
+    await field(page, 'Environment').fill(`FAKE_ACP=${JSON.stringify({ record })}`);
+    await field(page, 'System prompt').fill('Help the others.');
+    await form.getByRole('button', { name: 'Add agent' }).click();
+    await expect(settingsRow(page, 'helper').locator('[data-status]')).toHaveAttribute('data-status', 'idle');
+    const manifest = JSON.parse(readFileSync(join(workspace, 'fleet', 'local', 'helper', 'agent.json'), 'utf8')) as Record<string, unknown>;
+    expect(manifest).toEqual({ name: 'helper', command: process.execPath, arguments: [FAKE_ACP], env: { FAKE_ACP: JSON.stringify({ record }) } });
+    expect(readFileSync(join(workspace, 'fleet', 'local', 'helper', 'system-prompt.md'), 'utf8')).toBe('Help the others.\n');
+    await say(page, 'helper', 'hello helper');
+    await expect(feed(page, 'helper')).toContainText('you said: hello helper');
+});
+test('refuses an agent flotti run would refuse, and says why', async ({ page }) => {
+    await page.goto(`${url}#/_settings`);
+    await page.getByRole('button', { name: 'Add remote agent' }).click();
+    await field(page, 'Id').fill('broken');
+    await field(page, 'URL').fill('ftp://nowhere');
+    await page.getByRole('button', { name: 'Add agent' }).click();
+    await expect(page.getByRole('alert')).toContainText('url must be an http: or https: address');
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(settingsRow(page, 'broken')).toHaveCount(0);
+});
+test('changes an agent in the settings, and it runs on with the change', async ({ page }) => {
+    await page.goto(`${url}#/_settings`);
+    const before = starts('helper');
+    await settingsRow(page, 'helper').getByRole('button', { name: 'Edit' }).click();
+    await expect(field(page, 'System prompt')).toHaveValue('Help the others.\n');
+    await field(page, 'Name').fill('Helper Two');
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(tab(page, 'Helper Two')).toBeVisible();
+    await expect.poll(() => starts('helper')).toBe(before + 1);
+    await expect(settingsRow(page, 'helper').locator('[data-status]')).toHaveAttribute('data-status', 'idle');
+    await say(page, 'Helper Two', 'still you?');
+    await expect(feed(page, 'Helper Two')).toContainText('you said: still you?');
+    await expect(feed(page, 'Helper Two')).toContainText('you said: hello helper');
+});
+test('stops and starts an agent from the settings', async ({ page }) => {
+    await page.goto(`${url}#/_settings`);
+    const row = settingsRow(page, 'helper');
+    await row.getByRole('button', { name: 'Stop', exact: true }).click();
+    await expect(row.locator('[data-status]')).toHaveAttribute('data-status', 'stopped');
+    const before = starts('helper');
+    await row.getByRole('button', { name: 'Start', exact: true }).click();
+    await expect(row.locator('[data-status]')).toHaveAttribute('data-status', 'idle');
+    expect(starts('helper')).toBe(before + 1);
+});
+test('deletes an agent: it stops, and its directory goes to .trash', async ({ page }) => {
+    await page.goto(`${url}#/_settings`);
+    const row = settingsRow(page, 'helper');
+    await row.getByRole('button', { name: 'Delete' }).click();
+    await row.getByRole('button', { name: 'Delete' }).click();
+    await expect(row).toHaveCount(0);
+    await expect(tab(page, 'Helper Two')).toHaveCount(0);
+    expect(existsSync(join(workspace, 'fleet', 'local', 'helper'))).toBe(false);
+    expect(readdirSync(join(workspace, 'fleet', '.trash')).some((name) => name.startsWith('local-helper-'))).toBe(true);
+});
+test('switches the fleet directory, and saves it for the next run', async ({ page }) => {
+    const next = join(workspace, 'fleet-next');
+    localAgent(next, 'newcomer');
+    await page.goto(`${url}#/_settings`);
+    await field(page, 'Fleet directory path').fill(next);
+    await page.getByRole('button', { name: 'Switch' }).click();
+    await expect(page.getByRole('tab')).toHaveText([/All agents/, /newcomer/, /Settings/]);
+    await expect(settingsRow(page, 'newcomer').locator('[data-status]')).toHaveAttribute('data-status', 'idle');
+    await expect(page.getByRole('form', { name: 'Fleet directory' })).toContainText(`${next} — saved in`);
+    const saved = JSON.parse(readFileSync(join(workspace, '.flotti', 'settings.json'), 'utf8')) as { fleet: string };
+    expect(saved.fleet).toBe(next);
+    expect(existsSync(join(next, '.flotti-run.json'))).toBe(true);
+    expect(existsSync(join(workspace, 'fleet', '.flotti-run.json'))).toBe(false);
 });

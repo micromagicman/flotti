@@ -6,7 +6,9 @@ import type { Agent, Fleet } from './types.js';
 /** What the supervisor says besides the agents' own events. */
 type SupervisorNotice =
     | { readonly type: 'event'; readonly event: AgentEvent }
-    | { readonly type: 'delivery'; readonly delivery: Delivery };
+    | { readonly type: 'delivery'; readonly delivery: Delivery }
+    /** An agent was added, changed or removed, or the whole fleet was replaced. */
+    | { readonly type: 'fleet'; readonly agents: readonly AgentSummary[] };
 type SupervisorListener = (notice: SupervisorNotice) => void;
 type SupervisorOptions = {
     /** How an agent of the fleet becomes a running one; tests put their own in. */
@@ -21,6 +23,13 @@ type Member = {
     readonly agent: Agent;
     readonly running: FleetAgent;
     readonly history: AgentEvent[];
+    /**
+     * Added to the numbers of the running agent's events. A changed agent is a
+     * new running one that counts from one again; the offset keeps the numbers
+     * of its id growing, so a page that has seen N still gets what comes next.
+     */
+    readonly offset: number;
+    unsubscribe: () => void;
 };
 /** An agent the request names that is not in the fleet. */
 class UnknownAgentError extends Error {}
@@ -30,36 +39,52 @@ function defaultAgent(agent: Agent): FleetAgent {
 function describeError(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
+/** Local agents first, then remote ones, each group by id — the order of the fleet directory. */
+function fleetOrder(left: Agent, right: Agent): number {
+    if (left.kind !== right.kind) {
+        return left.kind === 'local' ? -1 : 1;
+    }
+    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+}
 /**
  * The fleet at work: every agent started, its events numbered and kept, so a
  * page that connects later — or loses its connection for a while — gets what
  * it missed. It is the one source of truth; pages only subscribe to it.
+ *
+ * The fleet changes while it runs: the settings page adds, changes and
+ * removes agents, and may point flotti at another fleet directory altogether.
  */
 class Supervisor {
     private readonly members = new Map<string, Member>();
     private readonly listeners = new Set<SupervisorListener>();
+    private readonly createAgent: (agent: Agent) => FleetAgent;
     private readonly historyLimit: number;
     private readonly queuedAfterMs: number;
-    private readonly unsubscribe: (() => void)[] = [];
+    /** Last number given to an event of each id, kept when the agent goes: numbers of an id only grow. */
+    private readonly lastSeq = new Map<string, number>();
     constructor(fleet: Fleet, options: SupervisorOptions = {}) {
-        const createAgent = options.createAgent ?? defaultAgent;
+        this.createAgent = options.createAgent ?? defaultAgent;
         this.historyLimit = options.historyLimit ?? 5000;
         this.queuedAfterMs = options.queuedAfterMs ?? 500;
         for (const agent of fleet.agents) {
-            const member: Member = { agent, running: createAgent(agent), history: [] };
-            this.members.set(agent.id, member);
-            this.unsubscribe.push(member.running.subscribe((event) => this.keep(member, event)));
+            this.join(agent, []);
         }
     }
     /** The agents in fleet order: local first, then remote, each by id. */
     agents(): AgentSummary[] {
-        return [...this.members.values()].map(({ agent, running }) => ({
-            id: agent.id,
-            name: agent.name,
-            kind: agent.kind,
-            ...(agent.description === undefined ? {} : { description: agent.description }),
-            status: running.status
-        }));
+        return [...this.members.values()]
+            .sort((left, right) => fleetOrder(left.agent, right.agent))
+            .map(({ agent, running }) => ({
+                id: agent.id,
+                name: agent.name,
+                kind: agent.kind,
+                ...(agent.description === undefined ? {} : { description: agent.description }),
+                status: running.status
+            }));
+    }
+    /** The agent as its manifest describes it. */
+    agent(agentId: string): Agent {
+        return this.member(agentId).agent;
     }
     /** Kept events of the agent that came after `afterSeq`, oldest first. */
     history(agentId: string, afterSeq = 0): AgentEvent[] {
@@ -82,10 +107,71 @@ class Supervisor {
     }
     /** Stops every agent: local processes end, remote connections close. */
     async stop(): Promise<void> {
-        await Promise.all([...this.members.values()].map(({ running }) => running.stop().catch(() => undefined)));
-        for (const stop of this.unsubscribe.splice(0)) {
-            stop();
+        const members = [...this.members.values()];
+        await Promise.all(members.map(({ running }) => running.stop().catch(() => undefined)));
+        for (const member of members) {
+            member.unsubscribe();
         }
+    }
+    /** Starts one agent; resolves once it can take messages, or rejects saying why it cannot. */
+    startAgent(agentId: string): Promise<void> {
+        return this.member(agentId).running.start();
+    }
+    /** Stops one agent; it stays stopped until it is started again. */
+    stopAgent(agentId: string): Promise<void> {
+        return this.member(agentId).running.stop();
+    }
+    /**
+     * Takes a new agent into the fleet and starts it, as `flotti run` starts
+     * every agent. Returns once it is in the fleet, not once it has started:
+     * its status says how that goes.
+     */
+    add(agent: Agent): void {
+        if (this.members.has(agent.id)) {
+            throw new Error(`There is an agent "${agent.id}" in the fleet already.`);
+        }
+        const member = this.join(agent, []);
+        this.announce();
+        void member.running.start().catch(() => undefined);
+    }
+    /**
+     * Puts a changed manifest to work. The agent is stopped and runs on with the
+     * new one — started again unless it had been stopped on purpose — and keeps
+     * its history: its tab goes on where it was.
+     */
+    async replace(agent: Agent): Promise<void> {
+        const old = this.member(agent.id);
+        const wasStopped = old.running.status === 'stopped';
+        await old.running.stop().catch(() => undefined);
+        old.unsubscribe();
+        const member = this.join(agent, old.history);
+        this.announce();
+        if (!wasStopped) {
+            void member.running.start().catch(() => undefined);
+        }
+    }
+    /** Stops the agent and lets it go: it is no longer in the fleet. */
+    async remove(agentId: string): Promise<void> {
+        const member = this.member(agentId);
+        this.members.delete(agentId);
+        await member.running.stop().catch(() => undefined);
+        member.unsubscribe();
+        this.announce();
+    }
+    /**
+     * Stops every agent and works with another fleet from now on: the settings
+     * page pointed flotti at another fleet directory. Resolves once the old
+     * agents are stopped and the new ones are starting; their statuses say how
+     * that goes.
+     */
+    async load(fleet: Fleet): Promise<void> {
+        await this.stop();
+        this.members.clear();
+        for (const agent of fleet.agents) {
+            this.join(agent, []);
+        }
+        this.announce();
+        void this.start();
     }
     /** Sends a message to one agent; says whether it was taken, waits in line, or failed. */
     send(agentId: string, text: string): Promise<Delivery> {
@@ -120,7 +206,24 @@ class Supervisor {
         }
         return member;
     }
-    private keep(member: Member, event: AgentEvent): void {
+    private join(agent: Agent, history: AgentEvent[]): Member {
+        const member: Member = {
+            agent,
+            running: this.createAgent(agent),
+            history,
+            offset: this.lastSeq.get(agent.id) ?? 0,
+            unsubscribe: () => undefined
+        };
+        this.members.set(agent.id, member);
+        member.unsubscribe = member.running.subscribe((event) => this.keep(member, event));
+        return member;
+    }
+    private announce(): void {
+        this.notify({ type: 'fleet', agents: this.agents() });
+    }
+    private keep(member: Member, received: AgentEvent): void {
+        const event = member.offset === 0 ? received : { ...received, seq: received.seq + member.offset };
+        this.lastSeq.set(event.agentId, event.seq);
         member.history.push(event);
         if (member.history.length > this.historyLimit) {
             member.history.splice(0, member.history.length - this.historyLimit);

@@ -8,6 +8,7 @@
  * while the socket only carries what the agents do.
  */
 import type { AgentEvent, AgentStatus } from './agent-events.js';
+import type { FleetSource, LocalAgentAdapter, RemoteAuth, RestartPolicy } from './types.js';
 /** An agent of the fleet as the page lists it. */
 type AgentSummary = {
     readonly id: string;
@@ -27,7 +28,7 @@ type ClientMessage = {
 };
 /** What the server sends over the socket. */
 type ServerMessage =
-    /** First message of every connection: the fleet as it is now. */
+    /** First message of every connection, and again whenever an agent is added, changed or removed. */
     | { readonly type: 'fleet'; readonly agents: readonly AgentSummary[] }
     /** One event of one agent, from history or live; `seq` tells which. */
     | { readonly type: 'event'; readonly event: AgentEvent }
@@ -62,17 +63,76 @@ type Delivery = {
 type BroadcastResponse = {
     readonly deliveries: readonly Delivery[];
 };
+/** The fleet directory: `GET /api/fleet`, and the answer to `PUT /api/fleet`. */
+type FleetInfo = {
+    /** Absolute path of the fleet directory this run works with. */
+    readonly path: string;
+    readonly source: FleetSource;
+    /**
+     * Set when the run was started with `--fleet` or `FLOTTI_FLEET`: that
+     * wins over the saved directory, so the next run started the same way
+     * opens that one again.
+     */
+    readonly pinnedBy?: 'argument' | 'environment';
+    /** Where the chosen directory is saved; absent without a home directory. */
+    readonly settingsFile?: string;
+};
+/** Body of `PUT /api/fleet`: the directory to work with from now on. */
+type FleetSwitch = {
+    /** Absolute, or starting with `~`. */
+    readonly path: string;
+};
+/**
+ * The manifest of a local agent as the settings page edits it: the fields of
+ * `agent.json` as they are written in the file — defaults are not filled in —
+ * and the system prompt. A field left out is left out of the file.
+ */
+type LocalAgentConfig = {
+    readonly kind: 'local';
+    readonly id: string;
+    readonly name?: string;
+    readonly description?: string;
+    readonly adapter?: LocalAgentAdapter;
+    readonly model?: string;
+    readonly command: string;
+    readonly arguments?: readonly string[];
+    readonly workdir?: string;
+    readonly env?: Readonly<Record<string, string>>;
+    readonly restart?: RestartPolicy;
+    readonly heartbeatTimeoutSec?: number;
+    /** Text of `system-prompt.md`; empty or absent means no such file. */
+    readonly systemPrompt?: string;
+};
+/** The manifest of a remote agent as the settings page edits it. */
+type RemoteAgentConfig = {
+    readonly kind: 'remote';
+    readonly id: string;
+    readonly name?: string;
+    readonly description?: string;
+    readonly url: string;
+    readonly auth?: RemoteAuth;
+};
+/**
+ * Body of `POST /api/agents` (a new agent) and of `PUT /api/agents/<id>`
+ * (a change), and the answer to `GET /api/agents/<id>`.
+ */
+type AgentConfig = LocalAgentConfig | RemoteAgentConfig;
 /** Answer to any request that went wrong. */
 type ErrorResponse = {
     readonly error: string;
 };
 export type {
+    AgentConfig,
     AgentSummary,
     BroadcastResponse,
     ClientMessage,
     Delivery,
     ErrorResponse,
+    FleetInfo,
+    FleetSwitch,
+    LocalAgentConfig,
     PermissionAnswer,
+    RemoteAgentConfig,
     SendRequest,
     ServerMessage
 };

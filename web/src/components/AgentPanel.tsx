@@ -23,6 +23,7 @@ function useAction(): [string | undefined, (action: () => Promise<unknown>) => v
 function AgentHeader({ agent, feed }: { readonly agent: AgentSummary; readonly feed: AgentFeed }) {
     const [error, run] = useAction();
     const busy = feed.status === 'working' || feed.status === 'waiting';
+    const stopped = feed.status === 'stopped' || feed.status === 'error';
     return (
         <header className="agent-header">
             <div className="agent-title">
@@ -34,6 +35,9 @@ function AgentHeader({ agent, feed }: { readonly agent: AgentSummary; readonly f
             {agent.description === undefined ? null : <p className="description">{agent.description}</p>}
             <div className="actions">
                 {busy ? <button type="button" onClick={() => run(() => api.cancel(agent.id))}>Cancel</button> : null}
+                {stopped
+                    ? <button type="button" onClick={() => run(() => api.start(agent.id))}>Start</button>
+                    : <button type="button" onClick={() => run(() => api.stop(agent.id))}>Stop</button>}
                 <button type="button" onClick={() => run(() => api.restart(agent.id))}>Restart</button>
             </div>
             {error === undefined ? null : <p className="error" role="alert">{error}</p>}

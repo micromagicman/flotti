@@ -10,6 +10,7 @@ import {
     readRemoteManifest
 } from './manifest.js';
 import type { Environment, ManifestContext } from './manifest.js';
+import { readSettings } from './settings.js';
 import type { Agent, Fleet, FleetLocation, LocalAgent } from './types.js';
 /** Command line argument that points flotti at a fleet directory. */
 const FLEET_PATH_ARGUMENT = '--fleet';
@@ -37,7 +38,8 @@ type LoadFleetOptions = ResolveFleetOptions & {
 };
 /**
  * Decides which fleet directory to read: the argument wins over the
- * environment variable, the variable wins over the default path. `~` is
+ * environment variable, the variable over the directory the dashboard saved
+ * in the settings, and that over the default path. `~` is
  * expanded here and not by the shell, because under `npx` there is no shell
  * to do it.
  */
@@ -52,6 +54,10 @@ function resolveFleetLocation(options: ResolveFleetOptions = {}): FleetLocation 
     const fromEnvironment = env[FLEET_PATH_VARIABLE]?.trim();
     if (fromEnvironment !== undefined && fromEnvironment !== '') {
         return { path: absolutePath(fromEnvironment, env, cwd), source: 'environment' };
+    }
+    const saved = readSettings(env).fleet;
+    if (saved !== undefined) {
+        return { path: absolutePath(saved, env, cwd), source: 'settings' };
     }
     return { path: absolutePath(DEFAULT_FLEET_PATH, env, cwd), source: 'default' };
 }
@@ -68,7 +74,7 @@ function loadFleet(options: LoadFleetOptions = {}): Fleet {
     const readFile = options.readFile ?? readFileFromDisk;
     const root = inspect(location.path);
     if (root === undefined) {
-        if (location.source !== 'default') {
+        if (location.source === 'argument' || location.source === 'environment') {
             throw new ConfigurationError('missing-fleet', `Fleet directory not found: ${location.path}`, {
                 path: location.path,
                 hint: `It was named by ${location.source === 'argument' ? FLEET_PATH_ARGUMENT : FLEET_PATH_VARIABLE}; `
@@ -93,20 +99,35 @@ function loadFleet(options: LoadFleetOptions = {}): Fleet {
  * @throws ConfigurationError when one of them is taken by something that is not a directory.
  */
 function prepareFleet(fleet: Fleet): string[] {
+    return fleet.agents.flatMap((agent: Agent) => prepareAgent(agent));
+}
+/** {@link prepareFleet} for one agent; nothing to do for a remote one. */
+function prepareAgent(agent: Agent): string[] {
+    if (agent.kind !== 'local') {
+        return [];
+    }
     const created: string[] = [];
-    const local = fleet.agents.filter((agent: Agent): agent is LocalAgent => agent.kind === 'local');
-    for (const agent of local) {
-        for (const directory of [agent.skillsDirectory, agent.memoryDirectory]) {
-            const found = inspect(directory);
-            if (found === undefined) {
-                mkdirSync(directory, { recursive: true });
-                created.push(directory);
-            } else {
-                requireDirectory(found, directory, `a directory of agent "${agent.id}"`);
-            }
+    for (const directory of [agent.skillsDirectory, agent.memoryDirectory]) {
+        const found = inspect(directory);
+        if (found === undefined) {
+            mkdirSync(directory, { recursive: true });
+            created.push(directory);
+        } else {
+            requireDirectory(found, directory, `a directory of agent "${agent.id}"`);
         }
     }
     return created;
+}
+/**
+ * Reads one agent of the fleet from its directory, the way {@link loadFleet}
+ * reads each of them.
+ *
+ * @throws ConfigurationError with a message a human can act on.
+ */
+function readAgent(root: string, kind: Agent['kind'], id: string, env: Environment = process.env): Agent {
+    const group = kind === 'local' ? LOCAL_DIRECTORY : REMOTE_DIRECTORY;
+    const found = manifest(root, group, id, env, readFileFromDisk);
+    return kind === 'local' ? readLocalManifest(...found) : readRemoteManifest(...found);
 }
 function manifest(
     root: string,
@@ -296,13 +317,16 @@ function parseManifest(contents: string, path: string): unknown {
     }
 }
 export {
+    AGENT_ID,
     DEFAULT_FLEET_PATH,
     FLEET_PATH_ARGUMENT,
     FLEET_PATH_VARIABLE,
     LOCAL_DIRECTORY,
     REMOTE_DIRECTORY,
     loadFleet,
+    prepareAgent,
     prepareFleet,
+    readAgent,
     resolveFleetLocation
 };
 export type { LoadFleetOptions, ResolveFleetOptions };

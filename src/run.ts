@@ -5,6 +5,7 @@ import { ConfigurationError } from './errors.js';
 import { DEFAULT_HOST, DEFAULT_PORT, startDashboard } from './dashboard-server.js';
 import type { DashboardOptions } from './dashboard-server.js';
 import { loadFleet, prepareFleet } from './fleet.js';
+import { FleetSettings } from './fleet-settings.js';
 import type { LoadFleetOptions } from './fleet.js';
 import { Supervisor } from './supervisor.js';
 import type { SupervisorOptions } from './supervisor.js';
@@ -43,6 +44,9 @@ type Running = {
 };
 function runFile(fleet: Fleet): string {
     return join(fleet.location.path, RUN_FILE);
+}
+function writeRecord(path: string, record: RunRecord): void {
+    writeFileSync(path, `${JSON.stringify(record, null, 4)}\n`, { mode: 0o600 });
 }
 function readRecord(path: string): RunRecord | undefined {
     try {
@@ -107,6 +111,34 @@ function claimFleet(fleet: Fleet): string {
     return path;
 }
 /**
+ * The run file of this run. It follows the fleet: when the settings page
+ * points the run at another fleet directory, the file moves there, so
+ * `flotti stop` finds the run by the directory it now works with.
+ */
+class RunFile {
+    private record: RunRecord | undefined;
+    constructor(private path: string, private readonly token: string) {}
+    write(record: RunRecord): void {
+        this.record = record;
+        writeRecord(this.path, record);
+    }
+    /** @throws ConfigurationError when another flotti runs that fleet. */
+    move(fleet: Fleet): void {
+        const target = claimFleet(fleet);
+        if (this.record !== undefined) {
+            writeRecord(target, this.record);
+        }
+        this.remove();
+        this.path = target;
+    }
+    /** Removes the file, unless it is not ours any more. */
+    remove(): void {
+        if (readRecord(this.path)?.token === this.token) {
+            rmSync(this.path, { force: true });
+        }
+    }
+}
+/**
  * `flotti run`: reads the fleet, starts every agent, serves the dashboard on
  * localhost and writes the run file for `flotti stop`. Returns once the
  * dashboard listens; the agents keep starting in the background.
@@ -117,20 +149,24 @@ async function runFleet(options: RunOptions = {}): Promise<Running> {
     const fleet = loadFleet(options);
     const created = prepareFleet(fleet);
     const port = options.dashboard?.port ?? dashboardPort(argv, options.env ?? process.env);
-    const path = claimFleet(fleet);
     const token = randomBytes(24).toString('hex');
+    const file = new RunFile(claimFleet(fleet), token);
     const supervisor = new Supervisor(fleet, options.supervisor);
+    const settings = new FleetSettings(fleet, supervisor, {
+        env: options.env ?? process.env,
+        onSwitch: (next) => file.move(next)
+    });
     let requestStop = (): void => undefined;
     const dashboard = await startDashboard(supervisor, {
         host: DEFAULT_HOST,
+        settings,
         ...options.dashboard,
         port,
         shutdown: { token, onRequest: () => requestStop() }
     }).catch((error: unknown) => {
         throw describeListenError(error, port);
     });
-    const record: RunRecord = { pid: process.pid, url: dashboard.url, token, startedAt: new Date().toISOString() };
-    writeFileSync(path, `${JSON.stringify(record, null, 4)}\n`, { mode: 0o600 });
+    file.write({ pid: process.pid, url: dashboard.url, token, startedAt: new Date().toISOString() });
     for (const line of created) {
         print(`Created ${line}`);
     }
@@ -142,9 +178,7 @@ async function runFleet(options: RunOptions = {}): Promise<Running> {
         stopping ??= (async () => {
             await dashboard.close();
             await supervisor.stop();
-            if (readRecord(path)?.token === token) {
-                rmSync(path, { force: true });
-            }
+            file.remove();
         })();
         return stopping;
     };
