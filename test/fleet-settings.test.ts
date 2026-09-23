@@ -7,6 +7,9 @@ import type { AgentConfig } from '../src/dashboard-protocol.js';
 import { ConfigurationError } from '../src/errors.js';
 import { loadFleet, resolveFleetLocation } from '../src/fleet.js';
 import { FleetSettings, TRASH_DIRECTORY } from '../src/fleet-settings.js';
+import type { FleetSettingsOptions } from '../src/fleet-settings.js';
+import { SshError } from '../src/ssh.js';
+import type { PublishedAgent, SshTarget } from '../src/ssh.js';
 import { readSettings } from '../src/settings.js';
 import { Supervisor } from '../src/supervisor.js';
 import type { Fleet } from '../src/types.js';
@@ -15,7 +18,7 @@ const workspace = mkdtempSync(join(tmpdir(), 'flotti-settings-'));
 after(() => rmSync(workspace, { recursive: true, force: true }));
 let made = 0;
 /** A home directory of its own and a fleet in it, run by a supervisor of fake agents. */
-function setUp(write?: (root: string) => void) {
+function setUp(write?: (root: string) => void, options: Pick<FleetSettingsOptions, 'discover'> = {}) {
     const home = join(workspace, `home-${++made}`);
     const root = join(home, 'fleet');
     mkdirSync(root, { recursive: true });
@@ -30,7 +33,7 @@ function setUp(write?: (root: string) => void) {
     };
     const supervisor = new Supervisor(fleet, { createAgent });
     const switched: Fleet[] = [];
-    const settings = new FleetSettings(fleet, supervisor, { env, onSwitch: (next) => switched.push(next) });
+    const settings = new FleetSettings(fleet, supervisor, { env, onSwitch: (next) => switched.push(next), ...options });
     return { home, root, env, supervisor, settings, fakes, switched };
 }
 function manifestAt(root: string, group: string, id: string): Record<string, unknown> {
@@ -191,5 +194,55 @@ describe('FleetSettings: the fleet directory', () => {
         });
         await rejects(settings.switchTo({ path: join(home, 'taken') }), /already runs/);
         strictEqual(settings.info().path, root);
+    });
+});
+describe('FleetSettings: a remote agent in one step, from user@host', () => {
+    const EVA: PublishedAgent = { id: 'eva', name: 'Eva', description: 'AI teammate', url: 'http://127.0.0.1:18741/', token: 'never-written' };
+    test('adds every agent the host publishes, reached over SSH, and starts it', async () => {
+        const asked: SshTarget[] = [];
+        const { root, settings, fakes } = setUp(undefined, {
+            discover: async (target) => {
+                asked.push(target);
+                return [EVA, { id: 'cutie', url: 'http://127.0.0.1:18742/' }];
+            }
+        });
+        const answer = await settings.addOverSsh({ target: ' eva@example.org ' });
+        deepStrictEqual(asked, [{ destination: 'eva@example.org', host: 'example.org' }]);
+        deepStrictEqual(answer.added.map((agent) => [agent.id, agent.name, agent.kind]), [['eva', 'Eva', 'remote'], ['cutie', 'cutie', 'remote']]);
+        deepStrictEqual(manifestAt(root, 'remote', 'eva'), {
+            name: 'Eva',
+            description: 'AI teammate',
+            ssh: { target: 'eva@example.org', agent: 'eva' }
+        });
+        ok(!readFileSync(join(root, 'remote', 'eva', 'agent.json'), 'utf8').includes('never-written'), 'the token stays out of the manifest');
+        await settled();
+        strictEqual(fakes.get('eva')?.status, 'idle');
+    });
+    test('skips the agents already in the fleet, and gives a taken id the host name', async () => {
+        const { root, settings } = setUp((fleet) => {
+            writeAgent(fleet, 'remote', 'eva', { ssh: { target: 'eva@example.org', agent: 'eva' } });
+            writeAgent(fleet, 'local', 'cutie', { command: 'cutie' });
+        }, { discover: async () => [EVA, { id: 'cutie', url: 'http://127.0.0.1:18742/' }] });
+        const answer = await settings.addOverSsh({ target: 'eva@example.org' });
+        deepStrictEqual(answer.added.map((agent) => agent.id), ['cutie-example.org']);
+        deepStrictEqual(answer.present, ['eva']);
+        deepStrictEqual(manifestAt(root, 'remote', 'cutie-example.org')['ssh'], { target: 'eva@example.org', agent: 'cutie' });
+        await rejects(settings.addOverSsh({ target: 'eva@example.org' }), (error: unknown) =>
+            error instanceof ConfigurationError && error.kind === 'duplicate-agent-id'
+            && /Every agent eva@example\.org publishes is in the fleet already: eva, cutie-example\.org/.test(error.message));
+    });
+    test('says why when the host cannot be asked, or publishes nothing', async () => {
+        const refused = setUp(undefined, {
+            discover: async () => {
+                throw new SshError('eva@example.org did not accept the SSH key');
+            }
+        });
+        await rejects(refused.settings.addOverSsh({ target: 'eva@example.org' }), (error: unknown) =>
+            error instanceof ConfigurationError && error.kind === 'ssh-failed' && /did not accept the SSH key\.$/.test(error.message));
+        const empty = setUp(undefined, { discover: async () => [] });
+        await rejects(empty.settings.addOverSsh({ target: 'eva@example.org' }), /publishes no agent: ~\/\.flotti\/a2a\/ on it has no \.json file/);
+        await rejects(empty.settings.addOverSsh({ target: '-oProxyCommand=x' }), /is not an SSH address/);
+        await rejects(empty.settings.addOverSsh({}), /target is missing/);
+        deepStrictEqual(readdirSync(empty.root), []);
     });
 });

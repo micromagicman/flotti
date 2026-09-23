@@ -4,7 +4,8 @@ import type {
     BroadcastResponse,
     Delivery,
     ErrorResponse,
-    FleetInfo
+    FleetInfo,
+    SshAgentsResponse
 } from '../../src/dashboard-protocol.js';
 async function call<T>(method: string, path: string, body?: object): Promise<T> {
     const response = await fetch(path, {
@@ -33,6 +34,7 @@ const api = {
     answerPermission: (agentId: string, requestId: string, optionId?: string): Promise<object> =>
         post(agentPath(agentId, `permissions/${encodeURIComponent(requestId)}`), optionId === undefined ? {} : { optionId }),
     config: (agentId: string): Promise<AgentConfig> => call('GET', agentPath(agentId)),
+    addOverSsh: (target: string): Promise<SshAgentsResponse> => post('/api/ssh-agents', { target }),
     create: (config: AgentConfig): Promise<AgentSummary> => post('/api/agents', config),
     update: (config: AgentConfig): Promise<AgentSummary> => call('PUT', agentPath(config.id), config),
     remove: (agentId: string): Promise<{ readonly trash?: string }> => call('DELETE', agentPath(agentId)),

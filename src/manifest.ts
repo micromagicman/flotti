@@ -8,8 +8,10 @@ import type {
     RemoteAgent,
     RemoteAuth,
     RemoteProtocol,
+    RemoteSsh,
     RestartPolicy
 } from './types.js';
+import { parseTarget } from './ssh.js';
 /** File in every agent directory that describes the agent. */
 const MANIFEST_FILE = 'agent.json';
 /** Optional file in a local agent directory with the agent's system prompt. */
@@ -28,6 +30,8 @@ const PROTOCOLS: readonly RemoteProtocol[] = ['a2a'];
 const AUTH_TYPES: readonly RemoteAuth['type'][] = ['none', 'bearer', 'api-key'];
 /** Names of environment variables: what a shell can export. */
 const VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** Ids of the agents a host publishes over SSH. */
+const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** Names of HTTP headers: an RFC 9110 token. */
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 type Environment = Readonly<Record<string, string | undefined>>;
@@ -86,13 +90,49 @@ function readLocalManifest(value: unknown, context: ManifestContext): LocalAgent
 function readRemoteManifest(value: unknown, context: ManifestContext): RemoteAgent {
     const fields = manifestObject(value, context);
     const at = (field: string) => ({ field, path: context.manifestPath });
-    return {
+    const common = {
         ...agentBase(fields, context),
-        kind: 'remote',
+        kind: 'remote' as const,
         protocol: optionalChoice(fields['protocol'], PROTOCOLS, at('protocol')) ?? 'a2a',
-        url: requiredUrl(fields['url'], at('url')),
         auth: optionalAuth(fields['auth'], at('auth'))
     };
+    if (fields['ssh'] === undefined) {
+        if (fields['url'] === undefined) {
+            reject(
+                'missing-field',
+                context.manifestPath,
+                'url is missing: give the address of the agent, or "ssh": "user@host" to reach it through an SSH tunnel'
+            );
+        }
+        return { ...common, url: requiredUrl(fields['url'], at('url')) };
+    }
+    if (fields['url'] !== undefined) {
+        reject(
+            'wrong-type',
+            context.manifestPath,
+            'url and ssh cannot both be given: over ssh, the host tells flotti where the agent is — drop url'
+        );
+    }
+    return { ...common, ssh: sshAccess(fields['ssh'], at('ssh')) };
+}
+/** `"ssh": "user@host"`, or `"ssh": {"target": "user@host", "agent": "<id>"}`. */
+function sshAccess(value: unknown, place: Place): RemoteSsh {
+    const fields: Fields = typeof value === 'string' ? { target: value } : isObject(value) ? value : {};
+    if (typeof value !== 'string' && !isObject(value)) {
+        reject('wrong-type', place.path, `${place.field} must be "user@host" or a JSON object, got ${typeName(value)}`);
+    }
+    const inside = (field: string): Place => ({ field: `${place.field}.${field}`, path: place.path });
+    const target = requiredString(fields['target'], inside('target')).trim();
+    try {
+        parseTarget(target);
+    } catch (error) {
+        reject('wrong-type', place.path, `${inside('target').field}: ${(error as Error).message}`);
+    }
+    const agent = optionalString(fields['agent'], inside('agent'));
+    if (agent !== undefined && !AGENT_ID_PATTERN.test(agent)) {
+        reject('wrong-type', place.path, `${inside('agent').field} must be the id of a published agent, got ${shown(agent)}`);
+    }
+    return { target, ...(agent === undefined ? {} : { agent }) };
 }
 function manifestObject(value: unknown, context: ManifestContext): Fields {
     if (!isObject(value)) {

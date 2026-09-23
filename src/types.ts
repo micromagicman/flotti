@@ -22,6 +22,17 @@ type RemoteAuth =
     | { readonly type: 'none' }
     | { readonly type: 'bearer'; readonly tokenEnv: string }
     | { readonly type: 'api-key'; readonly header: string; readonly valueEnv: string };
+/**
+ * How flotti reaches a remote agent over SSH with nothing but the user's key:
+ * the host tells flotti where the agent listens and which token it expects
+ * (docs/a2a-ssh.md), and flotti keeps a tunnel to it up.
+ */
+type RemoteSsh = {
+    /** `user@host`, or `user@host:port`. */
+    readonly target: string;
+    /** Which of the agents the host publishes; may be left out when it publishes one. */
+    readonly agent?: string;
+};
 /** What every agent of the fleet has, local or remote. */
 type AgentBase = {
     /** Name of the agent directory; unique across the whole fleet. */
@@ -68,9 +79,11 @@ type LocalAgent = AgentBase & {
 type RemoteAgent = AgentBase & {
     readonly kind: 'remote';
     readonly protocol: RemoteProtocol;
-    /** Address of the agent, `http:` or `https:`. */
-    readonly url: string;
-    /** `{type: 'none'}` when the manifest says nothing. */
+    /** Address of the agent, `http:` or `https:`; absent when the agent is reached over `ssh`. */
+    readonly url?: string;
+    /** Set when the agent is reached through an SSH tunnel instead of `url`. */
+    readonly ssh?: RemoteSsh;
+    /** `{type: 'none'}` when the manifest says nothing; over `ssh`, the token the host publishes wins. */
     readonly auth: RemoteAuth;
 };
 type Agent = LocalAgent | RemoteAgent;
@@ -101,5 +114,6 @@ export type {
     RemoteAgent,
     RemoteAuth,
     RemoteProtocol,
+    RemoteSsh,
     RestartPolicy
 };

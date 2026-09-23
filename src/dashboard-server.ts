@@ -96,6 +96,11 @@ const ROUTES: readonly Route[] = [
         handle: async (context, _match, body) => [201, requireSettings(context).create(body)]
     },
     {
+        method: 'POST',
+        pattern: /^\/api\/ssh-agents$/,
+        handle: async (context, _match, body) => [201, await requireSettings(context).addOverSsh(body)]
+    },
+    {
         method: 'GET',
         pattern: /^\/api\/agents\/([^/]+)$/,
         handle: async (context, [id]) => [200, requireSettings(context).config(id ?? '')]
@@ -286,7 +291,9 @@ function errorResponse(error: unknown): [number, ErrorResponse] {
         return [404, { error: error.message }];
     }
     if (error instanceof ConfigurationError) {
-        const status = error.kind === 'duplicate-agent-id' || error.kind === 'already-running' ? 409 : 400;
+        const status = error.kind === 'duplicate-agent-id' || error.kind === 'already-running'
+            ? 409
+            : error.kind === 'ssh-failed' ? 502 : 400;
         return [status, { error: error.hint === undefined ? error.message : `${error.message} ${error.hint}` }];
     }
     return [500, { error: error instanceof Error ? error.message : String(error) }];

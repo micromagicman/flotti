@@ -2,6 +2,16 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Remote agents over SSH, in one step.** Settings → **Connect over SSH** takes `user@host` and
+  nothing else: flotti asks the host which agents it publishes, adds them, opens an SSH tunnel to each
+  one with the published token and keeps it up, reopening it after a drop. The dashboard shows the
+  state of the connection and why it failed. In a manifest, `"ssh": "user@host"` takes the place of
+  `url`; the contract for agents is in [docs/a2a-ssh.md](docs/a2a-ssh.md) (#22).
+
 ## [0.1.0] — MVP
 
 The first release: a fleet of AI agents and one dashboard to work with them.

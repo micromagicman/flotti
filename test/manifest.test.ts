@@ -159,3 +159,22 @@ describe('remote manifest', () => {
         match(rejected('remote', { ...REMOTE, protocol: 'acp' }).message, /protocol must be one of "a2a", got "acp"$/);
     });
 });
+describe('remote manifest: over SSH', () => {
+    it('takes "user@host" alone, in place of url', () => {
+        const found = single('remote', { ssh: 'eva@example.org' }).agent;
+        deepStrictEqual(found.kind === 'remote' && [found.ssh, found.url], [{ target: 'eva@example.org' }, undefined]);
+    });
+    it('takes the target and the published agent as an object', () => {
+        const found = single('remote', { ssh: { target: 'cutie@10.0.0.7:2222', agent: 'cutie' } }).agent;
+        deepStrictEqual(found.kind === 'remote' && found.ssh, { target: 'cutie@10.0.0.7:2222', agent: 'cutie' });
+    });
+    it('refuses url and ssh together, and an address ssh would take for an option', () => {
+        match(rejected('remote', { ...REMOTE, ssh: 'eva@example.org' }).message, /url and ssh cannot both be given/);
+        match(rejected('remote', { ssh: '-oProxyCommand=touch /tmp/x' }).message, /ssh\.target: .* is not an SSH address/);
+        match(rejected('remote', { ssh: { agent: 'eva' } }).message, /ssh\.target is missing/);
+        match(rejected('remote', { ssh: 42 }).message, /ssh must be "user@host" or a JSON object, got number/);
+    });
+    it('says how to fix a manifest with neither url nor ssh', () => {
+        match(rejected('remote', {}).message, /url is missing: give the address of the agent, or "ssh": "user@host"/);
+    });
+});
