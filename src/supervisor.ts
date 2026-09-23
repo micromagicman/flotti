@@ -2,6 +2,7 @@ import { A2AAgent } from './a2a-agent.js';
 import type { AgentEvent, FleetAgent, SendOptions } from './agent-events.js';
 import { HistoryFile } from './agent-history.js';
 import type { AgentSummary, Delivery, Harness } from './dashboard-protocol.js';
+import type { FleetToolsAccess } from './fleet-mcp.js';
 import { LocalAgentProcess } from './local-agent.js';
 import type { Agent, Fleet } from './types.js';
 /**
@@ -44,6 +45,11 @@ type SupervisorOptions = {
     readonly warn?: (text: string) => void;
     /** How long a message may take to reach the agent before it counts as queued. */
     readonly queuedAfterMs?: number;
+    /**
+     * The fleet tools each agent flotti starts gets in its sessions; none when
+     * absent. `flotti run` gives them, tests of fake fleets do not.
+     */
+    readonly fleetTools?: { access(agentId: string): FleetToolsAccess };
 };
 /** One agent of the fleet with what the dashboard needs of it. */
 type Member = {
@@ -62,8 +68,12 @@ type Member = {
 };
 /** An agent the request names that is not in the fleet. */
 class UnknownAgentError extends Error {}
-function defaultAgent(agent: Agent): FleetAgent {
-    return agent.kind === 'local' ? new LocalAgentProcess(agent) : new A2AAgent(agent);
+function defaultAgent(
+    fleetTools: SupervisorOptions['fleetTools']
+): (agent: Agent) => FleetAgent {
+    return (agent) => agent.kind === 'local'
+        ? new LocalAgentProcess(agent, fleetTools === undefined ? {} : { fleetTools: fleetTools.access(agent.id) })
+        : new A2AAgent(agent);
 }
 function describeError(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -94,7 +104,7 @@ class Supervisor {
     /** Last number given to an event of each id, kept when the agent goes: numbers of an id only grow. */
     private readonly lastSeq = new Map<string, number>();
     constructor(fleet: Fleet, options: SupervisorOptions = {}) {
-        this.createAgent = options.createAgent ?? defaultAgent;
+        this.createAgent = options.createAgent ?? defaultAgent(options.fleetTools);
         this.historyLimit = options.historyLimit ?? 5000;
         this.queuedAfterMs = options.queuedAfterMs ?? 500;
         this.persistHistory = options.persistHistory ?? false;

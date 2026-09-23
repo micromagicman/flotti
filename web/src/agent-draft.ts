@@ -21,7 +21,10 @@ type Draft = {
     readonly restart: RestartPolicy | '';
     readonly heartbeatTimeoutSec: string;
     readonly systemPrompt: string;
-    /** Remote agents: `sshTarget` when reached over SSH, `url` otherwise. */
+    /**
+     * Remote agents: `sshTarget` when reached over SSH, `url` otherwise.
+     * Local agents: the host flotti starts the agent on; empty for this machine.
+     */
     readonly sshTarget: string;
     readonly sshAgent: string;
     readonly url: string;
@@ -97,6 +100,7 @@ function fromConfig(config: AgentConfig): Draft {
         command: config.command,
         arguments: (config.arguments ?? []).join('\n'),
         workdir: config.workdir ?? '',
+        sshTarget: config.ssh ?? '',
         env: Object.entries(config.env ?? {}).map(([name, value]) => `${name}=${value}`).join('\n'),
         restart: config.restart ?? '',
         heartbeatTimeoutSec: config.heartbeatTimeoutSec === undefined ? '' : String(config.heartbeatTimeoutSec),
@@ -149,6 +153,7 @@ function toConfig(draft: Draft): AgentConfig {
         ...optional('model', draft.model.trim()),
         command: draft.command.trim(),
         arguments: lines(draft.arguments),
+        ...optional('ssh', draft.sshTarget.trim()),
         ...optional('workdir', draft.workdir.trim()),
         env,
         ...optional('restart', draft.restart),

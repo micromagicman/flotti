@@ -8,6 +8,7 @@ import { DEFAULT_HOST, DEFAULT_PORT, startDashboard } from './dashboard-server.j
 import type { DashboardOptions } from './dashboard-server.js';
 import type { AgentSummary } from './dashboard-protocol.js';
 import { loadFleet, prepareFleet } from './fleet.js';
+import { FleetMcpServer } from './fleet-mcp.js';
 import { FleetSettings } from './fleet-settings.js';
 import type { LoadFleetOptions } from './fleet.js';
 import { Supervisor } from './supervisor.js';
@@ -165,7 +166,9 @@ async function runFleet(options: RunOptions = {}): Promise<Running> {
     const port = options.dashboard?.port ?? dashboardPort(argv, options.env ?? process.env);
     const token = randomBytes(24).toString('hex');
     const file = new RunFile(claimFleet(fleet), token);
-    const supervisor = new Supervisor(fleet, { persistHistory: true, ...options.supervisor });
+    const tools = await FleetMcpServer.start();
+    const supervisor = new Supervisor(fleet, { persistHistory: true, fleetTools: tools, ...options.supervisor });
+    tools.serve(supervisor);
     const settings = new FleetSettings(fleet, supervisor, {
         env: options.env ?? process.env,
         onSwitch: (next) => file.move(next)
@@ -177,9 +180,9 @@ async function runFleet(options: RunOptions = {}): Promise<Running> {
         ...options.dashboard,
         port,
         shutdown: { token, onRequest: () => requestStop() }
-    }).catch((error: unknown) => {
+    }).catch((error: unknown) => tools.close().then(() => {
         throw describeListenError(error, port);
-    });
+    }));
     file.write({ pid: process.pid, url: dashboard.url, token, startedAt: new Date().toISOString() });
     for (const line of created) {
         print(`Created ${line}`);
@@ -192,6 +195,7 @@ async function runFleet(options: RunOptions = {}): Promise<Running> {
         stopping ??= (async () => {
             await dashboard.close();
             await supervisor.stop();
+            await tools.close();
             file.remove();
         })();
         return stopping;

@@ -9,6 +9,7 @@ import * as acp from '@agentclientprotocol/sdk';
 import type {
     AnyMessage,
     InitializeResponse,
+    McpServer,
     RequestPermissionRequest,
     RequestPermissionResponse,
     SessionConfigOption,
@@ -19,6 +20,10 @@ import { prepareHandover } from './acp-adapters.js';
 import type { Handover } from './acp-adapters.js';
 import { AgentEvents } from './agent-events.js';
 import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
+import { MCP_PATH, MCP_SERVER_NAME } from './fleet-mcp.js';
+import type { FleetToolsAccess } from './fleet-mcp.js';
+import { RemoteStartReader, parseTarget, remoteCommandArguments } from './ssh.js';
+import type { RemotePlace, SshOptions } from './ssh.js';
 import type { LocalAgent } from './types.js';
 /**
  * Where the agent process is, after supervisord:
@@ -52,6 +57,13 @@ type LocalAgentOptions = {
      * `<agent directory>/logs` by default, `null` for no files at all.
      */
     readonly logDirectory?: string | null;
+    /**
+     * The fleet tools of this run: every session gets them as the MCP server
+     * `flotti`, when the agent takes MCP over HTTP. None without it.
+     */
+    readonly fleetTools?: FleetToolsAccess;
+    /** How `ssh` is run for an agent started on another host; tests put a pretend one in. */
+    readonly ssh?: SshOptions;
 };
 const DEFAULTS = {
     startSecs: 10,
@@ -95,6 +107,11 @@ type Run = {
     replaying: boolean;
     trace?: WriteStream;
     stderrLog?: WriteStream;
+    /** On an SSH host: reads where the command runs and the port of the way back, from standard error. */
+    startReader?: RemoteStartReader;
+    /** On an SSH host: settles once {@link startReader} knows everything, or the process is gone. */
+    place?: Promise<RemotePlace>;
+    settlePlace?: (place: RemotePlace | Error) => void;
 };
 /**
  * A local agent: flotti starts it as a child process speaking ACP over
@@ -103,7 +120,9 @@ type Run = {
  */
 class LocalAgentProcess implements FleetAgent {
     readonly agent: LocalAgent;
-    private readonly options: Required<Omit<LocalAgentOptions, 'env' | 'logDirectory'>>;
+    private readonly options: Required<Omit<LocalAgentOptions, 'env' | 'logDirectory' | 'fleetTools' | 'ssh'>>;
+    private readonly fleetTools: FleetToolsAccess | undefined;
+    private readonly sshOptions: SshOptions;
     private readonly env: Readonly<Record<string, string | undefined>>;
     private readonly logDirectory: string | null;
     private readonly events: AgentEvents;
@@ -126,6 +145,8 @@ class LocalAgentProcess implements FleetAgent {
         this.events = new AgentEvents(agent.id);
         this.env = options.env ?? process.env;
         this.logDirectory = options.logDirectory === undefined ? join(agent.directory, 'logs') : options.logDirectory;
+        this.fleetTools = options.fleetTools;
+        this.sshOptions = options.ssh ?? {};
         this.options = {
             startSecs: options.startSecs ?? DEFAULTS.startSecs,
             maxRetries: options.maxRetries ?? DEFAULTS.maxRetries,
@@ -266,7 +287,11 @@ class LocalAgentProcess implements FleetAgent {
         let handover: Handover;
         let run: Run;
         try {
-            handover = prepareHandover(this.agent, { ...this.env, ...this.agent.env });
+            // An agent on another host gets no variable of this machine: only what its manifest sets.
+            handover = prepareHandover(
+                this.agent,
+                this.agent.ssh === undefined ? { ...this.env, ...this.agent.env } : this.agent.env
+            );
             run = this.spawn(handover);
         } catch (error) {
             this.giveUp(`cannot start: ${message(error)}`);
@@ -292,9 +317,10 @@ class LocalAgentProcess implements FleetAgent {
     }
     private spawn(handover: Handover): Run {
         const posix = process.platform !== 'win32';
-        const child = spawn(this.agent.command, [...this.agent.arguments], {
-            cwd: this.agent.workdir,
-            env: { ...this.env, ...this.agent.env, ...handover.env },
+        const how = this.command(handover);
+        const child = spawn(how.command, how.arguments, {
+            ...(how.cwd === undefined ? {} : { cwd: how.cwd }),
+            env: how.env,
             stdio: ['pipe', 'pipe', 'pipe'],
             // Its own process group, so stopping it reaches what it started: the
             // adapter runs `claude` or `codex`, and those run MCP servers.
@@ -312,8 +338,8 @@ class LocalAgentProcess implements FleetAgent {
                     // Never started: there will be no exit event.
                     resolve();
                     run.failure = error.code === 'ENOENT'
-                        ? `command not found: ${this.agent.command}`
-                        : `cannot start ${this.agent.command}: ${error.message}`;
+                        ? `command not found: ${how.command}`
+                        : `cannot start ${how.command}: ${error.message}`;
                     run.permanent = true;
                     this.onExit(run, null, null);
                 }
@@ -329,6 +355,7 @@ class LocalAgentProcess implements FleetAgent {
             replaying: false,
             ...logs
         };
+        this.watchRemoteStart(run);
         this.run = run;
         child.stdin?.on('error', () => undefined);
         child.stdout?.on('error', () => undefined);
@@ -338,6 +365,44 @@ class LocalAgentProcess implements FleetAgent {
             this.emit({ type: 'log', source: 'flotti', text: note });
         }
         return run;
+    }
+    /** On an SSH host, standard error says where the command runs: {@link Run.place} waits for it. */
+    private watchRemoteStart(run: Run): void {
+        if (this.agent.ssh === undefined) {
+            return;
+        }
+        run.startReader = new RemoteStartReader(this.fleetTools !== undefined);
+        run.place = new Promise((resolve, reject) => {
+            run.settlePlace = (place) => place instanceof Error ? reject(place) : resolve(place);
+        });
+        run.place.catch(() => undefined);
+    }
+    /**
+     * How the process is started: the manifest's command here, or `ssh` running
+     * it on the host — with the environment of the manifest only, and a reverse
+     * tunnel for the fleet tools.
+     */
+    private command(handover: Handover): { command: string; arguments: string[]; cwd?: string; env: NodeJS.ProcessEnv } {
+        if (this.agent.ssh === undefined) {
+            return {
+                command: this.agent.command,
+                arguments: [...this.agent.arguments],
+                cwd: this.agent.workdir,
+                env: { ...this.env, ...this.agent.env, ...handover.env }
+            };
+        }
+        const args = remoteCommandArguments(parseTarget(this.agent.ssh), {
+            command: this.agent.command,
+            arguments: this.agent.arguments,
+            env: { ...this.agent.env, ...handover.env },
+            workdir: this.agent.workdir,
+            ...(this.fleetTools === undefined ? {} : { reversePort: this.fleetTools.port })
+        }, this.sshOptions);
+        return {
+            command: this.sshOptions.command ?? 'ssh',
+            arguments: [...(this.sshOptions.prefix ?? []), ...args],
+            env: { ...this.env }
+        };
     }
     private async handshake(run: Run, handover: Handover): Promise<void> {
         const { child } = run;
@@ -360,7 +425,48 @@ class LocalAgentProcess implements FleetAgent {
         run.capabilities = capabilities;
         // Not sooner: before its first answer the agent may still be downloading under npx.
         this.startHeartbeat(run);
-        await this.applyModel(run, await this.openSession(run, connection, capabilities, handover));
+        const place = run.place === undefined ? undefined : await this.remotePlace(run.place);
+        await this.applyModel(run, await this.openSession(run, connection, capabilities, handover, place));
+    }
+    /** Waits until the host said where the command runs; a host that does not say in time is a failed start. */
+    private async remotePlace(place: Promise<RemotePlace>): Promise<RemotePlace> {
+        const timeoutMs = this.sshOptions.readyTimeoutMs ?? 20_000;
+        let timer: NodeJS.Timeout | undefined;
+        const late = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(
+                `${this.agent.ssh} did not say where the agent runs within ${timeoutMs} ms`
+            )), timeoutMs);
+        });
+        try {
+            return await Promise.race([place, late]);
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+    /**
+     * The fleet tools as an MCP server of the session: over HTTP — the port here,
+     * or the reverse tunnel's port on the host — with the agent's own token.
+     */
+    private mcpServers(capabilities: InitializeResponse, place: RemotePlace | undefined): McpServer[] {
+        const tools = this.fleetTools;
+        if (tools === undefined) {
+            return [];
+        }
+        if (capabilities.agentCapabilities?.mcpCapabilities?.http !== true) {
+            this.emit({
+                type: 'log',
+                source: 'flotti',
+                text: 'the fleet tools are not given: the agent takes no MCP server over HTTP'
+            });
+            return [];
+        }
+        const port = place?.reversePort ?? tools.port;
+        return [{
+            type: 'http',
+            name: MCP_SERVER_NAME,
+            url: `http://127.0.0.1:${port}${MCP_PATH}`,
+            headers: [{ name: 'Authorization', value: `Bearer ${tools.token}` }]
+        }];
     }
     /**
      * Picks the previous session up when the agent can — `session/resume`, else
@@ -370,15 +476,16 @@ class LocalAgentProcess implements FleetAgent {
         run: Run,
         connection: acp.ClientConnection,
         capabilities: InitializeResponse,
-        handover: Handover
+        handover: Handover,
+        place: RemotePlace | undefined
     ): Promise<SessionConfigOption[] | null | undefined> {
         const agentCapabilities = capabilities.agentCapabilities;
         const directories = agentCapabilities?.sessionCapabilities?.additionalDirectories
             ? { additionalDirectories: [...handover.additionalDirectories] }
             : {};
         const common = {
-            cwd: this.agent.workdir,
-            mcpServers: [],
+            cwd: place?.cwd ?? this.agent.workdir,
+            mcpServers: this.mcpServers(capabilities, place),
             ...directories,
             ...(handover.meta === undefined ? {} : { _meta: { ...handover.meta } })
         };
@@ -537,7 +644,13 @@ class LocalAgentProcess implements FleetAgent {
     }
     private onStderr(run: Run, chunk: string): void {
         run.stderrLog?.write(chunk);
-        for (const line of chunk.split(/\r?\n/)) {
+        const reader = run.startReader;
+        const lines = reader === undefined ? chunk.split(/\r?\n/) : reader.read(chunk);
+        const place = reader?.place;
+        if (place !== undefined) {
+            run.settlePlace?.(place);
+        }
+        for (const line of lines) {
             if (line.trim() !== '') {
                 this.emit({ type: 'log', source: 'agent', text: line });
             }
@@ -613,6 +726,7 @@ class LocalAgentProcess implements FleetAgent {
         if (run.heartbeat !== undefined) {
             clearInterval(run.heartbeat);
         }
+        run.settlePlace?.(new Error('the process ended before the host said where it runs'));
         run.connection?.close();
         run.trace?.end();
         run.stderrLog?.end();

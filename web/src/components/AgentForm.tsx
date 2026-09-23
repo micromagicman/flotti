@@ -43,7 +43,10 @@ function LocalFields({ draft, update, setDraft }: { readonly draft: Draft; reado
             <Field label="Model" hint="Empty: the adapter's own default.">
                 <input value={draft.model} onChange={(event) => update('model', event.target.value)} />
             </Field>
-            <Field label="Working directory" hint="Empty: the agent directory. ~ and relative paths are fine.">
+            <Field label="Host" hint="Empty: this machine. user@host: flotti starts the agent there over SSH with your key; the command, the working directory and everything the agent does are on that host.">
+                <input value={draft.sshTarget} placeholder="user@host" onChange={(event) => update('sshTarget', event.target.value)} />
+            </Field>
+            <Field label="Working directory" hint={draft.sshTarget.trim() === '' ? 'Empty: the agent directory. ~ and relative paths are fine.' : 'A path on the host. Empty: the home directory there.'}>
                 <input value={draft.workdir} onChange={(event) => update('workdir', event.target.value)} />
             </Field>
             <Field label="Environment" hint="NAME=value, one per line. Keep secrets out: this is written to agent.json.">

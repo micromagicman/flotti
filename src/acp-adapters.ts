@@ -37,6 +37,9 @@ type Handover = {
  */
 function prepareHandover(agent: LocalAgent, env: Readonly<Record<string, string | undefined>>): Handover {
     const systemPrompt = readSystemPrompt(agent);
+    if (agent.ssh !== undefined) {
+        return remoteHandover(agent, env, systemPrompt);
+    }
     switch (agent.adapter) {
         case 'claude-code':
             return {
@@ -63,6 +66,38 @@ function prepareHandover(agent: LocalAgent, env: Readonly<Record<string, string 
                     ? []
                     : ['system-prompt.md is not passed on: the manifest names no adapter, and ACP itself has no field for it']
             };
+    }
+}
+/**
+ * An agent started on another host gets the system prompt — it goes as text —
+ * but not the agent directory: that is on this machine, and the agent works
+ * with the files of its host.
+ */
+function remoteHandover(
+    agent: LocalAgent,
+    env: Readonly<Record<string, string | undefined>>,
+    systemPrompt: string | undefined
+): Handover {
+    const notes = agent.adapter === undefined && systemPrompt !== undefined
+        ? ['system-prompt.md is not passed on: the manifest names no adapter, and ACP itself has no field for it']
+        : [];
+    const skipped = `skills/ and memory/ stay on this machine: the agent runs on ${agent.ssh}`;
+    switch (agent.adapter) {
+        case 'claude-code':
+            return {
+                env: {},
+                ...(systemPrompt === undefined ? {} : { meta: { systemPrompt: { append: systemPrompt } } }),
+                additionalDirectories: [],
+                notes: [skipped]
+            };
+        case 'codex':
+            return {
+                env: systemPrompt === undefined ? {} : { [CODEX_CONFIG_VARIABLE]: codexConfig(env, systemPrompt) },
+                additionalDirectories: [],
+                notes: [skipped]
+            };
+        default:
+            return { env: {}, additionalDirectories: [], notes };
     }
 }
 function readSystemPrompt(agent: LocalAgent): string | undefined {

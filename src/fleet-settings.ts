@@ -34,6 +34,7 @@ const LOCAL_FIELDS = [
     'model',
     'command',
     'arguments',
+    'ssh',
     'workdir',
     'env',
     'restart',

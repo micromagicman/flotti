@@ -11,6 +11,12 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   second `start` of a running fleet says it runs. `flotti stop` stops it, `flotti status` lists the
   agents of the running fleet — id, local or remote, harness, status. `flotti run` stays for the
   foreground (#36).
+- **Bare agents talk to each other.** Every agent flotti starts gets the fleet as MCP tools in its
+  session — `list_agents`, `send_message`, `reply`, `forward` — with nothing to configure in Claude Code
+  or Codex. A message from an agent carries `from`, the id of the sender (#38).
+- **An agent on another host, started by flotti.** `"ssh": "user@host"` in a local manifest starts the
+  agent there over SSH and runs it like a local one; ACP goes through the SSH connection, the fleet
+  tools through a reverse tunnel (#38).
 - **The history of a tab survives a restart.** Every event of an agent — messages, tool calls,
   permission requests, status lines — is written to `.flotti-history.jsonl` in its directory and read
   back when flotti starts; the last 5000 events of each agent are kept (#28).
