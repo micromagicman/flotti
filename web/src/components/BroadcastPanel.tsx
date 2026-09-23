@@ -8,6 +8,8 @@ type BroadcastPanelProps = {
     /** Late outcomes of queued messages, from the socket. */
     readonly deliveries: readonly Delivery[];
     readonly empty: boolean;
+    /** Opens the settings, where agents are added. */
+    readonly onSettings: () => void;
 };
 const RESULT_TEXT: Readonly<Record<Delivery['result'], string>> = {
     taken: 'delivered',
@@ -42,12 +44,18 @@ function Results({ sent, late, agents }: { readonly sent: readonly Delivery[]; r
     );
 }
 /** One message to many agents at once; the answers come in each agent's own tab. */
-function BroadcastPanel({ agents, deliveries, empty }: BroadcastPanelProps) {
+function BroadcastPanel({ agents, deliveries, empty, onSettings }: BroadcastPanelProps) {
     const [excluded, toggle] = useExcluded();
     const [sent, setSent] = useState<{ readonly deliveries: readonly Delivery[]; readonly after: number }>();
     const targets = agents.filter((agent) => !excluded.has(agent.id));
     if (empty) {
-        return <section className="broadcast"><h1>No agents yet</h1><p className="muted">Add agent directories to the fleet and run flotti again.</p></section>;
+        return (
+            <section className="broadcast">
+                <h1>No agents yet</h1>
+                <p className="muted">Add the first one in the settings.</p>
+                <div className="actions"><button type="button" className="primary" onClick={onSettings}>Open settings</button></div>
+            </section>
+        );
     }
     return (
         <section className="broadcast" aria-label="Broadcast">

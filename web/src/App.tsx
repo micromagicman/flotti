@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react';
 import { AgentPanel } from './components/AgentPanel.js';
 import { BroadcastPanel } from './components/BroadcastPanel.js';
+import { SettingsPanel } from './components/SettingsPanel.js';
 import { Sidebar } from './components/Sidebar.js';
 import { useFleet } from './connection.js';
 import type { Link } from './fleet-state.js';
 /** The tab is kept in the address, so a reload opens the same one. */
 const BROADCAST = 'all';
+/** No agent id starts with `_`, so the settings tab cannot hide an agent. */
+const SETTINGS = '_settings';
 function tabFromHash(): string {
     return decodeURIComponent(window.location.hash.replace(/^#\/?/, ''));
 }
@@ -30,7 +33,8 @@ function App() {
     const [state, dispatch] = useFleet();
     const [tab, setTab] = useTab();
     const [seenSeq, setSeenSeq] = useState<Record<string, number>>({});
-    const agent = state.agents.find((candidate) => candidate.id === tab) ?? (tab === BROADCAST ? undefined : state.agents[0]);
+    const agent = state.agents.find((candidate) => candidate.id === tab)
+        ?? (tab === BROADCAST || tab === SETTINGS ? undefined : state.agents[0]);
     const feed = agent === undefined ? undefined : state.feeds[agent.id];
     const shownSeq = feed?.lastSeq;
     const live = state.agents.map((summary) => ({ ...summary, status: state.feeds[summary.id]?.status ?? summary.status }));
@@ -49,14 +53,17 @@ function App() {
                 agents={state.agents}
                 feeds={state.feeds}
                 seenSeq={seenSeq}
-                selected={agent?.id ?? BROADCAST}
+                selected={agent?.id ?? (tab === SETTINGS ? SETTINGS : BROADCAST)}
                 broadcastId={BROADCAST}
+                settingsId={SETTINGS}
                 onSelect={setTab}
             />
             <main className="main">
-                {agent === undefined || feed === undefined
-                    ? <BroadcastPanel agents={live} deliveries={state.deliveries} empty={state.agents.length === 0} />
-                    : <AgentPanel key={agent.id} agent={agent} feed={feed} dispatch={dispatch} />}
+                {tab === SETTINGS
+                    ? <SettingsPanel agents={live} />
+                    : agent === undefined || feed === undefined
+                        ? <BroadcastPanel agents={live} deliveries={state.deliveries} empty={state.agents.length === 0} onSettings={() => setTab(SETTINGS)} />
+                        : <AgentPanel key={agent.id} agent={agent} feed={feed} dispatch={dispatch} />}
             </main>
         </div>
     );

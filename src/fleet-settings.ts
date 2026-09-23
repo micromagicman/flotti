@@ -1,0 +1,350 @@
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
+import type {
+    AgentConfig,
+    AgentSummary,
+    FleetInfo,
+    LocalAgentConfig,
+    RemoteAgentConfig
+} from './dashboard-protocol.js';
+import { ConfigurationError } from './errors.js';
+import {
+    AGENT_ID,
+    LOCAL_DIRECTORY,
+    REMOTE_DIRECTORY,
+    loadFleet,
+    prepareAgent,
+    prepareFleet,
+    readAgent,
+    resolveFleetLocation
+} from './fleet.js';
+import { MANIFEST_FILE, SYSTEM_PROMPT_FILE, readLocalManifest, readRemoteManifest } from './manifest.js';
+import type { Environment, ManifestContext } from './manifest.js';
+import { settingsFile, writeSettings } from './settings.js';
+import type { Supervisor } from './supervisor.js';
+import type { Agent, Fleet, FleetLocation } from './types.js';
+/** Manifest fields the settings page edits; any other field of the file is kept as it is. */
+const LOCAL_FIELDS = [
+    'name',
+    'description',
+    'adapter',
+    'model',
+    'command',
+    'arguments',
+    'workdir',
+    'env',
+    'restart',
+    'heartbeatTimeoutSec'
+] as const;
+const REMOTE_FIELDS = ['name', 'description', 'url', 'auth'] as const;
+/**
+ * Where a removed agent goes, in the fleet directory. Removing an agent
+ * would otherwise take its memory bank and skills with it; from here they can
+ * be brought back by hand. The leading dot keeps it out of the fleet.
+ */
+const TRASH_DIRECTORY = '.trash';
+type Fields = Record<string, unknown>;
+type FleetSettingsOptions = {
+    /** Environment for `~` and the settings file; `process.env` by default. */
+    readonly env?: Environment;
+    /**
+     * Called before the fleet directory changes, with the new fleet; throws to
+     * refuse the change — another flotti runs that fleet.
+     */
+    readonly onSwitch?: (fleet: Fleet) => void;
+};
+function isObject(value: unknown): value is Fields {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+/** What the page may leave out: an empty field, list or map is a field left out of the file. */
+function isBlank(value: unknown): boolean {
+    return value === undefined
+        || value === null
+        || (typeof value === 'string' && value.trim() === '')
+        || (Array.isArray(value) && value.length === 0)
+        || (isObject(value) && Object.keys(value).length === 0)
+        || (isObject(value) && value['type'] === 'none');
+}
+function invalid(message: string): ConfigurationError {
+    return new ConfigurationError('wrong-type', message);
+}
+/** The body of a request that describes an agent: its kind, its id, the fields. */
+function agentBody(body: unknown): { kind: Agent['kind']; id: string; fields: Fields; systemPrompt?: string } {
+    if (!isObject(body)) {
+        throw invalid('The agent must be a JSON object.');
+    }
+    const { kind, id, systemPrompt } = body;
+    if (kind !== 'local' && kind !== 'remote') {
+        throw invalid('kind must be "local" or "remote".');
+    }
+    if (typeof id !== 'string' || id.trim() === '') {
+        throw new ConfigurationError('missing-field', 'id is missing: every agent needs one, it names its directory.');
+    }
+    if (systemPrompt !== undefined && typeof systemPrompt !== 'string') {
+        throw invalid('systemPrompt must be text.');
+    }
+    return { kind, id: id.trim(), fields: body, ...(systemPrompt === undefined ? {} : { systemPrompt }) };
+}
+/** The manifest to write: what the file had, with every field the page edits set or left out. */
+function manifestFrom(kind: Agent['kind'], fields: Fields, kept: Fields): Fields {
+    const manifest: Fields = { ...kept };
+    for (const field of kind === 'local' ? LOCAL_FIELDS : REMOTE_FIELDS) {
+        const value = fields[field];
+        if (isBlank(value)) {
+            delete manifest[field];
+        } else {
+            manifest[field] = typeof value === 'string' ? value.trim() : value;
+        }
+    }
+    return manifest;
+}
+function readJson(path: string): Fields {
+    let value: unknown;
+    try {
+        value = JSON.parse(readFileSync(path, 'utf8'));
+    } catch (error) {
+        throw new ConfigurationError('not-json', `${path} could not be read as JSON; fix or remove the file by hand`, {
+            path,
+            cause: error
+        });
+    }
+    if (!isObject(value)) {
+        throw new ConfigurationError('wrong-type', `${path}: the manifest must be a JSON object`, { path });
+    }
+    return value;
+}
+function readText(path: string): string | undefined {
+    try {
+        return readFileSync(path, 'utf8');
+    } catch {
+        return undefined;
+    }
+}
+function exists(path: string): boolean {
+    try {
+        statSync(path);
+        return true;
+    } catch {
+        return false;
+    }
+}
+/** Written to a temporary file first and renamed, so a crash never leaves half a manifest. */
+function writeAtomically(path: string, contents: string): void {
+    const temporary = `${path}.${process.pid}.tmp`;
+    writeFileSync(temporary, contents);
+    renameSync(temporary, path);
+}
+function pick<T>(fields: Fields, name: string, check: (value: unknown) => boolean): T | undefined {
+    const value = fields[name];
+    return check(value) ? value as T : undefined;
+}
+const isString = (value: unknown): boolean => typeof value === 'string';
+/** The manifest as the file says it, for the page to edit: defaults are not filled in. */
+function readConfig(agent: Agent): AgentConfig {
+    const fields = readJson(agent.manifestPath);
+    const common = {
+        id: agent.id,
+        ...(pick<string>(fields, 'name', isString) === undefined ? {} : { name: fields['name'] as string }),
+        ...(pick<string>(fields, 'description', isString) === undefined ? {} : { description: fields['description'] as string })
+    };
+    if (agent.kind === 'remote') {
+        const config: RemoteAgentConfig = {
+            kind: 'remote',
+            ...common,
+            url: pick<string>(fields, 'url', isString) ?? '',
+            ...(isObject(fields['auth']) ? { auth: fields['auth'] as unknown as RemoteAgentConfig['auth'] } : {})
+        };
+        return config;
+    }
+    const optional: Fields = {};
+    for (const field of LOCAL_FIELDS) {
+        if (field !== 'name' && field !== 'description' && field !== 'command' && fields[field] !== undefined) {
+            optional[field] = fields[field];
+        }
+    }
+    const systemPrompt = readText(join(agent.directory, SYSTEM_PROMPT_FILE));
+    return {
+        kind: 'local',
+        ...common,
+        ...optional,
+        command: pick<string>(fields, 'command', isString) ?? '',
+        ...(systemPrompt === undefined ? {} : { systemPrompt })
+    } as LocalAgentConfig;
+}
+/**
+ * The settings page at work: agents added, changed and removed by writing
+ * their directories — the fleet stays files a person can read and edit — and
+ * the fleet directory itself changed and remembered in the settings.
+ * Every change is checked the way `flotti run` checks the fleet before a
+ * file is written, and then put to work in the running fleet at once.
+ */
+class FleetSettings {
+    private location: FleetLocation;
+    private readonly pinnedBy: FleetInfo['pinnedBy'];
+    private readonly env: Environment;
+    constructor(fleet: Fleet, private readonly supervisor: Supervisor, private readonly options: FleetSettingsOptions = {}) {
+        this.location = fleet.location;
+        this.env = options.env ?? process.env;
+        const source = fleet.location.source;
+        this.pinnedBy = source === 'argument' || source === 'environment' ? source : undefined;
+    }
+    /** The fleet directory this run works with, and where it came from. */
+    info(): FleetInfo {
+        const file = settingsFile(this.env);
+        return {
+            path: this.location.path,
+            source: this.location.source,
+            ...(this.pinnedBy === undefined ? {} : { pinnedBy: this.pinnedBy }),
+            ...(file === undefined ? {} : { settingsFile: file })
+        };
+    }
+    /** The manifest of the agent as its file says it. */
+    config(agentId: string): AgentConfig {
+        return readConfig(this.supervisor.agent(agentId));
+    }
+    /**
+     * Writes the directory of a new agent and starts it.
+     *
+     * @throws ConfigurationError when the agent is not one `flotti run` would take.
+     */
+    create(body: unknown): AgentSummary {
+        const { kind, id, fields, systemPrompt } = agentBody(body);
+        if (!AGENT_ID.test(id)) {
+            throw new ConfigurationError(
+                'invalid-agent-id',
+                `"${id}" cannot be an agent id — use letters, digits, ".", "_" and "-", starting with a letter or a digit`
+            );
+        }
+        const taken = this.supervisor.agents().some((agent) => agent.id === id)
+            || [LOCAL_DIRECTORY, REMOTE_DIRECTORY].some((group) => exists(join(this.location.path, group, id)));
+        if (taken) {
+            throw new ConfigurationError(
+                'duplicate-agent-id',
+                `The id "${id}" is already taken in this fleet; ids are shared by local and remote agents`
+            );
+        }
+        const agent = this.write(kind, id, manifestFrom(kind, fields, {}), systemPrompt);
+        this.supervisor.add(agent);
+        return this.summary(id);
+    }
+    /**
+     * Writes the changed manifest and puts it to work: the agent is restarted
+     * with it, unless it was stopped.
+     */
+    async update(agentId: string, body: unknown): Promise<AgentSummary> {
+        const current = this.supervisor.agent(agentId);
+        const { kind, fields, systemPrompt } = agentBody({ ...(isObject(body) ? body : {}), id: agentId });
+        if (kind !== current.kind) {
+            throw invalid(`"${agentId}" is a ${current.kind} agent; a ${kind} one is a new agent with an id of its own.`);
+        }
+        let kept: Fields = {};
+        try {
+            kept = readJson(current.manifestPath);
+        } catch {
+            // A manifest broken by hand is replaced by what the page sends.
+        }
+        const agent = this.write(kind, agentId, manifestFrom(kind, fields, kept), systemPrompt);
+        await this.supervisor.replace(agent);
+        return this.summary(agentId);
+    }
+    /**
+     * Stops the agent, takes it out of the fleet and moves its directory to
+     * `.trash` in the fleet directory — with its memory bank and skills.
+     *
+     * @returns Where the directory went; `undefined` when it was gone already.
+     */
+    async remove(agentId: string): Promise<string | undefined> {
+        const agent = this.supervisor.agent(agentId);
+        await this.supervisor.remove(agentId);
+        if (!exists(agent.directory)) {
+            return undefined;
+        }
+        const trash = join(this.location.path, TRASH_DIRECTORY);
+        mkdirSync(trash, { recursive: true });
+        const target = join(trash, `${agent.kind}-${agent.id}-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+        renameSync(agent.directory, target);
+        return target;
+    }
+    /**
+     * Works with another fleet directory from now on and saves it in the
+     * settings, so the next `flotti run` opens it too. The agents of the old
+     * fleet are stopped, those of the new one started. A directory that is not
+     * there yet is created: that is how a new fleet begins.
+     *
+     * @throws ConfigurationError when the directory holds a fleet `flotti run` would refuse.
+     */
+    async switchTo(body: unknown): Promise<FleetInfo> {
+        const { path } = (isObject(body) ? body : {}) as { path?: unknown };
+        if (typeof path !== 'string' || path.trim() === '') {
+            throw new ConfigurationError('missing-field', 'path is missing: name the fleet directory.');
+        }
+        const given = path.trim();
+        if (!isAbsolute(given) && given !== '~' && !given.startsWith('~/') && !given.startsWith('~\\')) {
+            throw new ConfigurationError(
+                'invalid-argument',
+                `"${given}" is a relative path; give an absolute one, or one starting with ~`
+            );
+        }
+        const target = resolveFleetLocation({ argv: ['--fleet', given], env: this.env }).path;
+        if (exists(target) && !statSync(target).isDirectory()) {
+            throw new ConfigurationError('not-a-directory', `${target}: the fleet directory must be a directory`, {
+                path: target
+            });
+        }
+        mkdirSync(target, { recursive: true });
+        const fleet = loadFleet({ argv: ['--fleet', target], env: this.env });
+        if (target !== this.location.path) {
+            this.options.onSwitch?.(fleet);
+        }
+        writeSettings(this.env, { fleet: target });
+        prepareFleet(fleet);
+        const moved = target !== this.location.path;
+        this.location = { path: target, source: 'settings' };
+        if (moved) {
+            await this.supervisor.load(fleet);
+        }
+        return this.info();
+    }
+    /**
+     * Checks the manifest the way `flotti run` would, and only then writes the
+     * agent directory.
+     */
+    private write(kind: Agent['kind'], id: string, manifest: Fields, systemPrompt: string | undefined): Agent {
+        const directory = join(this.location.path, kind === 'local' ? LOCAL_DIRECTORY : REMOTE_DIRECTORY, id);
+        const prompt = kind === 'local' && systemPrompt !== undefined && systemPrompt.trim() !== '' ? systemPrompt : undefined;
+        const context: ManifestContext = {
+            id,
+            directory,
+            manifestPath: join(directory, MANIFEST_FILE),
+            env: this.env,
+            hasSystemPrompt: prompt !== undefined
+        };
+        if (kind === 'local') {
+            readLocalManifest(manifest, context);
+        } else {
+            readRemoteManifest(manifest, context);
+        }
+        mkdirSync(directory, { recursive: true });
+        writeAtomically(context.manifestPath, `${JSON.stringify(manifest, null, 4)}\n`);
+        if (kind === 'local') {
+            const promptPath = join(directory, SYSTEM_PROMPT_FILE);
+            if (prompt === undefined) {
+                rmSync(promptPath, { force: true });
+            } else {
+                writeAtomically(promptPath, prompt.endsWith('\n') ? prompt : `${prompt}\n`);
+            }
+        }
+        const agent = readAgent(this.location.path, kind, id, this.env);
+        prepareAgent(agent);
+        return agent;
+    }
+    private summary(agentId: string): AgentSummary {
+        const found = this.supervisor.agents().find((agent) => agent.id === agentId);
+        if (found === undefined) {
+            throw new Error(`The agent "${agentId}" is not in the fleet.`);
+        }
+        return found;
+    }
+}
+export { FleetSettings, TRASH_DIRECTORY };
+export type { FleetSettingsOptions };

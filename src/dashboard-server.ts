@@ -15,6 +15,8 @@ import type {
     SendRequest,
     ServerMessage
 } from './dashboard-protocol.js';
+import { ConfigurationError } from './errors.js';
+import type { FleetSettings } from './fleet-settings.js';
 import { UnknownAgentError } from './supervisor.js';
 import type { Supervisor, SupervisorNotice } from './supervisor.js';
 /** Port the dashboard listens on unless told otherwise. */
@@ -46,6 +48,8 @@ type DashboardOptions = {
      * this secret in the `x-flotti-stop` header; without one there is no such route.
      */
     readonly shutdown?: { readonly token: string; readonly onRequest: () => void };
+    /** What the settings page changes; without it the page can only look at the fleet, not change it. */
+    readonly settings?: FleetSettings;
 };
 /** A running dashboard. */
 type Dashboard = {
@@ -61,43 +65,113 @@ class HttpError extends Error {
         super(message);
     }
 }
+type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
+/** What a route works with: the running fleet and, when there is one, the settings of it. */
+type Context = { readonly supervisor: Supervisor; readonly settings: FleetSettings | undefined };
 type Route = {
+    readonly method: Method;
     readonly pattern: RegExp;
-    readonly handle: (supervisor: Supervisor, match: string[], body: unknown) => Promise<[number, unknown]>;
+    readonly handle: (context: Context, match: string[], body: unknown) => Promise<[number, unknown]>;
 };
+function requireSettings(context: Context): FleetSettings {
+    if (context.settings === undefined) {
+        throw new HttpError(404, 'This dashboard cannot change the fleet.');
+    }
+    return context.settings;
+}
 /**
- * Every action of the page. A restart answers at once: it may take a minute
- * for a remote agent, and the page follows it by the status events anyway.
+ * Every action of the page. A start or a restart answers at once: it may
+ * take a minute for a remote agent, and the page follows it by the status
+ * events anyway.
  */
 const ROUTES: readonly Route[] = [
     {
-        pattern: /^\/api\/agents\/([^/]+)\/messages$/,
-        handle: async (supervisor, [id], body) => [200, await supervisor.send(id ?? '', messageText(body))]
+        method: 'GET',
+        pattern: /^\/api\/agents$/,
+        handle: async ({ supervisor }) => [200, supervisor.agents()]
     },
     {
+        method: 'POST',
+        pattern: /^\/api\/agents$/,
+        handle: async (context, _match, body) => [201, requireSettings(context).create(body)]
+    },
+    {
+        method: 'GET',
+        pattern: /^\/api\/agents\/([^/]+)$/,
+        handle: async (context, [id]) => [200, requireSettings(context).config(id ?? '')]
+    },
+    {
+        method: 'PUT',
+        pattern: /^\/api\/agents\/([^/]+)$/,
+        handle: async (context, [id], body) => [200, await requireSettings(context).update(id ?? '', body)]
+    },
+    {
+        method: 'DELETE',
+        pattern: /^\/api\/agents\/([^/]+)$/,
+        handle: async (context, [id]) => {
+            const trash = await requireSettings(context).remove(id ?? '');
+            return [200, trash === undefined ? {} : { trash }];
+        }
+    },
+    {
+        method: 'GET',
+        pattern: /^\/api\/fleet$/,
+        handle: async (context) => [200, requireSettings(context).info()]
+    },
+    {
+        method: 'PUT',
+        pattern: /^\/api\/fleet$/,
+        handle: async (context, _match, body) => [200, await requireSettings(context).switchTo(body)]
+    },
+    {
+        method: 'POST',
+        pattern: /^\/api\/agents\/([^/]+)\/messages$/,
+        handle: async ({ supervisor }, [id], body) => [200, await supervisor.send(id ?? '', messageText(body))]
+    },
+    {
+        method: 'POST',
         pattern: /^\/api\/broadcast$/,
-        handle: async (supervisor, _match, body) => {
+        handle: async ({ supervisor }, _match, body) => {
             const deliveries = await supervisor.broadcast(messageText(body), broadcastTargets(body));
             return [200, { deliveries } satisfies BroadcastResponse];
         }
     },
     {
+        method: 'POST',
         pattern: /^\/api\/agents\/([^/]+)\/cancel$/,
-        handle: async (supervisor, [id]) => {
+        handle: async ({ supervisor }, [id]) => {
             await supervisor.cancel(id ?? '');
             return [200, {}];
         }
     },
     {
+        method: 'POST',
         pattern: /^\/api\/agents\/([^/]+)\/restart$/,
-        handle: async (supervisor, [id]) => {
+        handle: async ({ supervisor }, [id]) => {
             void supervisor.restart(id ?? '').catch(() => undefined);
             return [202, {}];
         }
     },
     {
+        method: 'POST',
+        pattern: /^\/api\/agents\/([^/]+)\/start$/,
+        handle: async ({ supervisor }, [id]) => {
+            void supervisor.startAgent(id ?? '').catch(() => undefined);
+            return [202, {}];
+        }
+    },
+    {
+        method: 'POST',
+        pattern: /^\/api\/agents\/([^/]+)\/stop$/,
+        handle: async ({ supervisor }, [id]) => {
+            await supervisor.stopAgent(id ?? '');
+            return [200, {}];
+        }
+    },
+    {
+        method: 'POST',
         pattern: /^\/api\/agents\/([^/]+)\/permissions\/([^/]+)$/,
-        handle: async (supervisor, [id, requestId], body) => {
+        handle: async ({ supervisor }, [id, requestId], body) => {
             const { optionId } = (body ?? {}) as PermissionAnswer;
             if (!supervisor.answerPermission(id ?? '', requestId ?? '', typeof optionId === 'string' ? optionId : undefined)) {
                 throw new HttpError(404, 'No such permission request is waiting.');
@@ -163,26 +237,24 @@ function readBody(request: IncomingMessage): Promise<unknown> {
         request.on('error', reject);
     });
 }
-async function handleApi(supervisor: Supervisor, request: IncomingMessage, path: string): Promise<[number, unknown]> {
-    if (path === '/api/agents' && request.method === 'GET') {
-        return [200, supervisor.agents()];
-    }
-    const route = ROUTES.map((candidate) => ({ candidate, match: candidate.pattern.exec(path) }))
-        .find(({ match }) => match !== null);
-    if (route === undefined || route.match === null) {
+async function handleApi(context: Context, request: IncomingMessage, path: string): Promise<[number, unknown]> {
+    const matching = ROUTES.map((candidate) => ({ candidate, match: candidate.pattern.exec(path) }))
+        .filter(({ match }) => match !== null);
+    if (matching.length === 0) {
         throw new HttpError(404, `Nothing at ${path}.`);
     }
-    if (request.method !== 'POST') {
-        throw new HttpError(405, 'Use POST.');
+    const route = matching.find(({ candidate }) => candidate.method === request.method);
+    if (route === undefined || route.match === null) {
+        throw new HttpError(405, `Use ${matching.map(({ candidate }) => candidate.method).join(' or ')}.`);
     }
     // A JSON body cannot come from a plain HTML form of another site, nor
     // cross-site without a preflight this server never answers.
-    if (!(request.headers['content-type'] ?? '').startsWith('application/json')) {
+    if (request.method !== 'GET' && !(request.headers['content-type'] ?? '').startsWith('application/json')) {
         throw new HttpError(415, 'Send the body as application/json.');
     }
-    const body = await readBody(request);
+    const body = request.method === 'GET' ? undefined : await readBody(request);
     const match = route.match.slice(1).map((part) => decodeURIComponent(part));
-    return route.candidate.handle(supervisor, match, body);
+    return route.candidate.handle(context, match, body);
 }
 /** Serves a file of the built page; any other path gets `index.html`, the page routes itself. */
 async function serveStatic(webRoot: string, path: string, response: ServerResponse): Promise<void> {
@@ -213,6 +285,10 @@ function errorResponse(error: unknown): [number, ErrorResponse] {
     if (error instanceof UnknownAgentError) {
         return [404, { error: error.message }];
     }
+    if (error instanceof ConfigurationError) {
+        const status = error.kind === 'duplicate-agent-id' || error.kind === 'already-running' ? 409 : 400;
+        return [status, { error: error.hint === undefined ? error.message : `${error.message} ${error.hint}` }];
+    }
     return [500, { error: error instanceof Error ? error.message : String(error) }];
 }
 /** Whether this is `flotti stop` asking, with the secret of this very run. */
@@ -239,7 +315,7 @@ function requestHandler(supervisor: Supervisor, hosts: Set<string>, options: Das
             void serveStatic(webRoot, path, response);
             return;
         }
-        handleApi(supervisor, request, path).then(
+        handleApi({ supervisor, settings: options.settings }, request, path).then(
             ([status, body]) => send(response, status, body),
             (error: unknown) => send(response, ...errorResponse(error))
         );

@@ -1,5 +1,5 @@
 import { deepStrictEqual, ok, strictEqual } from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,8 @@ import type { AgentEvent } from '../src/agent-events.js';
 import type { ServerMessage } from '../src/dashboard-protocol.js';
 import { startDashboard } from '../src/dashboard-server.js';
 import type { Dashboard } from '../src/dashboard-server.js';
+import { loadFleet } from '../src/fleet.js';
+import { FleetSettings } from '../src/fleet-settings.js';
 import { Supervisor } from '../src/supervisor.js';
 import { FakeFleetAgent, fakeFleet } from './fake-fleet-agent.js';
 const webRoot = mkdtempSync(join(tmpdir(), 'flotti-web-'));
@@ -41,7 +43,10 @@ function call(port: number, method: string, path: string, body?: unknown, header
             port,
             method,
             path,
-            headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers }
+            headers: {
+                ...(body === undefined ? {} : { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(payload)) }),
+                ...headers
+            }
         }, (response) => {
             let text = '';
             response.on('data', (chunk: Buffer) => (text += chunk.toString()));
@@ -167,6 +172,57 @@ test('a page that reconnects gets only what it missed', async () => {
     await supervisor.send('a', 'two');
     await eventually(() => events(messages).length === 4);
     deepStrictEqual(events(messages).map((event) => event.seq), [4, 5, 6, 7]);
+});
+test('starts and stops an agent', async () => {
+    const { dashboard, fake } = await serve('a');
+    strictEqual((await call(dashboard.port, 'POST', '/api/agents/a/stop', {})).status, 200);
+    strictEqual(fake('a').status, 'stopped');
+    strictEqual((await call(dashboard.port, 'POST', '/api/agents/a/start', {})).status, 202);
+    await eventually(() => fake('a').status === 'idle');
+    deepStrictEqual(fake('a').calls, ['start', 'stop', 'start']);
+});
+test('without fleet settings the page cannot change the fleet', async () => {
+    const { dashboard } = await serve('a');
+    strictEqual((await call(dashboard.port, 'GET', '/api/fleet')).status, 404);
+    strictEqual((await call(dashboard.port, 'POST', '/api/agents', { kind: 'local', id: 'b', command: 'x' })).status, 404);
+});
+test('the settings page adds, reads, changes and removes agents, and switches the fleet', async () => {
+    const home = mkdtempSync(join(webRoot, 'home-'));
+    const root = join(home, 'fleet');
+    mkdirSync(root);
+    const env = { HOME: home };
+    const fleet = loadFleet({ argv: ['--fleet', root], env });
+    const createAgent = (agent: { id: string }): FakeFleetAgent => new FakeFleetAgent(agent.id);
+    const supervisor = new Supervisor(fleet, { createAgent });
+    const settings = new FleetSettings(fleet, supervisor, { env });
+    const dashboard = await startDashboard(supervisor, { port: 0, webRoot, settings });
+    const sockets: WebSocket[] = [];
+    open.push({ dashboard, supervisor, sockets });
+    const { port } = dashboard;
+    const { messages } = await page(port, sockets, {});
+    const created = await call(port, 'POST', '/api/agents', { kind: 'local', id: 'claude', command: 'claude-acp', systemPrompt: 'Hi.' });
+    deepStrictEqual([created.status, (created.body as { id: string }).id], [201, 'claude']);
+    await eventually(() => messages.some((message) => message.type === 'fleet' && message.agents.length === 1));
+    deepStrictEqual((await call(port, 'GET', '/api/agents/claude')).body, { kind: 'local', id: 'claude', command: 'claude-acp', systemPrompt: 'Hi.\n' });
+    strictEqual((await call(port, 'POST', '/api/agents', { kind: 'local', id: 'claude', command: 'x' })).status, 409);
+    const broken = await call(port, 'POST', '/api/agents', { kind: 'local', id: 'codex' });
+    strictEqual(broken.status, 400);
+    ok(/command is missing/.test((broken.body as { error: string }).error), broken.text);
+    const changed = await call(port, 'PUT', '/api/agents/claude', { kind: 'local', id: 'claude', name: 'Claude', command: 'claude-acp' });
+    deepStrictEqual([changed.status, (changed.body as { name: string }).name], [200, 'Claude']);
+    const removed = await call(port, 'DELETE', '/api/agents/claude', {});
+    strictEqual(removed.status, 200, removed.text);
+    ok(typeof (removed.body as { trash?: string }).trash === 'string');
+    strictEqual((await call(port, 'GET', '/api/agents/claude')).status, 404);
+    deepStrictEqual((await call(port, 'GET', '/api/fleet')).body, {
+        path: root,
+        source: 'argument',
+        pinnedBy: 'argument',
+        settingsFile: join(home, '.flotti', 'settings.json')
+    });
+    const switched = await call(port, 'PUT', '/api/fleet', { path: '~/other' });
+    deepStrictEqual([switched.status, (switched.body as { path: string }).path], [200, join(home, 'other')]);
+    strictEqual((await call(port, 'PUT', '/api/fleet', { path: 'relative' })).status, 400);
 });
 test('tells the pages when it goes away', async () => {
     const { dashboard, sockets } = await serve('a');

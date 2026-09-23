@@ -2,7 +2,7 @@ import { deepStrictEqual, rejects, strictEqual, throws } from 'node:assert/stric
 import { test } from 'node:test';
 import { Supervisor, UnknownAgentError } from '../src/supervisor.js';
 import type { SupervisorNotice } from '../src/supervisor.js';
-import { fakeFleet } from './fake-fleet-agent.js';
+import { FakeFleetAgent, fakeFleet } from './fake-fleet-agent.js';
 function supervised(...ids: string[]) {
     const { fleet, fakes, createAgent } = fakeFleet(...ids);
     const supervisor = new Supervisor(fleet, { createAgent, queuedAfterMs: 50, historyLimit: 5 });
@@ -75,4 +75,50 @@ test('passes restart, cancel and permission answers to the agent, and stops them
     await supervisor.stop();
     deepStrictEqual(fake(fakes.get('a')).calls, ['start', 'permission r1 yes', 'permission r1 yes', 'cancel', 'restart', 'stop']);
     deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'stop']);
+});
+test('an agent added, removed, stopped and started while the fleet runs; every change of the fleet is announced', async () => {
+    const { supervisor, fakes, notices } = supervised('a', 'b');
+    await supervisor.start();
+    const fleets = (): string[][] => notices.flatMap((notice) => (notice.type === 'fleet' ? [notice.agents.map((agent) => agent.id)] : []));
+    const b = supervisor.agent('b');
+    await supervisor.remove('b');
+    deepStrictEqual(supervisor.agents().map((agent) => agent.id), ['a']);
+    deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'stop']);
+    fakes.set('b', new FakeFleetAgent('b'));
+    supervisor.add(b);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(supervisor.agents().map((agent) => [agent.id, agent.status]), [['a', 'idle'], ['b', 'idle']]);
+    throws(() => supervisor.add(b), /already/);
+    await supervisor.stopAgent('a');
+    strictEqual(supervisor.agents()[0]?.status, 'stopped');
+    await supervisor.startAgent('a');
+    strictEqual(supervisor.agents()[0]?.status, 'idle');
+    deepStrictEqual(fleets(), [['a'], ['a', 'b']]);
+});
+test('a changed agent keeps its history, and the numbers of its events go on growing', async () => {
+    const { fleet, fakes, createAgent } = fakeFleet('a');
+    const supervisor = new Supervisor(fleet, { createAgent });
+    await supervisor.start();
+    await supervisor.send('a', 'one');
+    deepStrictEqual(supervisor.history('a').map((event) => event.seq), [1, 2, 3, 4]);
+    const first = fake(fakes.get('a'));
+    fakes.set('a', new FakeFleetAgent('a'));
+    await supervisor.replace({ ...supervisor.agent('a'), name: 'Changed' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(first.calls, ['start', 'send one', 'stop']);
+    deepStrictEqual(fake(fakes.get('a')).calls, ['start'], 'a running agent runs on with the new manifest');
+    strictEqual(supervisor.agents()[0]?.name, 'Changed');
+    deepStrictEqual(supervisor.history('a').map((event) => event.seq), [1, 2, 3, 4, 5, 6]);
+    deepStrictEqual(supervisor.history('a', 5).map((event) => event.type === 'status' && event.status), ['idle']);
+});
+test('another fleet: the old agents stop, the new ones start', async () => {
+    const { supervisor, fakes, notices } = supervised('a');
+    await supervisor.start();
+    const next = fakeFleet('x');
+    fakes.set('x', fake(next.fakes.get('x')));
+    await supervisor.load(next.fleet);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(fake(fakes.get('a')).calls, ['start', 'stop']);
+    deepStrictEqual(supervisor.agents().map((agent) => [agent.id, agent.status]), [['x', 'idle']]);
+    deepStrictEqual(notices.filter((notice) => notice.type === 'fleet').length, 1);
 });

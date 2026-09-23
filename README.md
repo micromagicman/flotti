@@ -19,8 +19,10 @@ npx flotti run      # starts the fleet and the dashboard: http://127.0.0.1:4870/
 npx flotti stop     # stops them, from any terminal
 ```
 
-That is the whole command line; everything else is done in the dashboard. Both commands take
-`--fleet <dir>` (see [Where the fleet comes from](#where-the-fleet-comes-from)); `run` also takes
+That is the whole command line; everything else is done in the dashboard — agents are added, changed,
+removed, started and stopped there, and the fleet directory is picked there too (see
+[Settings](#settings)). Both commands also take `--fleet <dir>`, for tests and for several fleets on
+one machine (see [Where the fleet comes from](#where-the-fleet-comes-from)); `run` also takes
 `--port <port>` or `FLOTTI_PORT`.
 
 - **`flotti run`** reads the fleet, starts every agent, serves the dashboard and stays in the
@@ -50,10 +52,36 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   Shift+Enter makes a new line. A message to a busy agent waits in line, and the field says so.
   **Restart** restarts the agent — a local one keeps its session when it can, a remote one is asked to
   restart itself or starts a new conversation (see [Lifecycle](#lifecycle) and
-  [Talking to a remote agent](#talking-to-a-remote-agent)); **Cancel** drops the message in work.
+  [Talking to a remote agent](#talking-to-a-remote-agent)); **Stop** stops it until **Start** starts it
+  again; **Cancel** drops the message in work.
 - **All agents** sends one message to every agent you leave ticked. Each gets it on its own, so an
   agent that is down or busy holds nobody up; the page shows, agent by agent, whether the message was
   delivered, waits in line or failed, and the answers come in each agent's tab.
+- **Settings** sets the fleet up; see below.
+
+### Settings
+
+The settings page does what would otherwise be done by editing files, and it does it by writing the
+same files: the fleet stays directories a person can read and edit by hand.
+
+- **Agents.** Each agent of the fleet with its status and **Start**/**Stop**, **Restart**, **Edit**
+  and **Delete**. **Add local agent** and **Add remote agent** open a form with every field of
+  [the manifest](#the-manifest-agentjson) and, for a local agent, its system prompt. Picking an adapter
+  fills in the command it is started with. A field left empty is left out of `agent.json`, so the
+  documented default applies; fields the form does not know are kept as they are in the file.
+- **Checked before it is written.** A new or changed agent is checked the way `flotti run` checks the
+  fleet, and nothing is written when the check fails: the form shows the same sentence the command line
+  would print. The id names the directory, so it is picked once and stays.
+- **Put to work at once.** A new agent is started as soon as it is saved. A changed one is restarted
+  with its new manifest — unless it was stopped, then it stays stopped — and its tab keeps its history.
+- **Delete** stops the agent and moves its directory — memory bank and skills with it — to `.trash/`
+  in the fleet directory, as `<local|remote>-<id>-<time>`. The fleet does not read `.trash/`; to bring
+  an agent back, move its directory back and run flotti again.
+- **Fleet directory.** Shows the directory the run works with and where it came from. **Switch** points
+  the run at another one: the agents of the old fleet stop, those of the new one start, and
+  `.flotti-run.json` moves along so `flotti stop` still finds the run. A directory that is not there
+  yet is created — that is how a new fleet begins; one with a broken manifest is refused, and nothing
+  changes. The choice is saved in `~/.flotti/settings.json`, and the next `flotti run` opens it.
 
 The server is the one source of truth and the page only follows it: every event of an agent has a
 number, and a page that connects — or reconnects after losing the connection — says which it has seen
@@ -71,8 +99,14 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `POST /api/broadcast` `{text, agents?}`       | one message to these agents, or to all; a result each  |
 | `POST /api/agents/<id>/restart`               | restarts the agent; answers at once, the status follows |
 | `POST /api/agents/<id>/cancel`                | drops the message in work                              |
+| `POST /api/agents/<id>/start`, `…/stop`       | starts or stops the agent; start answers at once        |
+| `POST /api/agents` `{kind, id, …}`            | a new agent: writes its directory and starts it         |
+| `GET /api/agents/<id>`                        | its manifest as the file says it, and its system prompt |
+| `PUT /api/agents/<id>` `{kind, id, …}`        | a changed manifest: writes it and restarts the agent    |
+| `DELETE /api/agents/<id>`                     | stops the agent and moves its directory to `.trash/`    |
+| `GET /api/fleet`, `PUT /api/fleet` `{path}`   | the fleet directory; switches to another one            |
 | `POST /api/agents/<id>/permissions/<request>` `{optionId?}` | answers a permission request; no option refuses it |
-| `/ws`                                         | `fleet` first; the page answers `subscribe` with the last number it has seen of each agent, and gets the events after them, then live ones |
+| `/ws`                                         | `fleet` first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and gets the events after them, then live ones |
 
 With no login, the server guards against other web pages rather than against people: it answers only
 to the host names of this machine (a page elsewhere cannot rebind a name of its own to `127.0.0.1`),
@@ -111,14 +145,17 @@ The first of these that is set wins:
 
 1. `--fleet <dir>` (also `--fleet=<dir>`);
 2. the `FLOTTI_FLEET` environment variable;
-3. `~/.flotti/agents` — the default.
+3. the directory picked on the [settings page](#settings), saved in `~/.flotti/settings.json`;
+4. `~/.flotti/agents` — the default.
 
 Pointing at another directory is how tests and several fleets on one machine keep apart. A leading `~`
 is expanded by flotti itself, from `HOME` (or `USERPROFILE` on Windows), because under `npx` there
 is no shell to do it. A relative path is resolved against the current directory.
 
-A missing default directory is an empty fleet — that is what the first run looks like. A missing
-directory named by `--fleet` or `FLOTTI_FLEET` is an error: it is most likely a typo.
+A missing default or saved directory is an empty fleet — that is what the first run looks like. A
+missing directory named by `--fleet` or `FLOTTI_FLEET` is an error: it is most likely a typo. A run
+started with `--fleet` or `FLOTTI_FLEET` may still switch on the settings page; the next run started
+the same way opens that directory again, since those two win over the saved one.
 
 ## The manifest: `agent.json`
 
