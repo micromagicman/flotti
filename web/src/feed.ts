@@ -7,6 +7,7 @@ import type { AgentEvent, AgentStatus, PermissionOption, ToolCallStatus } from '
 type FeedItem =
     | { readonly kind: 'message'; readonly key: string; readonly role: 'user' | 'agent'; readonly messageId: string; readonly text: string }
     | { readonly kind: 'thought'; readonly key: string; readonly text: string }
+    | { readonly kind: 'progress'; readonly key: string; readonly text: string }
     | {
         readonly kind: 'tool';
         readonly key: string;
@@ -99,6 +100,8 @@ function withEvent(items: readonly FeedItem[], event: AgentEvent): readonly Feed
             return withMessage(items, event);
         case 'thought':
             return withThought(items, event);
+        case 'progress':
+            return [...items, { kind: 'progress', key, text: event.text }];
         case 'tool-call':
             return withToolCall(items, event);
         case 'permission':

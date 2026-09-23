@@ -30,6 +30,16 @@ test('an id used again after the turn ended starts a new message', () => {
     );
     deepStrictEqual(feed.items.flatMap((item) => (item.kind === 'message' ? [item.text] : [])), ['one', 'two']);
 });
+test('the progress of the agent is a line of its own, shown as it comes', () => {
+    const feed = feedOf(
+        { type: 'progress', text: 'Running the tests' },
+        { type: 'progress', text: 'Tests are green' }
+    );
+    deepStrictEqual(feed.items, [
+        { kind: 'progress', key: 'e1', text: 'Running the tests' },
+        { kind: 'progress', key: 'e2', text: 'Tests are green' }
+    ]);
+});
 test('updates of a tool call fold into one card', () => {
     const feed = feedOf(
         { type: 'tool-call', toolCallId: 'c', title: 'Read file', status: 'pending' },

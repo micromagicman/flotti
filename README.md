@@ -379,6 +379,11 @@ agent: the dashboard gets the same events and drives it the same way.
 - **Restart.** An agent that declares the [restart extension](docs/a2a-restart.md) is asked to restart
   itself, and flotti reconnects once it is back. Any other agent cannot be restarted from here, so
   for it restart means a new conversation.
+- **What the agent says of its own.** An agent that declares the [inbox extension](docs/a2a-inbox.md)
+  gets a stream that flotti opens once and keeps open: through it the agent sends messages nobody asked
+  for — "the merge request is ready" — and lines about what it is busy with, and they show in its tab
+  like any other. A broken inbox is reconnected to for as long as the agent is connected. Without the
+  extension an A2A agent has no way to speak first: its tab shows only its answers.
 
 ### Over SSH
 
@@ -425,11 +430,16 @@ for everything after N — and its time:
 | `status`     | `starting`, `idle`, `working`, `waiting`, `error` or `stopped`, and why                        |
 | `message`    | a piece of a message: pieces with one `messageId` make one message, `append` adds to its end   |
 | `thought`    | a piece of the agent's reasoning                                                               |
+| `progress`   | a line about what the agent is doing, shown in the open                                        |
 | `tool-call`  | a tool call started or changed                                                                 |
 | `permission` | the agent waits until a person picks an option                                                 |
 | `turn-end`   | the agent is done with a message: `end_turn`, `cancelled`, `error`, `input_required`, …        |
 | `log`        | a line of diagnostics                                                                          |
 | `raw`        | whatever else the protocol said, untouched                                                     |
+
+Events do not have to answer a message: what an agent says or does on its own, between the messages of a
+person, comes the same way. A local agent does so with any ACP `session/update` it sends outside a
+prompt; a remote one through the [inbox extension](docs/a2a-inbox.md).
 
 A kind of event one protocol has not got simply does not come from it: A2A has no thoughts, tool calls
 or permission requests — an A2A agent asks a person by pausing its task, and the next message answers.

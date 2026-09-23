@@ -472,6 +472,8 @@ class LocalAgentProcess implements FleetAgent {
             return;
         }
         this.active = undefined;
+        // What the agent says after the turn, on its own, is a message of its own, not more of this answer.
+        this.messages.reset();
         this.cancelPermissions();
         if (reason === undefined) {
             this.emit({ type: 'log', source: 'flotti', text: `the message failed: ${message(error)}` });

@@ -40,6 +40,8 @@ function FeedEntry({ item, agentName, onAnswer }: { readonly item: FeedItem } & 
             );
         case 'thought':
             return <details className="item thought"><summary>Thinking</summary><div className="text">{item.text}</div></details>;
+        case 'progress':
+            return <div className="item progress">{item.text}</div>;
         case 'tool':
             return (
                 <div className={`item tool tool-${item.status ?? 'pending'}`}>

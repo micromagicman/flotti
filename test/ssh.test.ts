@@ -5,13 +5,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, afterEach, describe, it } from 'node:test';
 import { TaskState } from '@a2a-js/sdk';
-import { A2AAgent } from '../src/a2a-agent.js';
+import { A2AAgent, INBOX_EXTENSION } from '../src/a2a-agent.js';
 import type { AgentEvent, AgentStatus } from '../src/agent-events.js';
 import { SshError, describeFailure, discover, parsePublished, parseTarget, pickPublished } from '../src/ssh.js';
 import type { SshOptions } from '../src/ssh.js';
 import type { RemoteAgent } from '../src/types.js';
 import { FakeAgent, agentMessage, said, statusUpdate, task } from './a2a-fake-server.js';
 import type { Script } from './a2a-fake-server.js';
+import type { ExecutionEventBus, RequestContext } from '@a2a-js/sdk/server';
 const FAKE_SSH = fileURLToPath(new URL('./fake-ssh.js', import.meta.url));
 const workspace = mkdtempSync(join(tmpdir(), 'flotti-ssh-'));
 after(() => rmSync(workspace, { recursive: true, force: true }));
@@ -134,6 +135,16 @@ function reaches(client: A2AAgent, status: AgentStatus, reason?: string): Promis
         });
     });
 }
+/** Waits until the condition holds, checking every 10 ms. */
+async function eventually(condition: () => boolean, timeoutMs = 5_000): Promise<void> {
+    const until = Date.now() + timeoutMs;
+    while (!condition()) {
+        if (Date.now() > until) {
+            throw new Error('the condition did not come true in time');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+}
 describe('A2AAgent over SSH', () => {
     it('opens the tunnel, uses the published token and talks through the tunnel only', async () => {
         const agent = await new FakeAgent({ script: echo }).listen();
@@ -197,5 +208,47 @@ describe('A2AAgent over SSH: keeping the tunnel up', () => {
         const [tunnel] = pretend.tunnels();
         await client.stop();
         throws(() => process.kill(tunnel ?? 0, 0), /ESRCH/);
+    });
+});
+describe('A2AAgent over SSH: the inbox', () => {
+    it('keeps the inbox open through the tunnel, and opens it again after the tunnel drops', async () => {
+        const inboxes: { bus: ExecutionEventBus; context: RequestContext }[] = [];
+        const agent = await new FakeAgent({
+            extensions: [INBOX_EXTENSION],
+            script: async (context, bus) => {
+                if (context.userMessage.metadata?.[INBOX_EXTENSION] !== undefined) {
+                    inboxes.push({ bus, context });
+                    bus.publish(task(context, TaskState.TASK_STATE_WORKING));
+                    await new Promise(() => undefined);
+                }
+                await echo(context, bus);
+            }
+        }).listen();
+        running.push(agent);
+        const pretend = host();
+        pretend.publish('eva', { url: `${agent.url}/`, token: 'published-secret' });
+        const { client, events } = overSsh(pretend.ssh);
+        const post = (text: string) => {
+            const inbox = inboxes.at(-1);
+            ok(inbox !== undefined);
+            inbox.bus.publish(statusUpdate(inbox.context.taskId, inbox.context.contextId, TaskState.TASK_STATE_WORKING,
+                agentMessage(text, inbox.context, `own-${text}`)));
+        };
+        const said = (text: string) => events.some((event) => event.type === 'message' && event.text === text);
+        await client.start();
+        await eventually(() => inboxes.length === 1);
+        post('before the drop');
+        await eventually(() => said('before the drop'));
+        for (const request of agent.received) {
+            strictEqual(request.headers.authorization, 'Bearer published-secret');
+        }
+        const [first] = pretend.tunnels();
+        const back = reaches(client, 'idle', 'reconnected');
+        process.kill(first ?? 0);
+        await back;
+        await eventually(() => inboxes.length === 2);
+        post('after the drop');
+        await eventually(() => said('after the drop'));
+        ok(pretend.forwarded() >= 3, 'the inbox went down the tunnel');
     });
 });

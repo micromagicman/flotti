@@ -15,6 +15,7 @@ import type { Page } from '@playwright/test';
 import { TaskState } from '@a2a-js/sdk';
 // The compiled helpers of the unit tests: `npm run test:e2e` builds them first.
 import { FakeAgent, agentMessage, said, statusUpdate, task } from '../build-test/test/a2a-fake-server.js';
+import { INBOX_EXTENSION } from '../build-test/src/a2a-agent.js';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CLI = join(ROOT, 'build', 'index.js');
 const FAKE_ACP = join(ROOT, 'build-test', 'test', 'fake-acp-agent.js');
@@ -34,13 +35,33 @@ function localAgent(fleet: string, id: string, adapter?: string): void {
         env: { FAKE_ACP: JSON.stringify({ record }) }
     }));
 }
+/**
+ * What the remote agent says of its own when asked to `write later`: a line of
+ * progress and then a message, through the inbox — after the turn is over.
+ */
 async function remoteAgent(fleet: string, id: string): Promise<void> {
+    let inbox: ((text: string, kind: string) => void) | undefined;
     remote = await new FakeAgent({
         streaming: true,
+        extensions: [INBOX_EXTENSION],
         script: async (context, bus) => {
             bus.publish(task(context, TaskState.TASK_STATE_WORKING));
+            if (context.userMessage.metadata?.[INBOX_EXTENSION] !== undefined) {
+                let count = 0;
+                inbox = (text, kind) => bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_WORKING, {
+                    ...agentMessage(text, context, `own-${++count}`),
+                    metadata: { [INBOX_EXTENSION]: { kind } }
+                }));
+                await new Promise(() => undefined);
+            }
             bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_COMPLETED, agentMessage(`echo: ${said(context)}`, context)));
             bus.finished();
+            if (said(context) === 'write later') {
+                setTimeout(() => {
+                    inbox?.('Checking the pipeline', 'progress');
+                    inbox?.('The merge request is ready', 'message');
+                }, 100);
+            }
         }
     }).listen();
     const directory = join(fleet, 'remote', id);
@@ -118,6 +139,16 @@ test('writes to one agent, and the answer stays in its tab', async ({ page }) =>
     await expect(feed(page, 'codex')).not.toContainText('you said');
     await tab(page, 'claude').click();
     await expect(feed(page, 'claude')).toContainText('you said: hello claude');
+});
+test('what an agent says of its own shows in its tab, local and remote alike', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'claude', 'later');
+    await expect(feed(page, 'claude')).toContainText('CI is green');
+    await expect(feed(page, 'claude')).toContainText('Check CI');
+    await say(page, 'eva', 'write later');
+    await expect(feed(page, 'eva')).toContainText('echo: write later');
+    await expect(feed(page, 'eva').locator('.progress')).toHaveText('Checking the pipeline');
+    await expect(feed(page, 'eva').locator('.message-agent').last()).toContainText('The merge request is ready');
 });
 test('a broadcast reaches every agent picked, and each answers in its own tab', async ({ page }) => {
     await page.goto(url);

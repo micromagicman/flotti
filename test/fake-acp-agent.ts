@@ -10,6 +10,8 @@
  * - `deaf`            — ignores cancel and never ends;
  * - `permission`      — asks for a permission and says which option came back;
  * - `spawn`           — starts a grandchild process and writes its pid to the record;
+ * - `later`           — answers, and a moment after the turn is over goes on of its own:
+ *                       a tool call and a message without `messageId`;
  * - anything else     — answers "you said: <message>" with a tool call on the way.
  */
 import { spawn } from 'node:child_process';
@@ -100,6 +102,17 @@ async function say(client: acp.AgentContext, sessionId: string, text: string): P
         update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text }, messageId: 'm1' }
     });
 }
+/** What an agent does with no prompt to answer: works on, and says so. */
+async function onMyOwn(client: acp.AgentContext, sessionId: string): Promise<void> {
+    await client.notify(acp.methods.client.session.update, {
+        sessionId,
+        update: { sessionUpdate: 'tool_call', toolCallId: 'call-2', title: 'Check CI', status: 'completed' }
+    });
+    await client.notify(acp.methods.client.session.update, {
+        sessionId,
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'CI is green' } }
+    });
+}
 acp.agent({ name: 'fake-acp-agent' })
     .onRequest(acp.methods.agent.initialize, (context) => {
         record({ event: 'initialize', params: context.params });
@@ -174,6 +187,10 @@ acp.agent({ name: 'fake-acp-agent' })
                 await say(context.client, sessionId, 'spawned');
                 break;
             }
+            case 'later':
+                await say(context.client, sessionId, 'on it');
+                setTimeout(() => void onMyOwn(context.client, sessionId), 50);
+                break;
             default:
                 await answer(context.client, sessionId, text);
         }
