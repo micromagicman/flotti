@@ -17,11 +17,11 @@ import type { AgentEventListener, AgentStatus, FleetAgent } from './agent-events
 import type { Environment } from './manifest.js';
 import type { RemoteAgent, RemoteAuth } from './types.js';
 /**
- * A2A extension through which supavisor asks a remote agent to restart itself.
+ * A2A extension through which flotti asks a remote agent to restart itself.
  * The agent declares it in `capabilities.extensions` of its card; the contract
  * is in docs/a2a-restart.md.
  */
-const RESTART_EXTENSION = 'https://github.com/micromagicman/supavisor/blob/main/docs/a2a-restart.md';
+const RESTART_EXTENSION = 'https://github.com/micromagicman/flotti/blob/main/docs/a2a-restart.md';
 type A2AAgentOptions = {
     /** Where the secrets named by `auth` are read from; defaults to `process.env`. */
     readonly env?: Environment;
@@ -44,11 +44,11 @@ type A2AAgentInfo = {
     readonly description: string;
     /** Version of the agent itself, as its card states it. */
     readonly version: string;
-    /** A2A version supavisor speaks to it, sent in the `A2A-Version` header. */
+    /** A2A version flotti speaks to it, sent in the `A2A-Version` header. */
     readonly protocolVersion: string;
-    /** Whether answers arrive as a stream; otherwise supavisor asks for the task every so often. */
+    /** Whether answers arrive as a stream; otherwise flotti asks for the task every so often. */
     readonly streaming: boolean;
-    /** Whether the agent can restart itself when asked (the supavisor restart extension). */
+    /** Whether the agent can restart itself when asked (the flotti restart extension). */
     readonly restart: boolean;
     /** Whether the card carries a signature. It is not verified: see README, "Talking to a remote agent". */
     readonly signed: boolean;
@@ -194,7 +194,7 @@ class A2AAgent implements FleetAgent {
      * Restarts the agent itself when its card offers the restart extension, and
      * reconnects once it is back. An agent without the extension cannot be
      * restarted from here: its conversation starts anew instead, which is all
-     * a restart means for a process supavisor does not own.
+     * a restart means for a process flotti does not own.
      */
     async restart(): Promise<void> {
         const client = this.client;
@@ -591,7 +591,7 @@ function cardLocation(url: string): { readonly base: string; readonly path: stri
     return { base: parsed.href, path: AGENT_CARD_PATH };
 }
 /**
- * Headers that prove supavisor to the agent. The secret is read from the
+ * Headers that prove flotti to the agent. The secret is read from the
  * environment variable the manifest names, on every request, and never kept.
  */
 function authHeaders(auth: RemoteAuth, env: Environment): Record<string, string> {
@@ -674,7 +674,7 @@ async function askToRestart(client: Client): Promise<void> {
         contextId: '',
         taskId: '',
         role: Role.ROLE_USER,
-        parts: [textPart('Restart requested by supavisor.')],
+        parts: [textPart('Restart requested by flotti.')],
         metadata: { [RESTART_EXTENSION]: { action: 'restart' } },
         extensions: [RESTART_EXTENSION],
         referenceTaskIds: []

@@ -243,8 +243,8 @@ describe('LocalAgentProcess: stopping', { timeout: 20_000 }, () => {
 });
 describe('LocalAgentProcess: failures a retry cannot fix', { timeout: 20_000 }, () => {
     it('goes fatal at once for a command that does not exist', async () => {
-        const harness = new Harness({ manifest: { command: 'supavisor-no-such-command' } });
-        await rejects(harness.agent.start(), /command not found: supavisor-no-such-command/);
+        const harness = new Harness({ manifest: { command: 'flotti-no-such-command' } });
+        await rejects(harness.agent.start(), /command not found: flotti-no-such-command/);
         strictEqual(harness.agent.state, 'fatal');
     });
     it('goes fatal at once when the agent wants a login', async () => {

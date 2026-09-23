@@ -5,9 +5,9 @@ import { describe, it } from 'node:test';
 import { FLEET_PATH_VARIABLE, loadFleet, prepareFleet, resolveFleetLocation } from '../src/fleet.js';
 import { HOME, LOCAL, REMOTE, agent, failure, fleetDirectory, load, workspace } from './fleet-helpers.js';
 describe('resolveFleetLocation: where the path comes from', () => {
-    it('falls back to ~/.supavisor/agents', () => {
+    it('falls back to ~/.flotti/agents', () => {
         deepStrictEqual(resolveFleetLocation({ argv: [], env: { HOME } }), {
-            path: '/home/eva/.supavisor/agents',
+            path: '/home/eva/.flotti/agents',
             source: 'default'
         });
     });

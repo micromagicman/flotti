@@ -78,7 +78,7 @@ type AgentEventBody =
      */
     | { readonly type: 'turn-end'; readonly reason: string }
     /** A line of diagnostics: from the agent itself, or from the side that runs it. */
-    | { readonly type: 'log'; readonly source: 'agent' | 'supavisor'; readonly text: string }
+    | { readonly type: 'log'; readonly source: 'agent' | 'flotti'; readonly text: string }
     /** Something the protocol said that has no event of its own here, untouched. */
     | { readonly type: 'raw'; readonly protocol: 'acp' | 'a2a'; readonly payload: unknown };
 /** An event with its place in the agent's history. */

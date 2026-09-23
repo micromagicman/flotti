@@ -11,13 +11,13 @@ import {
 } from './manifest.js';
 import type { Environment, ManifestContext } from './manifest.js';
 import type { Agent, Fleet, FleetLocation, LocalAgent } from './types.js';
-/** Command line argument that points supavisor at a fleet directory. */
+/** Command line argument that points flotti at a fleet directory. */
 const FLEET_PATH_ARGUMENT = '--fleet';
-/** Environment variable that points supavisor at a fleet directory. */
-const FLEET_PATH_VARIABLE = 'SUPAVISOR_FLEET';
-/** Where supavisor looks when neither the argument nor the variable is given. */
-const DEFAULT_FLEET_PATH = '~/.supavisor/agents';
-/** Directory of the fleet with the agents supavisor starts itself. */
+/** Environment variable that points flotti at a fleet directory. */
+const FLEET_PATH_VARIABLE = 'FLOTTI_FLEET';
+/** Where flotti looks when neither the argument nor the variable is given. */
+const DEFAULT_FLEET_PATH = '~/.flotti/agents';
+/** Directory of the fleet with the agents flotti starts itself. */
 const LOCAL_DIRECTORY = 'local';
 /** Directory of the fleet with the agents that run elsewhere. */
 const REMOTE_DIRECTORY = 'remote';
@@ -86,7 +86,7 @@ function loadFleet(options: LoadFleetOptions = {}): Fleet {
     return { location, exists: true, agents: [...local, ...remote] };
 }
 /**
- * Creates the directories a local agent owns but supavisor never reads —
+ * Creates the directories a local agent owns but flotti never reads —
  * `skills/` and `memory/` — where they are missing.
  *
  * @returns Paths it created.
