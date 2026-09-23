@@ -1,9 +1,12 @@
+import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ConfigurationError } from './errors.js';
 import { DEFAULT_HOST, DEFAULT_PORT, startDashboard } from './dashboard-server.js';
 import type { DashboardOptions } from './dashboard-server.js';
+import type { AgentSummary } from './dashboard-protocol.js';
 import { loadFleet, prepareFleet } from './fleet.js';
 import { FleetSettings } from './fleet-settings.js';
 import type { LoadFleetOptions } from './fleet.js';
@@ -19,8 +22,17 @@ const PORT_VARIABLE = 'FLOTTI_PORT';
  * find it. The leading dot keeps it out of the fleet: such entries are skipped.
  */
 const RUN_FILE = '.flotti-run.json';
+/**
+ * Where the flotti that `flotti start` puts in the background writes what
+ * `flotti run` would print to the terminal. Rewritten on every start.
+ */
+const LOG_FILE = '.flotti.log';
 /** How long `flotti stop` waits for the agents to stop before it gives up. */
 const STOP_TIMEOUT_MS = 30_000;
+/** How long `flotti start` waits for the dashboard to listen before it gives up. */
+const START_TIMEOUT_MS = 30_000;
+/** How long `flotti status` and `flotti stop` wait for the dashboard to answer. */
+const ASK_TIMEOUT_MS = 5000;
 type RunRecord = {
     readonly pid: number;
     readonly url: string;
@@ -29,6 +41,8 @@ type RunRecord = {
     readonly startedAt: string;
 };
 type RunOptions = LoadFleetOptions & {
+    /** The CLI script `flotti start` runs in the background as `flotti run`. */
+    readonly entry?: string;
     /** Where the lines for a person go; `console.log` by default. */
     readonly print?: (line: string) => void;
     readonly dashboard?: DashboardOptions;
@@ -222,7 +236,7 @@ async function stopFleet(options: RunOptions = {}): Promise<boolean> {
     const asked = await fetch(new URL('/api/shutdown', record.url), {
         method: 'POST',
         headers: { 'x-flotti-stop': record.token },
-        signal: AbortSignal.timeout(5000)
+        signal: AbortSignal.timeout(ASK_TIMEOUT_MS)
     }).then((response) => response.ok, () => false);
     if (!asked) {
         process.kill(record.pid, 'SIGTERM');
@@ -235,5 +249,119 @@ async function stopFleet(options: RunOptions = {}): Promise<boolean> {
     print('Stopped.');
     return true;
 }
-export { PORT_ARGUMENT, PORT_VARIABLE, RUN_FILE, dashboardPort, runFleet, stopFleet };
+/** The flotti that runs the fleet, if one does. */
+function runningRecord(fleet: Fleet): RunRecord | undefined {
+    const record = readRecord(runFile(fleet));
+    return record !== undefined && isAlive(record.pid) ? record : undefined;
+}
+function readFrom(path: string): string {
+    try {
+        return readFileSync(path, 'utf8');
+    } catch {
+        return '';
+    }
+}
+/**
+ * `flotti start`: runs `flotti run` in the background, detached from the
+ * terminal, and returns once its dashboard listens. A fleet that is already
+ * run is left as it is: start says so and names its dashboard.
+ *
+ * @returns Whether the fleet runs now.
+ */
+async function startFleet(options: RunOptions = {}): Promise<boolean> {
+    const print = options.print ?? console.log;
+    const argv = options.argv ?? process.argv.slice(2);
+    const env = options.env ?? process.env;
+    const fleet = loadFleet(options);
+    // What `run` would refuse is refused here, in the terminal, rather than in the log.
+    dashboardPort(argv, env);
+    const running = runningRecord(fleet);
+    if (running !== undefined) {
+        print(`flotti already runs this fleet (process ${running.pid}).`);
+        print(`Dashboard: ${running.url}`);
+        return true;
+    }
+    if (options.entry === undefined) {
+        throw new Error('flotti start needs the CLI script to run in the background.');
+    }
+    mkdirSync(fleet.location.path, { recursive: true });
+    const log = join(fleet.location.path, LOG_FILE);
+    const output = openSync(log, 'w');
+    const child = spawn(process.execPath, [options.entry, 'run', ...argv], {
+        detached: true,
+        stdio: ['ignore', output, output],
+        env,
+        windowsHide: true
+    });
+    closeSync(output);
+    return await waitForStart(child, fleet, log, print);
+}
+/** Waits for the flotti `start` put in the background to open its dashboard, and says how it went. */
+async function waitForStart(child: ChildProcess, fleet: Fleet, log: string, print: (line: string) => void): Promise<boolean> {
+    let exited: number | null | undefined;
+    child.once('exit', (code) => (exited = code));
+    child.once('error', () => (exited ??= null));
+    child.unref();
+    const until = Date.now() + START_TIMEOUT_MS;
+    for (;;) {
+        const record = readRecord(runFile(fleet));
+        if (record !== undefined && record.pid === child.pid) {
+            for (const line of readFrom(log).split('\n').filter((entry) => entry.startsWith('Created '))) {
+                print(line);
+            }
+            print(`flotti runs in the background (process ${record.pid}): ${fleet.agents.length} agent(s) from ${fleet.location.path}.`);
+            print(`Dashboard: ${record.url}`);
+            print(`Log: ${log}`);
+            print('flotti status lists the agents, flotti stop stops them.');
+            return true;
+        }
+        if (exited !== undefined) {
+            print(readFrom(log).trimEnd() || `flotti did not start (exit code ${exited}).`);
+            return false;
+        }
+        if (Date.now() > until) {
+            print(`flotti (process ${child.pid}) has not opened the dashboard in ${START_TIMEOUT_MS / 1000} s; see ${log}.`);
+            return false;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+}
+/** Rows of text with the columns lined up. */
+function table(rows: readonly (readonly string[])[]): string[] {
+    const widths = rows[0]?.map((_, column) => Math.max(...rows.map((row) => row[column]?.length ?? 0))) ?? [];
+    return rows.map((row) => row.map((cell, column) => cell.padEnd(widths[column] ?? 0)).join('  ').trimEnd());
+}
+/**
+ * `flotti status`: lists every agent of the fleet that runs, as its dashboard
+ * sees it — id, local or remote, harness, status.
+ *
+ * @returns Whether the fleet runs.
+ */
+async function fleetStatus(options: RunOptions = {}): Promise<boolean> {
+    const print = options.print ?? console.log;
+    const fleet = loadFleet(options);
+    const record = runningRecord(fleet);
+    if (record === undefined) {
+        print(`flotti is not running for ${fleet.location.path}.`);
+        return false;
+    }
+    const agents = await fetch(new URL('/api/agents', record.url), { signal: AbortSignal.timeout(ASK_TIMEOUT_MS) })
+        .then((response) => (response.ok ? response.json() as Promise<AgentSummary[]> : undefined), () => undefined);
+    if (agents === undefined) {
+        print(`flotti runs this fleet (process ${record.pid}), but its dashboard ${record.url} does not answer.`);
+        return false;
+    }
+    print(`flotti runs ${fleet.location.path} (process ${record.pid}), dashboard ${record.url}`);
+    print('');
+    if (agents.length === 0) {
+        print('No agents in the fleet.');
+        return true;
+    }
+    const rows = agents.map((agent) => [agent.id, agent.kind, agent.harness ?? '-', agent.status]);
+    for (const line of table([['ID', 'TYPE', 'HARNESS', 'STATUS'], ...rows])) {
+        print(line);
+    }
+    return true;
+}
+export { LOG_FILE, PORT_ARGUMENT, PORT_VARIABLE, RUN_FILE, dashboardPort, fleetStatus, runFleet, startFleet, stopFleet };
 export type { RunOptions, Running };
