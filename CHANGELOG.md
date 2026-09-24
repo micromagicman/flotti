@@ -92,6 +92,14 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   the sender's tab shows the same envelope, and a line when it could not be delivered. Each agent gets
   a colour of its own, picked at random and kept (#23).
 
+### Changed
+
+- **One look for the controls of the dashboard.** Buttons, fields, checkboxes, status badges, tabs and
+  cards follow one system of soft capsules, its colours, sizes and corners kept as tokens in one place:
+  tinted buttons with the main one in blue, filled fields with a visible edge, a focus ring on every
+  control, a spinner while a button waits. The main button in the dark theme, the amber "waiting for
+  you" and the edges of fields now pass WCAG AA contrast (#61).
+
 ### Fixed
 
 - **`npx` and `codex` start on Windows.** A local agent whose `command` is an npm script — `npx`,

@@ -44,7 +44,7 @@ const LINK_TEXT: Readonly<Record<Link, string>> = {
 /** Offered while the browser has not been told yes or no; a refusal is the person's to undo in the browser. */
 function NotifyButton({ permission, onAsk }: { readonly permission: Permission; readonly onAsk: () => void }) {
     return permission === 'default'
-        ? <button type="button" className="notify" onClick={onAsk} title="A notification when an agent waits for you and flotti is out of sight">Notify me</button>
+        ? <button type="button" className="btn btn-sm notify" onClick={onAsk} title="A notification when an agent waits for you and flotti is out of sight">Notify me</button>
         : null;
 }
 /** What the open tab has shown: the last event of an agent, or how many messages of a conversation. */

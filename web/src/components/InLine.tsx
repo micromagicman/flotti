@@ -57,8 +57,9 @@ function WithdrawButton({ place, pending, onClick }: { readonly place: number; r
     return (
         <button
             type="button"
-            className="queue-cancel"
+            className="btn btn-ghost btn-xs queue-cancel"
             disabled={pending}
+            aria-busy={pending}
             aria-label={pending ? undefined : `Cancel queued message ${place}`}
             onClick={onClick}
         >
@@ -124,7 +125,7 @@ function DroppedLine({ item, onSendAgain }: { readonly item: FeedItem & { kind: 
         <>
             <div className="dropped-line">
                 <span>Not delivered: {item.reason}{item.resent ? ' · sent again' : ''}</span>
-                {again ? <button type="button" disabled={pending} onClick={() => run(() => onSendAgain(item))}>{pending ? 'Sending…' : 'Send again'}</button> : null}
+                {again ? <button type="button" className="btn btn-xs" disabled={pending} aria-busy={pending} onClick={() => run(() => onSendAgain(item))}>{pending ? 'Sending…' : 'Send again'}</button> : null}
             </div>
             <ErrorNote error={error} />
         </>

@@ -68,7 +68,7 @@ function ReplyPreview({ quote, agents, colors, onCancel }: { readonly quote: Quo
                 <span className="quote-who">&gt; {who}</span>
                 <span className="quote-text"><LinkedText text={quote.text} /></span>
             </div>
-            <button type="button" className="message-action" onClick={onCancel} aria-label={`Cancel the reply to ${who}`}>Cancel</button>
+            <button type="button" className="btn btn-ghost btn-xs message-action" onClick={onCancel} aria-label={`Cancel the reply to ${who}`}>Cancel</button>
         </div>
     );
 }
@@ -141,11 +141,11 @@ function ForwardPicker({ agentId, agents, colors, onPick, onClose }: Pick<Messag
             <span className="forward-label">Forward to</span>
             {others.length === 0 ? <span className="muted">no other agent in the fleet</span> : null}
             {others.map((agent) => (
-                <button key={agent.id} type="button" className={`forward-target agent-color-${colors[agent.id] ?? 0}`} onClick={() => onPick(agent)}>
+                <button key={agent.id} type="button" className={`btn btn-xs forward-target agent-color-${colors[agent.id] ?? 0}`} onClick={() => onPick(agent)}>
                     {agent.name}
                 </button>
             ))}
-            <button type="button" className="message-action" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn btn-ghost btn-xs message-action" onClick={onClose}>Cancel</button>
         </div>
     );
 }
@@ -172,8 +172,8 @@ function MessageToolbar({ item, agentId, agents, colors, actions }: MessageProps
     return (
         <>
             <div className="message-actions" role="group" aria-label="Message actions">
-                <button type="button" className="message-action" onClick={() => actions.onReply(quoteOf(item, agentId))}>Reply</button>
-                <button type="button" className="message-action" aria-expanded={picking} onClick={() => setPicking(!picking)}>Forward</button>
+                <button type="button" className="btn btn-ghost btn-xs message-action" onClick={() => actions.onReply(quoteOf(item, agentId))}>Reply</button>
+                <button type="button" className="btn btn-ghost btn-xs message-action" aria-expanded={picking} onClick={() => setPicking(!picking)}>Forward</button>
             </div>
             {picking ? <ForwardPicker agentId={agentId} agents={agents} colors={colors} onPick={forward} onClose={() => setPicking(false)} /> : null}
             {outcome === undefined ? null : <span className={`message-outcome ${outcome.error ? 'error' : 'note'}`} role={outcome.error ? 'alert' : 'status'}>{outcome.text}</span>}

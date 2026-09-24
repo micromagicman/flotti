@@ -49,7 +49,7 @@ function NoAgents({ onSettings }: { readonly onSettings: () => void }) {
         <section className="broadcast">
             <h1>No agents yet</h1>
             <p className="muted">Add the first one in the settings.</p>
-            <div className="actions"><button type="button" className="primary" onClick={onSettings}>Open settings</button></div>
+            <div className="actions"><button type="button" className="btn btn-primary" onClick={onSettings}>Open settings</button></div>
         </section>
     );
 }
