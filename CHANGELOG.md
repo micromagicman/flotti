@@ -6,6 +6,10 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Added
 
+- **Links in the chat are clickable.** An `http(s)://` address in a message — of a person or of an
+  agent, in the quote of a reply and in a forwarded message — is a link in the accent colour that opens
+  in a new tab; punctuation after it stays out, and markdown links `[text](url)` show their text. Links
+  are built from the text, never from HTML, so markup in a message is shown, not run (#47).
 - **Reply and forward in the chat of an agent.** Any message of a tab can be answered with a reply —
   the agent gets the quoted message above the answer, and the tab shows the quote as a link back to it
   — or forwarded to another agent of the fleet, whose tab shows it under a bar "FORWARDED · AUTHOR" in
