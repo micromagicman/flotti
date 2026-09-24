@@ -54,6 +54,39 @@ test('names the harness of an agent only where the manifest tells it', () => {
     ]);
     deepStrictEqual(Object.keys(supervisor.agents()[2] ?? {}).includes('harness'), false, 'an unknown harness is left out, not guessed');
 });
+/** A remote agent of the fleet reached at a plain address, for the agent of that id. */
+function remoteAgent(id: string): RemoteAgent {
+    return {
+        kind: 'remote',
+        id,
+        name: id.toUpperCase(),
+        directory: `/fleet/remote/${id}`,
+        manifestPath: `/fleet/remote/${id}/agent.json`,
+        protocol: 'a2a',
+        url: `https://${id}.example.org/a2a`,
+        auth: { type: 'none' }
+    };
+}
+test('names the harness a remote agent tells of itself, as it is, and announces it', async () => {
+    const { fleet, fakes, createAgent } = fakeFleet('worker', 'helper', 'silent');
+    const supervisor = new Supervisor({ ...fleet, agents: ['worker', 'helper', 'silent'].map(remoteAgent) }, { createAgent });
+    const notices: SupervisorNotice[] = [];
+    supervisor.subscribe((notice) => notices.push(notice));
+    fake(fakes.get('worker')).harness = 'codex';
+    fake(fakes.get('helper')).harness = 'home-made';
+    deepStrictEqual(supervisor.agents().map((agent) => agent.harness), ['home-made', undefined, 'codex']);
+    await supervisor.start();
+    const fleets = notices.flatMap((notice) => notice.type === 'fleet' ? [notice.agents] : []);
+    deepStrictEqual(fleets.length, 2, 'the fleet is announced once per agent whose harness became known');
+    deepStrictEqual(fleets.at(-1)?.map((agent) => [agent.id, agent.harness]), [
+        ['helper', 'home-made'],
+        ['silent', undefined],
+        ['worker', 'codex']
+    ]);
+    deepStrictEqual(Object.keys(supervisor.agents()[1] ?? {}).includes('harness'), false, 'an agent that says nothing has no harness');
+    await supervisor.restart('worker');
+    strictEqual(notices.filter((notice) => notice.type === 'fleet').length, 2, 'an unchanged harness is not announced again');
+});
 test('keeps the last events of each agent and hands out those after a seq', async () => {
     const { supervisor } = supervised('a');
     await supervisor.start();

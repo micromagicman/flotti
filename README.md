@@ -77,8 +77,10 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   for you`, `error`, `stopped` — and a dot when it has said something since you last looked.
   `waiting for you` — a permission to grant, an answer the agent asked for — stands out the most.
 - **The header of the tab** names the harness that runs the agent — `claude` or `codex`, from the
-  `adapter` of its manifest. A local agent with no `adapter` and a remote agent do not tell which
-  harness runs them, and the header says `harness unknown` rather than guess.
+  `adapter` of its manifest; a remote agent names its own in its published file or its card
+  ([docs/a2a-ssh.md](docs/a2a-ssh.md#which-harness-runs-the-agent)), and a name flotti does not know
+  is shown as it is. A local agent with no `adapter` and a remote agent that says nothing do not tell
+  which harness runs them, and the header says `harness unknown` rather than guess.
 - **Inside the tab**: the agent's output as it comes — messages, collapsed reasoning, tool calls with
   their progress, permission requests with the options the agent offered, diagnostics, and whatever
   else the protocol said, raw and collapsed. Below it, a field to write to the agent: Enter sends,

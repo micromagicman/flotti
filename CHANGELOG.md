@@ -10,6 +10,10 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   agent, in the quote of a reply and in a forwarded message — is a link in the accent colour that opens
   in a new tab; punctuation after it stays out, and markdown links `[text](url)` show their text. Links
   are built from the text, never from HTML, so markup in a message is shown, not run (#47).
+- **The harness of a remote agent.** A remote agent names the program that runs it with `harness` in
+  its published file (`~/.flotti/a2a/<id>.json`) or with the harness extension of its card; the
+  header of its tab, `flotti status` and `list_agents` show it instead of `harness unknown`. A name
+  flotti does not know is shown as it is (#49).
 - **Reply and forward in the chat of an agent.** Any message of a tab can be answered with a reply —
   the agent gets the quoted message above the answer, and the tab shows the quote as a link back to it
   — or forwarded to another agent of the fleet, whose tab shows it under a bar "FORWARDED · AUTHOR" in

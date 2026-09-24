@@ -49,6 +49,8 @@ type PublishedAgent = {
     readonly url: string;
     /** Bearer token the agent expects; absent when it expects none. */
     readonly token?: string;
+    /** The program that runs the agent, as it says itself: `claude`, `codex` or any other name. */
+    readonly harness?: string;
 };
 /** SSH said no, with a reason a person can act on. */
 class SshError extends Error {
@@ -126,12 +128,14 @@ function publishedAgent(id: string, value: unknown, where: string): PublishedAge
     const name = publishedText(fields, 'name', where);
     const description = publishedText(fields, 'description', where);
     const token = publishedText(fields, 'token', where);
+    const harness = publishedText(fields, 'harness', where);
     return {
         id,
         url,
         ...(name === undefined ? {} : { name }),
         ...(description === undefined ? {} : { description }),
-        ...(token === undefined ? {} : { token })
+        ...(token === undefined ? {} : { token }),
+        ...(harness === undefined ? {} : { harness })
     };
 }
 /** A text field of a published file; `undefined` when it is absent. */
@@ -494,6 +498,8 @@ type RemoteEndpoint = {
     readonly headers?: Readonly<Record<string, string>>;
     /** Where a request to this address really goes; `undefined` leaves it as it is. */
     readonly rewrite?: (url: URL) => URL | undefined;
+    /** The harness the agent published of itself; absent when it did not say. */
+    readonly harness?: string;
 };
 /**
  * The way to a remote agent that has to be opened first and may break: the
@@ -519,6 +525,7 @@ function tunnelEndpoint(published: PublishedAgent, remote: URL, localPort: numbe
     return {
         url: published.url,
         ...(published.token === undefined ? {} : { headers: { Authorization: `Bearer ${published.token}` } }),
+        ...(published.harness === undefined ? {} : { harness: published.harness }),
         rewrite: (url: URL) => {
             const sameHost = url.hostname === remote.hostname || (isLoopback(url.hostname) && isLoopback(remote.hostname));
             if (!sameHost || url.port !== remote.port || url.protocol !== remote.protocol) {

@@ -10,10 +10,12 @@
 import type { AgentEvent, AgentStatus, Forwarded, Quote } from './agent-events.js';
 import type { FleetSource, LocalAgentAdapter, RemoteAuth, RemoteSsh, RestartPolicy } from './types.js';
 /**
- * The program that runs the agent. Known only where the manifest says it: the
- * `adapter` of a local agent. A plain ACP agent and a remote one do not tell.
+ * The program that runs the agent: the `adapter` of a local agent, or what a
+ * remote agent says of itself (docs/a2a-ssh.md, "Which harness runs the
+ * agent"). `claude` and `codex` are the ones flotti knows; any other name a
+ * remote agent gives is kept and shown as it is, never guessed at.
  */
-type Harness = 'claude' | 'codex';
+type Harness = string;
 /** An agent of the fleet as the page lists it. */
 type AgentSummary = {
     readonly id: string;

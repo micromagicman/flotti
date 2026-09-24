@@ -3,7 +3,7 @@ import { afterEach, describe, it } from 'node:test';
 import { TaskState } from '@a2a-js/sdk';
 import { AgentEvent } from '@a2a-js/sdk/server';
 import type { ExecutionEventBus, RequestContext } from '@a2a-js/sdk/server';
-import { A2AAgent, INBOX_EXTENSION, RESTART_EXTENSION, cardLocation } from '../src/a2a-agent.js';
+import { A2AAgent, HARNESS_EXTENSION, INBOX_EXTENSION, RESTART_EXTENSION, cardLocation } from '../src/a2a-agent.js';
 import type { A2AAgentOptions } from '../src/a2a-agent.js';
 import type { AgentEvent as DashboardEvent, AgentStatus } from '../src/agent-events.js';
 import type { RemoteAgent, RemoteAuth } from '../src/types.js';
@@ -126,6 +126,34 @@ describe('A2AAgent: connecting', () => {
         clients.push(client);
         await rejects(client.start());
         strictEqual(client.status, 'error');
+    });
+});
+describe('A2AAgent: the harness the card names', () => {
+    it('takes the harness the card names in the harness extension, as it is', async () => {
+        for (const [params, harness] of [
+            [{ harness: 'codex' }, 'codex'],
+            [{ harness: 'home-made' }, 'home-made'],
+            [{ harness: '' }, undefined],
+            [{ harness: 7 }, undefined],
+            [undefined, undefined]
+        ] as const) {
+            const agent = await fake({
+                script: echo,
+                extensions: [HARNESS_EXTENSION],
+                ...(params === undefined ? {} : { extensionParams: { [HARNESS_EXTENSION]: params } })
+            });
+            const { client } = connect(agent);
+            await client.start();
+            strictEqual(client.harness, harness, JSON.stringify(params));
+            strictEqual(client.info?.harness, harness);
+        }
+    });
+    it('knows no harness when the card does not name one', async () => {
+        const agent = await fake({ script: echo });
+        const { client } = connect(agent);
+        await client.start();
+        strictEqual(client.harness, undefined);
+        strictEqual(Object.keys(client.info ?? {}).includes('harness'), false);
     });
 });
 describe('A2AAgent: credentials', () => {
