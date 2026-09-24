@@ -4,6 +4,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Forwarded, SendOptions } from './agent-events.js';
 import type { AgentSummary, Delivery } from './dashboard-protocol.js';
+import type { DelegationCancel, DelegationStart } from './delegations.js';
 /**
  * The fleet as tools: an MCP server flotti hands to every ACP agent it starts,
  * in `mcpServers` of `session/new`, so a bare Claude Code or Codex can see its
@@ -28,6 +29,10 @@ interface FleetDirectory {
     agents(): AgentSummary[];
     /** Sends a message on behalf of an agent of the fleet: `from` is its id. */
     send(agentId: string, text: string, options?: SendOptions): Promise<Delivery>;
+    /** Gives a task on behalf of an agent of the fleet: `from` is its id; `deadline` an ISO 8601 time. */
+    delegate(from: string, to: string, text: string, deadline?: string): Promise<DelegationStart>;
+    /** Takes back a task the agent `from` gave; throws when it gave no such task. */
+    cancelDelegation(from: string, delegationId: string): DelegationCancel;
 }
 /** How an agent reaches the tools: the port on its side and the token that says who it is. */
 type FleetToolsAccess = {
@@ -90,6 +95,36 @@ const TOOLS = [
             type: 'object',
             properties: { text: { type: 'string', description: 'The answer.' } },
             required: ['text'],
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'delegate',
+        description: 'Gives another agent of the fleet a task and returns its id at once. The agent works on it in a '
+            + 'turn of its own; when it is done, the outcome comes to you as a message from it: completed with what '
+            + 'it answered, failed or canceled with why. A task that cannot be given — no such agent, the agent is '
+            + 'stopped — fails at once. Use it for work you want done and reported back; send_message is for a word.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                to: { type: 'string', description: 'Id of the agent, as list_agents gives it.' },
+                text: { type: 'string', description: 'The task: what to do, and what to answer when done.' },
+                deadline_minutes: {
+                    type: 'number',
+                    description: 'Optional: minutes the task may take. A task not done by then fails, and the agent stops working on it.'
+                }
+            },
+            required: ['to', 'text'],
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'cancel_delegation',
+        description: 'Takes back a task you gave: the agent stops working on it, or never starts on it.',
+        inputSchema: {
+            type: 'object',
+            properties: { id: { type: 'string', description: 'Id of the task, as delegate returned it.' } },
+            required: ['id'],
             additionalProperties: false
         }
     },
@@ -267,6 +302,17 @@ class FleetMcpServer {
             case 'forward':
                 return this.forward(fleet, caller, args);
             default:
+                return this.taskTool(fleet, caller, name, args);
+        }
+    }
+    /** The tools of tasks one agent gives another. */
+    private taskTool(fleet: FleetDirectory, caller: string, name: string, args: ToolArguments): Promise<ToolResult> {
+        switch (name) {
+            case 'delegate':
+                return this.delegate(fleet, caller, args);
+            case 'cancel_delegation':
+                return this.cancelDelegation(fleet, caller, stringArgument(args, 'id'));
+            default:
                 throw new RpcError(-32602, `no tool ${name}`);
         }
     }
@@ -295,6 +341,35 @@ class FleetMcpServer {
             ? last.forwarded
             : { author: last.from, text: last.text };
         return this.send(fleet, caller, stringArgument(args, 'to'), comment, { forwarded });
+    }
+    /** The `delegate` tool: the id of the task, or why it failed at once. */
+    private async delegate(fleet: FleetDirectory, caller: string, args: ToolArguments): Promise<ToolResult> {
+        const to = stringArgument(args, 'to');
+        const task = stringArgument(args, 'text');
+        const minutes = args['deadline_minutes'];
+        if (minutes !== undefined && (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes <= 0)) {
+            throw new ArgumentError('deadline_minutes must be a number of minutes above zero');
+        }
+        const deadline = minutes === undefined ? undefined : new Date(Date.now() + minutes * 60_000).toISOString();
+        const { delegation, queued } = await fleet.delegate(caller, to, task, deadline);
+        const id = delegation.delegationId;
+        if (delegation.state === 'failed') {
+            return failure(`Task ${id} failed at once: ${delegation.result ?? 'no reason given'}`);
+        }
+        const due = deadline === undefined ? '' : ` It is due by ${deadline}.`;
+        return text(`Task ${id} is with "${to}"${queued ? ', waiting in line until it is done with what it is doing' : ''}.${due} `
+            + `Its outcome comes to you as a message from "${to}"; cancel_delegation takes it back.`);
+    }
+    /** The `cancel_delegation` tool. */
+    private cancelDelegation(fleet: FleetDirectory, caller: string, id: string): Promise<ToolResult> {
+        try {
+            const { delegation, canceled } = fleet.cancelDelegation(caller, id);
+            return Promise.resolve(canceled
+                ? text(`Task ${id} is canceled; "${delegation.to}" was told to stop.`)
+                : text(`Task ${id} was over already: ${delegation.state}.`));
+        } catch (error) {
+            return Promise.resolve(failure(error instanceof Error ? error.message : String(error)));
+        }
     }
     private async send(fleet: FleetDirectory, from: string, to: string, message: string, extras: Extras = {}): Promise<ToolResult> {
         if (to === from) {

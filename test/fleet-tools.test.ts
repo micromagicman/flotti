@@ -24,6 +24,13 @@ async function toolsServer(): Promise<FleetMcpServer> {
     servers.push(server);
     return server;
 }
+/** A fleet the tools give no task to. */
+const noDelegations: Pick<FleetDirectory, 'delegate' | 'cancelDelegation'> = {
+    delegate: () => Promise.reject(new Error('no tasks here')),
+    cancelDelegation: () => {
+        throw new Error('no tasks here');
+    }
+};
 /** The fleet, as the tools see it; `sent` is what each receiver reads, `options` what came with it. */
 function directory(ids: readonly string[]): FleetDirectory & { sent: string[]; options: SendOptions[] } {
     const sent: string[] = [];
@@ -36,7 +43,8 @@ function directory(ids: readonly string[]): FleetDirectory & { sent: string[]; o
             sent.push(`${given.from ?? '-'} -> ${agentId}: ${composeText(text, given, agentId)}`);
             options.push(given);
             return { agentId, result: 'taken' };
-        }
+        },
+        ...noDelegations
     };
 }
 /** One JSON-RPC request to the tools, as an agent makes it. */
@@ -72,7 +80,7 @@ describe('fleet tools: the MCP server', () => {
         strictEqual(result['protocolVersion'], '2025-03-26');
         deepStrictEqual(result['capabilities'], { tools: {} });
         const tools = (await rpc(server, token, 'tools/list')).body?.['result'] as { tools: { name: string }[] };
-        deepStrictEqual(tools.tools.map((tool) => tool.name), ['list_agents', 'send_message', 'reply', 'forward']);
+        deepStrictEqual(tools.tools.map((tool) => tool.name), ['list_agents', 'send_message', 'reply', 'delegate', 'cancel_delegation', 'forward']);
     });
     it('takes notifications without an answer, and offers its own version to a client it does not know', async () => {
         const server = await toolsServer();
@@ -101,7 +109,8 @@ describe('fleet tools: what they do', () => {
             agents: () => directory(['alice', 'bob']).agents(),
             send: () => {
                 throw new Error('There is no agent "alice" in the fleet.');
-            }
+            },
+            ...noDelegations
         });
         const answer = await callTool(server, server.access('alice').token, 'send_message', { to: 'bob', text: 'hi' });
         ok(answer.isError);

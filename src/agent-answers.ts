@@ -42,7 +42,8 @@ class AgentAnswers {
     }
     private begin(event: AgentEvent & { type: 'message' }): void {
         this.said.clear();
-        this.asked = event.from === undefined || event.replyTo !== undefined
+        // A task has an outcome of its own, sent back as such: see Delegations.
+        this.asked = event.from === undefined || event.replyTo !== undefined || event.delegation !== undefined
             ? undefined
             : { from: event.from, quote: quoteOf(event, event.from) };
     }

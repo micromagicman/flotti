@@ -41,10 +41,11 @@ function localAgent(fleet: string, id: string, adapter?: string): void {
 /**
  * What the remote agent says of its own when asked to `write later`: a line of
  * progress and then a message, through the inbox — after the turn is over.
- * Asked to `write to claude`, it sends a message to that agent the same way.
+ * Asked to `write to claude`, it sends a message to that agent the same way;
+ * asked to `give claude a task`, it gives that agent a task.
  */
 async function remoteAgent(fleet: string, id: string): Promise<void> {
-    let inbox: ((text: string, kind: string, to?: string) => void) | undefined;
+    let inbox: ((text: string, kind: string, to?: string, extra?: Record<string, unknown>) => void) | undefined;
     remote = await new FakeAgent({
         streaming: true,
         extensions: [INBOX_EXTENSION],
@@ -52,9 +53,9 @@ async function remoteAgent(fleet: string, id: string): Promise<void> {
             bus.publish(task(context, TaskState.TASK_STATE_WORKING));
             if ((context.userMessage.metadata?.[INBOX_EXTENSION] as { action?: string } | undefined)?.action === 'subscribe') {
                 let count = 0;
-                inbox = (text, kind, to) => bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_WORKING, {
+                inbox = (text, kind, to, extra) => bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_WORKING, {
                     ...agentMessage(text, context, `own-${++count}`),
-                    metadata: { [INBOX_EXTENSION]: { kind, ...(to === undefined ? {} : { to }) } }
+                    metadata: { [INBOX_EXTENSION]: { kind, ...(to === undefined ? {} : { to }), ...extra } }
                 }));
                 await new Promise(() => undefined);
             }
@@ -68,6 +69,9 @@ async function remoteAgent(fleet: string, id: string): Promise<void> {
             }
             if (said(context) === 'write to claude') {
                 setTimeout(() => inbox?.('Please rerun the e2e job', 'message', 'claude'), 100);
+            }
+            if (said(context) === 'give claude a task') {
+                setTimeout(() => inbox?.('Collect the failing tests', 'message', 'claude', { task: {} }), 100);
             }
         }
     }).listen();
@@ -217,6 +221,20 @@ test('on a narrow screen the conversations are one tab away, in the list of them
     await page.getByRole('list').getByRole('button', { name: /relay ↔ claude/ }).click();
     await expect(lane(page)).toContainText('Please rerun the e2e job');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+test('an agent gives another a task: both tabs show who gave it to whom and how it ended, and the outcome comes back', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'eva', 'give claude a task');
+    const card = feed(page, 'eva').getByRole('group', { name: 'Task from eva to claude: completed' });
+    await expect(card.locator('.delegation-bar')).toContainText('task · eva → claude');
+    await expect(card).toContainText('Collect the failing tests');
+    await expect(card.locator('.delegation-result')).toContainText('you said: [from eva] Task');
+    const outcome = feed(page, 'eva').locator('.message-peer').filter({ hasText: 'you said: [from eva] Task' }).last();
+    await expect(outcome.locator('.envelope-bar')).toContainText('claude → eva');
+    await expect(outcome.locator('.quote')).toContainText('Collect the failing tests');
+    await tab(page, 'claude').click();
+    await expect(feed(page, 'claude').getByRole('group', { name: 'Task from eva to claude: completed' })).toBeVisible();
+    await expect(feed(page, 'claude')).toContainText(/you said: \[from eva\] Task \S+, given to you\./);
 });
 /** The row of the last message of the tab that says `text`, with its Reply and Forward. */
 const messageRow = (page: Page, name: string, text: string, side: 'user' | 'agent' = 'agent') =>

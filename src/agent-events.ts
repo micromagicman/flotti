@@ -71,6 +71,13 @@ type AgentEventBody =
         readonly forwarded?: Forwarded;
         /** The `messageId` of an undelivered message this one sends again (`role: 'user'`). */
         readonly retryOf?: string;
+        /**
+         * The message is about a task one agent gave another: on a message of
+         * the agent (`role: 'agent'`, with `to`) it gives the task; on a message
+         * to the agent (`role: 'user'`) it is the task given to it, or — with a
+         * `state` — the outcome of a task it gave.
+         */
+        readonly delegation?: DelegationMark;
     }
     /**
      * A message that has to wait in line: the agent is busy with another one,
@@ -81,11 +88,12 @@ type AgentEventBody =
         readonly type: 'queued';
         readonly messageId: string;
         readonly text: string;
-        /** As in a `message` event: the agent of the fleet that sent it, and what it answers, sends on or sends again. */
+        /** As in a `message` event: the agent of the fleet that sent it, what it answers, sends on or sends again, and the task it is about. */
         readonly from?: string;
         readonly replyTo?: Quote;
         readonly forwarded?: Forwarded;
         readonly retryOf?: string;
+        readonly delegation?: DelegationMark;
     }
     /**
      * A queued message left the line without reaching the agent:
@@ -135,7 +143,14 @@ type AgentEventBody =
     /** A line of diagnostics: from the agent itself, or from the side that runs it. */
     | { readonly type: 'log'; readonly source: 'agent' | 'flotti'; readonly text: string }
     /** Something the protocol said that has no event of its own here, untouched. */
-    | { readonly type: 'raw'; readonly protocol: 'acp' | 'a2a'; readonly payload: unknown };
+    | { readonly type: 'raw'; readonly protocol: 'acp' | 'a2a'; readonly payload: unknown }
+    /**
+     * A task one agent of the fleet gave another, as it stands now: flotti puts
+     * it in the tabs of both agents, again every time its state changes.
+     */
+    | ({ readonly type: 'delegation' } & Delegation)
+    /** The agent asks flotti to cancel a task it gave another agent. */
+    | { readonly type: 'cancel-delegation'; readonly delegationId: string };
 /** An event with its place in the agent's history. */
 type AgentEvent = AgentEventBody & {
     readonly agentId: string;
@@ -165,6 +180,37 @@ type Quote = {
     readonly author?: string;
     readonly text: string;
 };
+/**
+ * Where a task one agent gave another stands:
+ * - `working`   — given, and waiting in line or being worked on;
+ * - `completed` — the agent that got it finished its turn on it;
+ * - `failed`    — it could not be given, the agent failed it, or its deadline passed;
+ * - `canceled`  — the agent that gave it took it back, or the one that got it cancelled it.
+ */
+type DelegationState = 'working' | 'completed' | 'failed' | 'canceled';
+/** What a message says of the task it is about. */
+type DelegationMark = {
+    /** Id of the task, as the agent that gave it knows it. */
+    readonly id: string;
+    /** ISO 8601 time the task is to be done by. */
+    readonly deadline?: string;
+    /** On the outcome sent to the agent that gave the task: how it ended. */
+    readonly state?: DelegationState;
+};
+/** A task one agent of the fleet gave another, as the tabs of both show it. */
+type Delegation = {
+    readonly delegationId: string;
+    /** Id of the agent that gave the task. */
+    readonly from: string;
+    /** Id of the agent the task was given to. */
+    readonly to: string;
+    readonly text: string;
+    readonly state: DelegationState;
+    /** ISO 8601 time the task is to be done by. */
+    readonly deadline?: string;
+    /** What the agent answered, once completed; why, once failed or canceled. */
+    readonly result?: string;
+};
 /** A message sent on to another agent as it was. */
 type Forwarded = {
     /** Id of the agent that wrote it; absent when a person did. */
@@ -185,14 +231,17 @@ type SendOptions = {
     readonly forwarded?: Forwarded;
     /** The `messageId` of an undelivered message this one sends again. */
     readonly retryOf?: string;
+    /** The task the message gives, or the outcome of a task it tells; see the `delegation` of a `message` event. */
+    readonly delegation?: DelegationMark;
 };
 /** The fields of a `message` or `queued` event a sent message carries on, beyond its text. */
-function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message' }, 'from' | 'replyTo' | 'forwarded' | 'retryOf'> {
+function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message' }, 'from' | 'replyTo' | 'forwarded' | 'retryOf' | 'delegation'> {
     return {
         ...(options.from === undefined ? {} : { from: options.from }),
         ...(options.replyTo === undefined ? {} : { replyTo: options.replyTo }),
         ...(options.forwarded === undefined ? {} : { forwarded: options.forwarded }),
-        ...(options.retryOf === undefined ? {} : { retryOf: options.retryOf })
+        ...(options.retryOf === undefined ? {} : { retryOf: options.retryOf }),
+        ...(options.delegation === undefined ? {} : { delegation: options.delegation })
     };
 }
 /** Why a message taken back out of the line never reached the agent: its `send` rejects with it. */
@@ -212,6 +261,25 @@ function waitingInLine(events: readonly AgentEvent[]): (AgentEvent & { type: 'qu
     }
     return [...waiting.values()];
 }
+/**
+ * The line above a message about a task: the agent that gets a task learns
+ * that its answer is the result, the one that gave it how it ended.
+ */
+function delegationLine(mark: DelegationMark): string {
+    switch (mark.state) {
+        case 'completed':
+        case 'working':
+            return `The task ${mark.id} you gave is ${mark.state}.`;
+        case 'failed':
+            return `The task ${mark.id} you gave has failed.`;
+        case 'canceled':
+            return `The task ${mark.id} you gave was canceled.`;
+        case undefined:
+            break;
+    }
+    const due = mark.deadline === undefined ? '' : ` It is due by ${mark.deadline}.`;
+    return `Task ${mark.id}, given to you.${due} What you answer in this turn is its result; end the turn when it is done.`;
+}
 /** Whose message it was, as the agent that reads it is told. */
 function whose(author: string | undefined, reader: string): string {
     if (author === undefined) {
@@ -230,6 +298,9 @@ function composeText(text: string, options: SendOptions, reader: string): string
     if (options.replyTo !== undefined) {
         const quoted = options.replyTo.text.split('\n').map((line) => `> ${line}`).join('\n');
         parts.push(`In reply to a message from ${whose(options.replyTo.author, reader)}:\n${quoted}`);
+    }
+    if (options.delegation !== undefined) {
+        parts.push(delegationLine(options.delegation));
     }
     if (text.trim() !== '') {
         parts.push(text);
@@ -335,6 +406,9 @@ export type {
     AgentEventBody,
     AgentEventListener,
     AgentStatus,
+    Delegation,
+    DelegationMark,
+    DelegationState,
     FleetAgent,
     Forwarded,
     PermissionOption,

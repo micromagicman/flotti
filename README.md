@@ -413,6 +413,8 @@ and `session/load`. A bare Claude Code or Codex sees them as `mcp__flotti__…`:
 | `send_message` | sends a message to another agent: `to` — its id, `text`                                |
 | `reply`        | answers the agent whose message came last, quoting it                                  |
 | `forward`      | forwards the last message another agent sent, as it was, to another agent; `comment` goes before it |
+| `delegate`     | gives another agent a task: `to`, `text`, optional `deadline_minutes`; returns the id of the task |
+| `cancel_delegation` | takes back a task the caller gave: `id` — as `delegate` returned it                |
 
 A message sent so reaches the other agent like one from a person, but from that agent: its `message`
 event has `from` — the sender's id — and the agent gets it as `[from <id>] <text>`, the way every
@@ -423,6 +425,18 @@ other for ever; only the answer goes, not the progress of the turn, and a cancel
 A `reply` and a `forward` are the reply and the forward of the dashboard: the `message` event carries
 `replyTo` or `forwarded`, and the tab shows the quote or the forwarded message the same way (#30).
 Messages queue as a person's do; a tool call does not wait for the answer.
+
+`delegate` is `send_message` with an outcome. The task goes in line like a message, and the turn the
+other agent spends on it is its work: when the turn ends, flotti sends the outcome back to the agent that
+gave the task by itself, as a message from the other agent that quotes the task — `completed` with what
+the agent answered in the turn, `failed` or `canceled` with why. A turn that ends with `end_turn`
+completes the task, a cancelled one cancels it, any other end fails it; a turn that pauses to ask a
+person goes on with the answer. A task to an agent that is not in the fleet, is stopped, or refuses the
+message fails at once, and the tool says why. `cancel_delegation` takes the task out of the line, or
+cancels the turn working on it; the giver gets no outcome for a task it took back. A task not done by its
+deadline fails, and the agent working on it is told to stop. Both tabs show the task as a card — who gave
+it to whom, where it stands, and the result or the reason once it is over (#51). An A2A agent gives and
+takes back tasks through its inbox: see [docs/a2a-inbox.md](docs/a2a-inbox.md).
 
 The server speaks MCP over HTTP (the streamable transport, with plain JSON answers) on a free port of
 `127.0.0.1`, and every agent gets a token of its own in the `Authorization` header: the token tells who

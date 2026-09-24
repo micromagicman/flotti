@@ -165,3 +165,25 @@ test('the line is counted from the events again after a reconnect: nothing twice
     const again = applyEvent(feed, { ...events[0], agentId: 'a', seq: 1, time: '' });
     deepStrictEqual(again.queue.map((queued) => queued.messageId), ['q1', 'q2']);
 });
+test('a task shows once, where it was given, and its card follows what becomes of it', () => {
+    const task = { type: 'delegation', delegationId: 't1', from: 'a', to: 'b', text: 'rerun the job' } as const;
+    const deadline = '2026-09-24T12:00:00.000Z';
+    const feed = feedOf(
+        { ...task, state: 'working', deadline },
+        { type: 'message', role: 'agent', messageId: 'm', text: 'meanwhile', append: false },
+        { type: 'cancel-delegation', delegationId: 't1' },
+        { ...task, state: 'failed', deadline, result: 'its deadline passed' }
+    );
+    deepStrictEqual(feed.items.map((item) => item.kind), ['delegation', 'message']);
+    deepStrictEqual(feed.items[0], {
+        kind: 'delegation',
+        key: 'd1',
+        delegationId: 't1',
+        from: 'a',
+        to: 'b',
+        text: 'rerun the job',
+        state: 'failed',
+        deadline,
+        result: 'its deadline passed'
+    });
+});

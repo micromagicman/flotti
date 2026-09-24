@@ -1028,7 +1028,9 @@ class A2AAgent implements FleetAgent {
     /** A message that came through the inbox: a message of the agent's own, or a line of progress. */
     private inboxMessage(message: Message): void {
         const params = inboxParams(message);
-        if (params.kind === 'progress') {
+        if (params.cancel !== undefined) {
+            this.events.emit({ type: 'cancel-delegation', delegationId: params.cancel });
+        } else if (params.kind === 'progress') {
             const id = message.messageId || randomUUID();
             const text = partsText(message.parts);
             if (!this.shown.has(id) && text !== '') {
@@ -1036,7 +1038,7 @@ class A2AAgent implements FleetAgent {
             }
             this.shown.add(id);
         } else {
-            this.showMessage(message, params.to);
+            this.showMessage(message, params.to, params.task);
         }
         if (params.busy !== undefined) {
             this.noteBusyOnItsOwn(params.busy);
@@ -1054,8 +1056,11 @@ class A2AAgent implements FleetAgent {
     private log(text: string): void {
         this.events.emit({ type: 'log', source: 'flotti', text });
     }
-    /** A message of the agent; `to` — the agent of the fleet it is for, when it is not for a person. */
-    private showMessage(message: Message, to?: string): void {
+    /**
+     * A message of the agent; `to` — the agent of the fleet it is for, when it
+     * is not for a person, and `task` — when it gives that agent a task.
+     */
+    private showMessage(message: Message, to?: string, task?: { readonly deadline?: string }): void {
         const id = message.messageId || randomUUID();
         if (this.shown.has(id)) {
             return;
@@ -1063,7 +1068,15 @@ class A2AAgent implements FleetAgent {
         this.shown.add(id);
         const text = partsText(message.parts);
         if (text !== '') {
-            this.events.emit({ type: 'message', role: 'agent', messageId: id, text, append: false, ...(to === undefined ? {} : { to }) });
+            this.events.emit({
+                type: 'message',
+                role: 'agent',
+                messageId: id,
+                text,
+                append: false,
+                ...(to === undefined ? {} : { to }),
+                ...(to === undefined || task === undefined ? {} : { delegation: { id, ...task } })
+            });
         }
     }
     private showArtifact(taskId: string, artifactId: string, parts: readonly Part[], append: boolean): void {
@@ -1079,17 +1092,19 @@ class A2AAgent implements FleetAgent {
     private userMessage(text: string, options: SendOptions): Message {
         const task = this.task;
         const waiting = task !== undefined && INTERRUPTED_STATES.includes(task.state);
-        const { from } = options;
+        const { from, delegation } = options;
         const body = composeText(text, options, this.agentId);
         const told = from === undefined || this.card?.inbox === true ? body : `[from ${from}] ${body}`;
+        const params = { ...(from === undefined ? {} : { from }), ...(delegation === undefined ? {} : { task: delegation }) };
+        const marked = from !== undefined || delegation !== undefined;
         return {
             messageId: options.messageId ?? randomUUID(),
             contextId: this.contextId ?? '',
             taskId: waiting ? task.id : '',
             role: Role.ROLE_USER,
             parts: [textPart(told)],
-            metadata: from === undefined ? undefined : { [INBOX_EXTENSION]: { from } },
-            extensions: from === undefined ? [] : [INBOX_EXTENSION],
+            metadata: marked ? { [INBOX_EXTENSION]: params } : undefined,
+            extensions: marked ? [INBOX_EXTENSION] : [],
             referenceTaskIds: []
         };
     }
@@ -1266,18 +1281,34 @@ function extensionRequest(uri: string, text: string, params: Record<string, unkn
         referenceTaskIds: []
     };
 }
+/** What an inbox message says of itself under the extension URI. */
+type InboxParams = {
+    readonly kind: 'message' | 'progress';
+    readonly busy?: boolean;
+    readonly to?: string;
+    /** The message gives `to` a task; the id of the task is the id of the message. */
+    readonly task?: { readonly deadline?: string };
+    /** Id of a task the agent gave and takes back. */
+    readonly cancel?: string;
+};
 /** What an inbox message says of itself under the extension URI; anything else there is ignored. */
-function inboxParams(message: Message): { readonly kind: 'message' | 'progress'; readonly busy?: boolean; readonly to?: string } {
+function inboxParams(message: Message): InboxParams {
     const params: unknown = message.metadata?.[INBOX_EXTENSION];
     if (typeof params !== 'object' || params === null) {
         return { kind: 'message' };
     }
-    const { kind, busy, to } = params as Record<string, unknown>;
+    const { kind, busy, to, task, cancel } = params as Record<string, unknown>;
     return {
         kind: kind === 'progress' ? 'progress' : 'message',
         ...(typeof busy === 'boolean' ? { busy } : {}),
-        ...(typeof to === 'string' && to !== '' ? { to } : {})
+        ...(typeof to === 'string' && to !== '' ? { to } : {}),
+        ...(typeof task === 'object' && task !== null ? { task: taskParams(task as Record<string, unknown>) } : {}),
+        ...(typeof cancel === 'string' && cancel !== '' ? { cancel } : {})
     };
+}
+function taskParams(task: Record<string, unknown>): { readonly deadline?: string } {
+    const { deadline } = task;
+    return typeof deadline === 'string' && deadline !== '' ? { deadline } : {};
 }
 function sendRequest(message: Message) {
     return { tenant: '', message, configuration: undefined, metadata: undefined };
