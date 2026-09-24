@@ -2,8 +2,10 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { Forwarded, SendOptions } from './agent-events.js';
+import type { AdminAction, Forwarded, SendOptions } from './agent-events.js';
 import type { AgentSummary, Delivery } from './dashboard-protocol.js';
+import type { DelegationCancel, DelegationStart } from './delegations.js';
+import type { AdminOutcome } from './fleet-admin.js';
 /**
  * The fleet as tools: an MCP server flotti hands to every ACP agent it starts,
  * in `mcpServers` of `session/new`, so a bare Claude Code or Codex can see its
@@ -28,6 +30,16 @@ interface FleetDirectory {
     agents(): AgentSummary[];
     /** Sends a message on behalf of an agent of the fleet: `from` is its id. */
     send(agentId: string, text: string, options?: SendOptions): Promise<Delivery>;
+    /** Gives a task on behalf of an agent of the fleet: `from` is its id; `deadline` an ISO 8601 time. */
+    delegate(from: string, to: string, text: string, deadline?: string): Promise<DelegationStart>;
+    /** Takes back a task the agent `from` gave; throws when it gave no such task. */
+    cancelDelegation(from: string, delegationId: string): DelegationCancel;
+    /**
+     * Restarts an agent or clears its context on behalf of an administrator of
+     * the fleet; refuses anyone else. Without it the tools of administrators
+     * answer that they are not available.
+     */
+    administer?(adminId: string, action: AdminAction, target: string): Promise<AdminOutcome>;
 }
 /** How an agent reaches the tools: the port on its side and the token that says who it is. */
 type FleetToolsAccess = {
@@ -63,14 +75,15 @@ const TOOLS = [
     {
         name: 'list_agents',
         description: 'Lists the agents of your flotti fleet: id, name, what they are for and what they are doing now. '
-            + 'Your own entry is marked "you".',
+            + 'Your own entry is marked "you", administrators of the fleet "admin".',
         inputSchema: { type: 'object', properties: {}, additionalProperties: false }
     },
     {
         name: 'send_message',
-        description: 'Sends a message to another agent of the fleet. It arrives as a message from you, and the agent '
-            + 'answers with this tool too — your own answer to a person does not reach it. Do not answer '
-            + 'acknowledgements: a thank-you needs no thank-you back.',
+        description: 'Sends a message to another agent of the fleet. It arrives as a message from you, and what the '
+            + 'agent answers comes back to you as a message from it. A message another agent sent you is answered '
+            + 'the same way: just answer it, no tool needed. Do not answer acknowledgements: a thank-you needs no '
+            + 'thank-you back.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -83,11 +96,42 @@ const TOOLS = [
     },
     {
         name: 'reply',
-        description: 'Answers the agent whose message came to you last; the answer quotes that message.',
+        description: 'Writes again to the agent whose message came to you last, quoting that message. Your answer '
+            + 'in the turn of its message already reaches it: this is for writing to it later.',
         inputSchema: {
             type: 'object',
             properties: { text: { type: 'string', description: 'The answer.' } },
             required: ['text'],
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'delegate',
+        description: 'Gives another agent of the fleet a task and returns its id at once. The agent works on it in a '
+            + 'turn of its own; when it is done, the outcome comes to you as a message from it: completed with what '
+            + 'it answered, failed or canceled with why. A task that cannot be given — no such agent, the agent is '
+            + 'stopped — fails at once. Use it for work you want done and reported back; send_message is for a word.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                to: { type: 'string', description: 'Id of the agent, as list_agents gives it.' },
+                text: { type: 'string', description: 'The task: what to do, and what to answer when done.' },
+                deadline_minutes: {
+                    type: 'number',
+                    description: 'Optional: minutes the task may take. A task not done by then fails, and the agent stops working on it.'
+                }
+            },
+            required: ['to', 'text'],
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'cancel_delegation',
+        description: 'Takes back a task you gave: the agent stops working on it, or never starts on it.',
+        inputSchema: {
+            type: 'object',
+            properties: { id: { type: 'string', description: 'Id of the task, as delegate returned it.' } },
+            required: ['id'],
             additionalProperties: false
         }
     },
@@ -105,6 +149,35 @@ const TOOLS = [
         }
     }
 ] as const;
+/** The tools of an administrator of the fleet: listed to administrators only, refused to anyone else. */
+const ADMIN_TOOLS = [
+    {
+        name: 'restart_agent',
+        description: 'Restarts an agent of the fleet — you are an administrator of it. A local agent is restarted '
+            + 'as a process, a remote one is asked to restart itself. Naming yourself restarts you once this turn '
+            + 'is over.',
+        inputSchema: {
+            type: 'object',
+            properties: { id: { type: 'string', description: 'Id of the agent, as list_agents gives it; may be yours.' } },
+            required: ['id'],
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'clear_context',
+        description: 'Clears the context of an agent of the fleet — you are an administrator of it: its next message '
+            + 'starts a new conversation, without the old history. What it is doing now is cancelled. Naming '
+            + 'yourself clears yours once this turn is over.',
+        inputSchema: {
+            type: 'object',
+            properties: { id: { type: 'string', description: 'Id of the agent, as list_agents gives it; may be yours.' } },
+            required: ['id'],
+            additionalProperties: false
+        }
+    }
+] as const;
+/** What each tool of an administrator does. */
+const ADMIN_ACTIONS: Readonly<Record<string, AdminAction>> = { restart_agent: 'restart', clear_context: 'clear-context' };
 /**
  * The fleet tools of one flotti run. Listens on the loopback only; a call
  * without the token of an agent of the fleet is refused, so a web page on the
@@ -228,11 +301,11 @@ class FleetMcpServer {
         const fields = isObject(params) ? params : {};
         switch (method) {
             case 'initialize':
-                return initializeResult(caller, fields);
+                return initializeResult(caller, fields, this.isAdmin(caller));
             case 'ping':
                 return {};
             case 'tools/list':
-                return { tools: TOOLS };
+                return { tools: this.isAdmin(caller) ? [...TOOLS, ...ADMIN_TOOLS] : TOOLS };
             case 'tools/call':
                 return this.callTool(caller, fields);
             default:
@@ -265,8 +338,35 @@ class FleetMcpServer {
             case 'forward':
                 return this.forward(fleet, caller, args);
             default:
-                throw new RpcError(-32602, `no tool ${name}`);
+                return this.taskTool(fleet, caller, name, args);
         }
+    }
+    /** The tools of tasks one agent gives another; any other is one of an administrator, or none. */
+    private taskTool(fleet: FleetDirectory, caller: string, name: string, args: ToolArguments): Promise<ToolResult> {
+        switch (name) {
+            case 'delegate':
+                return this.delegate(fleet, caller, args);
+            case 'cancel_delegation':
+                return this.cancelDelegation(fleet, caller, stringArgument(args, 'id'));
+            default:
+                return this.adminTool(fleet, caller, name, args);
+        }
+    }
+    /** Whether the caller is an administrator of the fleet: it is then listed the tools of one. */
+    private isAdmin(caller: string): boolean {
+        return this.fleet?.agents().find((agent) => agent.id === caller)?.admin === true;
+    }
+    /** `restart_agent` and `clear_context`: whether the caller may is for the fleet to say. */
+    private async adminTool(fleet: FleetDirectory, caller: string, name: string, args: ToolArguments): Promise<ToolResult> {
+        const action = Object.hasOwn(ADMIN_ACTIONS, name) ? ADMIN_ACTIONS[name] : undefined;
+        if (action === undefined) {
+            throw new RpcError(-32602, `no tool ${name}`);
+        }
+        if (fleet.administer === undefined) {
+            return failure('the tools of administrators are not available in this fleet');
+        }
+        const outcome = await fleet.administer(caller, action, stringArgument(args, 'id'));
+        return outcome.ok ? text(outcome.text) : failure(outcome.text);
     }
     /** The `reply` tool: to the agent whose message came last, quoting it — as a reply of a person does. */
     private async reply(fleet: FleetDirectory, caller: string, args: ToolArguments): Promise<ToolResult> {
@@ -293,6 +393,35 @@ class FleetMcpServer {
             ? last.forwarded
             : { author: last.from, text: last.text };
         return this.send(fleet, caller, stringArgument(args, 'to'), comment, { forwarded });
+    }
+    /** The `delegate` tool: the id of the task, or why it failed at once. */
+    private async delegate(fleet: FleetDirectory, caller: string, args: ToolArguments): Promise<ToolResult> {
+        const to = stringArgument(args, 'to');
+        const task = stringArgument(args, 'text');
+        const minutes = args['deadline_minutes'];
+        if (minutes !== undefined && (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes <= 0)) {
+            throw new ArgumentError('deadline_minutes must be a number of minutes above zero');
+        }
+        const deadline = minutes === undefined ? undefined : new Date(Date.now() + minutes * 60_000).toISOString();
+        const { delegation, queued } = await fleet.delegate(caller, to, task, deadline);
+        const id = delegation.delegationId;
+        if (delegation.state === 'failed') {
+            return failure(`Task ${id} failed at once: ${delegation.result ?? 'no reason given'}`);
+        }
+        const due = deadline === undefined ? '' : ` It is due by ${deadline}.`;
+        return text(`Task ${id} is with "${to}"${queued ? ', waiting in line until it is done with what it is doing' : ''}.${due} `
+            + `Its outcome comes to you as a message from "${to}"; cancel_delegation takes it back.`);
+    }
+    /** The `cancel_delegation` tool. */
+    private cancelDelegation(fleet: FleetDirectory, caller: string, id: string): Promise<ToolResult> {
+        try {
+            const { delegation, canceled } = fleet.cancelDelegation(caller, id);
+            return Promise.resolve(canceled
+                ? text(`Task ${id} is canceled; "${delegation.to}" was told to stop.`)
+                : text(`Task ${id} was over already: ${delegation.state}.`));
+        } catch (error) {
+            return Promise.resolve(failure(error instanceof Error ? error.message : String(error)));
+        }
     }
     private async send(fleet: FleetDirectory, from: string, to: string, message: string, extras: Extras = {}): Promise<ToolResult> {
         if (to === from) {
@@ -321,8 +450,8 @@ async function deliver(fleet: FleetDirectory, to: string, message: string, optio
         return { agentId: to, result: 'failed', error: error instanceof Error ? error.message : String(error) };
     }
 }
-/** The answer to `initialize`: the protocol version, the capabilities and who the caller is. */
-function initializeResult(caller: string, fields: Record<string, unknown>): object {
+/** The answer to `initialize`: the protocol version, the capabilities, who the caller is and whether it administers. */
+function initializeResult(caller: string, fields: Record<string, unknown>, admin: boolean): object {
     return {
         protocolVersion: PROTOCOL_VERSIONS.find((known) => known === fields['protocolVersion'])
             ?? PROTOCOL_VERSIONS[0],
@@ -330,6 +459,7 @@ function initializeResult(caller: string, fields: Record<string, unknown>): obje
         serverInfo: { name: MCP_SERVER_NAME, version: '1' },
         instructions: `You are "${caller}", one agent of a flotti fleet. These tools let you see the other `
             + 'agents and write to them.'
+            + (admin ? ' You are an administrator of the fleet: you may also restart agents and clear their context.' : '')
     };
 }
 function stringArgument(args: ToolArguments, name: string): string {

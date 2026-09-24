@@ -22,7 +22,8 @@ directory of the SSH user:
     "name": "Eva",
     "description": "AI teammate of the team",
     "url": "http://127.0.0.1:18741/",
-    "token": "<the bearer token the A2A server expects>"
+    "token": "<the bearer token the A2A server expects>",
+    "harness": "codex"
 }
 ```
 
@@ -32,6 +33,7 @@ directory of the SSH user:
 | `token`       | no       | Bearer token the server expects; flotti sends `Authorization: Bearer <token>`. Leave it out for a server that expects none. |
 | `name`        | no       | Name shown in the dashboard; the id when absent.                               |
 | `description` | no       | One line about the agent.                                                      |
+| `harness`     | no       | The program that runs the agent — `claude`, `codex` or any other name; see [Which harness runs the agent](#which-harness-runs-the-agent). |
 
 - `<id>` — letters, digits, `.`, `_`, `-`, starting with a letter or a digit — becomes the id of the
   agent in the fleet, unless the fleet already has one of that name.
@@ -63,6 +65,11 @@ when the host publishes several):
    the reason of the failed attempt and "trying again in N s" between attempts; the pauses grow from
    1 s to 30 s. A host that cannot be reached when flotti starts is tried again the same way.
 
+While the tunnel is up, flotti asks the agent for its card — `GET` of the card path, with no token —
+right after the tunnel comes up and every 15 s after, to measure the round trip: the dashboard and
+`flotti status` show it with the reconnects and the uptime of the tunnel (README, "The health of the
+connection"). An agent needs nothing for that beyond serving its card.
+
 Everything goes through the `ssh` of the flotti machine, so `~/.ssh/config` (ports, jump hosts, which
 key), the SSH agent and the known hosts are the person's own.
 
@@ -72,3 +79,31 @@ key), the SSH agent and the known hosts are the person's own.
 adds every agent it does not have yet as a remote agent over SSH, starting it at once. When it cannot
 — the key is not accepted, the host is unknown or unreachable, nothing is published — the form says
 which, and nothing is written.
+
+## Which harness runs the agent
+
+A local agent has its harness in its manifest (`adapter`); a remote one has to say it itself. It may,
+in either of two places:
+
+- **the published file** — the `harness` field above, a non-empty string;
+- **the card** — for an agent reached without SSH too: an extension in `capabilities.extensions`
+  with the URI `https://github.com/micromagicman/flotti/blob/main/docs/a2a-ssh.md#which-harness-runs-the-agent`
+  and the name in `params.harness`:
+
+  ```json
+  {
+      "uri": "https://github.com/micromagicman/flotti/blob/main/docs/a2a-ssh.md#which-harness-runs-the-agent",
+      "description": "Names the program that runs this agent",
+      "required": false,
+      "params": { "harness": "codex" }
+  }
+  ```
+
+When both say it, **the published file wins**: it is what flotti reads first, before it talks to the
+agent at all. A card whose extension has no usable `params.harness` counts as saying nothing; a
+published `harness` that is not a non-empty string is a wrong file, like any other field of it.
+
+`claude` and `codex` are the names flotti knows; any other is shown as it is, never mapped to one of
+them. flotti learns the harness when it connects to the agent, and again on every reconnect — the
+header of its tab, `flotti status` and the `list_agents` tool show it from then on. An agent that says
+nothing stays `harness unknown` in the header and `-` in `flotti status`.

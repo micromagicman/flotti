@@ -5,6 +5,8 @@ import type { AgentSummary } from '../src/dashboard-protocol.js';
 import { newlyWaiting, notificationText, pageTitle, waitingAgents } from '../web/src/attention.js';
 import { applyEvent, emptyFeed } from '../web/src/feed.js';
 import type { AgentFeed } from '../web/src/feed.js';
+import { en } from '../web/src/i18n/en.js';
+import { ru } from '../web/src/i18n/ru.js';
 function agent(id: string, status: AgentStatus = 'idle'): AgentSummary {
     return { id, name: id, kind: 'local', status };
 }
@@ -35,8 +37,9 @@ test('a notification names the permission asked for, or else why the agent waits
         { type: 'permission', requestId: 'r', title: 'Run npm test', options: [] },
         { type: 'status', status: 'waiting', reason: undefined }
     );
-    deepStrictEqual(notificationText(agent('claude'), asking), { title: 'claude is waiting for you', body: 'Asks for permission: Run npm test' });
+    deepStrictEqual(notificationText(agent('claude'), asking, en), { title: 'claude is waiting for you', body: 'Asks for permission: Run npm test' });
     const question = feedOf({ type: 'status', status: 'waiting', reason: 'input required' });
-    strictEqual(notificationText(agent('eva'), question).body, 'input required');
-    strictEqual(notificationText(agent('eva'), undefined).body, 'Open flotti to answer.');
+    strictEqual(notificationText(agent('eva'), question, en).body, 'input required');
+    strictEqual(notificationText(agent('eva'), undefined, en).body, 'Open flotti to answer.');
+    deepStrictEqual(notificationText(agent('claude'), asking, ru), { title: 'claude ждёт вас', body: 'Просит разрешения: Run npm test' });
 });

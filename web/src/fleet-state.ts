@@ -2,8 +2,8 @@
  * State of the whole page and how server messages change it. Pure, like
  * feed.ts: the hook in connection.ts only feeds it.
  */
-import type { AgentSummary, Delivery, ServerMessage } from '../../src/dashboard-protocol.js';
-import { applyEvent, emptyFeed, settlePermission } from './feed.js';
+import type { AgentSummary, ConnectionHealth, Delivery, ServerMessage } from '../../src/dashboard-protocol.js';
+import { applyEvent, emptyFeed, settleAdminAction, settlePermission } from './feed.js';
 import type { AgentFeed } from './feed.js';
 /** Where the socket is: `gone` — the server said it stops, and nothing reconnects. */
 type Link = 'connecting' | 'open' | 'closed' | 'gone';
@@ -17,7 +17,9 @@ type FleetState = {
 type FleetAction =
     | { readonly type: 'link'; readonly link: Link }
     | { readonly type: 'server'; readonly message: ServerMessage }
-    | { readonly type: 'permission-answered'; readonly agentId: string; readonly requestId: string };
+    | { readonly type: 'permission-answered'; readonly agentId: string; readonly requestId: string }
+    /** An action of an administrator allowed or refused here: it shows in two tabs, and both settle. */
+    | { readonly type: 'admin-answered'; readonly actionId: string };
 const initialState: FleetState = { link: 'connecting', agents: [], feeds: {}, deliveries: [] };
 function withFleet(state: FleetState, agents: readonly AgentSummary[]): FleetState {
     const feeds: Record<string, AgentFeed> = {};
@@ -26,6 +28,10 @@ function withFleet(state: FleetState, agents: readonly AgentSummary[]): FleetSta
         feeds[agent.id] = known === undefined ? emptyFeed(agent.status) : { ...known, status: agent.status };
     }
     return { ...state, agents, feeds };
+}
+/** The agent's connection is as healthy as the server says now. */
+function withHealth(state: FleetState, agentId: string, health: ConnectionHealth): FleetState {
+    return { ...state, agents: state.agents.map((agent) => (agent.id === agentId ? { ...agent, health } : agent)) };
 }
 function fromServer(state: FleetState, message: ServerMessage): FleetState {
     switch (message.type) {
@@ -40,6 +46,8 @@ function fromServer(state: FleetState, message: ServerMessage): FleetState {
         }
         case 'delivery':
             return { ...state, deliveries: [...state.deliveries, message.delivery] };
+        case 'health':
+            return withHealth(state, message.agentId, message.health);
         case 'shutdown':
             return { ...state, link: 'gone' };
     }
@@ -56,6 +64,8 @@ function fleetReducer(state: FleetState, action: FleetAction): FleetState {
                 ? state
                 : { ...state, feeds: { ...state.feeds, [action.agentId]: settlePermission(feed, action.requestId) } };
         }
+        case 'admin-answered':
+            return { ...state, feeds: Object.fromEntries(Object.entries(state.feeds).map(([id, feed]) => [id, settleAdminAction(feed, action.actionId)])) };
     }
 }
 /** What the page has seen of each agent: sent on (re)connecting so the server sends only the rest. */

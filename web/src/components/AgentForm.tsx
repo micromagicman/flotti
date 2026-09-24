@@ -4,6 +4,9 @@ import type { AgentConfig } from '../../../src/dashboard-protocol.js';
 import type { LocalAgentAdapter, RemoteAuth, RestartPolicy } from '../../../src/types.js';
 import { toConfig, withAdapter } from '../agent-draft.js';
 import type { Draft } from '../agent-draft.js';
+import { useT } from '../i18n/I18n.js';
+import { errorText } from '../i18n/errors.js';
+import type { Messages } from '../i18n/en.js';
 type AgentFormProps = {
     readonly initial: Draft;
     /** A new agent picks its id; a changed one keeps it — the id is its directory. */
@@ -27,95 +30,102 @@ type Update = <K extends keyof Draft>(key: K, value: Draft[K]) => void;
 type FieldsProps = { readonly draft: Draft; readonly update: Update };
 /** The adapter and what it runs. */
 function CommandFields({ draft, update, setDraft }: FieldsProps & { readonly setDraft: (draft: Draft) => void }) {
+    const t = useT();
     return (
         <>
-            <Field label="Adapter" hint="Which ACP adapter the command starts; picking one fills in its command.">
-                <select value={draft.adapter} onChange={(event) => setDraft(withAdapter(draft, event.target.value as LocalAgentAdapter | ''))}>
+            <Field label={t.form.adapter} hint={t.form.adapterHint}>
+                <select className="select" value={draft.adapter} onChange={(event) => setDraft(withAdapter(draft, event.target.value as LocalAgentAdapter | ''))}>
                     <option value="claude-code">Claude Code</option>
                     <option value="codex">Codex</option>
-                    <option value="">Plain ACP</option>
+                    <option value="">{t.form.plainAcp}</option>
                 </select>
             </Field>
-            <Field label="Command" hint="Executable to run.">
-                <input value={draft.command} onChange={(event) => update('command', event.target.value)} />
+            <Field label={t.form.command} hint={t.form.commandHint}>
+                <input className="input" value={draft.command} onChange={(event) => update('command', event.target.value)} />
             </Field>
-            <Field label="Arguments" hint="One per line.">
-                <textarea rows={3} value={draft.arguments} onChange={(event) => update('arguments', event.target.value)} />
+            <Field label={t.form.arguments} hint={t.form.argumentsHint}>
+                <textarea className="textarea" rows={3} value={draft.arguments} onChange={(event) => update('arguments', event.target.value)} />
             </Field>
         </>
     );
 }
 /** The model, and where and with what environment the command runs. */
 function PlaceFields({ draft, update }: FieldsProps) {
+    const t = useT();
     return (
         <>
-            <Field label="Model" hint="Empty: the adapter's own default.">
-                <input value={draft.model} onChange={(event) => update('model', event.target.value)} />
+            <Field label={t.form.model} hint={t.form.modelHint}>
+                <input className="input" value={draft.model} onChange={(event) => update('model', event.target.value)} />
             </Field>
-            <Field label="Host" hint="Empty: this machine. user@host: flotti starts the agent there over SSH with your key; the command, the working directory and everything the agent does are on that host.">
-                <input value={draft.sshTarget} placeholder="user@host" onChange={(event) => update('sshTarget', event.target.value)} />
+            <Field label={t.form.host} hint={t.form.hostHint}>
+                <input className="input" value={draft.sshTarget} placeholder="user@host" onChange={(event) => update('sshTarget', event.target.value)} />
             </Field>
-            <Field label="Working directory" hint={draft.sshTarget.trim() === '' ? 'Empty: the agent directory. ~ and relative paths are fine.' : 'A path on the host. Empty: the home directory there.'}>
-                <input value={draft.workdir} onChange={(event) => update('workdir', event.target.value)} />
+            <Field label={t.form.workdir} hint={draft.sshTarget.trim() === '' ? t.form.workdirHint : t.form.workdirRemoteHint}>
+                <input className="input" value={draft.workdir} onChange={(event) => update('workdir', event.target.value)} />
             </Field>
-            <Field label="Environment" hint="NAME=value, one per line. Keep secrets out: this is written to agent.json.">
-                <textarea rows={3} value={draft.env} onChange={(event) => update('env', event.target.value)} />
+            <Field label={t.form.environment} hint={t.form.environmentHint}>
+                <textarea className="textarea" rows={3} value={draft.env} onChange={(event) => update('env', event.target.value)} />
             </Field>
         </>
     );
 }
 /** When the agent is restarted and when it counts as hung. */
 function RestartFields({ draft, update }: FieldsProps) {
+    const t = useT();
     return (
         <div className="field-row">
-            <Field label="Restart">
-                <select value={draft.restart} onChange={(event) => update('restart', event.target.value as RestartPolicy | '')}>
-                    <option value="">default (on failure)</option>
-                    <option value="always">always</option>
-                    <option value="on-failure">on failure</option>
-                    <option value="never">never</option>
+            <Field label={t.form.restart}>
+                <select className="select" value={draft.restart} onChange={(event) => update('restart', event.target.value as RestartPolicy | '')}>
+                    <option value="">{t.form.restartDefault}</option>
+                    <option value="always">{t.form.restartAlways}</option>
+                    <option value="on-failure">{t.form.restartOnFailure}</option>
+                    <option value="never">{t.form.restartNever}</option>
                 </select>
             </Field>
-            <Field label="Heartbeat timeout, s" hint="Empty: 60.">
-                <input inputMode="numeric" value={draft.heartbeatTimeoutSec} onChange={(event) => update('heartbeatTimeoutSec', event.target.value)} />
+            <Field label={t.form.heartbeat} hint={t.form.heartbeatHint}>
+                <input className="input" inputMode="numeric" value={draft.heartbeatTimeoutSec} onChange={(event) => update('heartbeatTimeoutSec', event.target.value)} />
             </Field>
         </div>
     );
 }
 function LocalFields({ draft, update, setDraft }: { readonly draft: Draft; readonly update: Update; readonly setDraft: (draft: Draft) => void }) {
+    const t = useT();
     return (
         <>
             <CommandFields draft={draft} update={update} setDraft={setDraft} />
             <PlaceFields draft={draft} update={update} />
             <RestartFields draft={draft} update={update} />
-            <Field label="System prompt" hint="Kept in system-prompt.md next to the manifest.">
-                <textarea rows={6} value={draft.systemPrompt} onChange={(event) => update('systemPrompt', event.target.value)} />
+            <Field label={t.form.systemPrompt} hint={t.form.systemPromptHint}>
+                <textarea className="textarea" rows={6} value={draft.systemPrompt} onChange={(event) => update('systemPrompt', event.target.value)} />
             </Field>
         </>
     );
 }
 function PublishedAgentField({ draft, update }: FieldsProps) {
+    const t = useT();
     return (
-        <Field label="Published agent" hint="Empty: the only one the host publishes.">
-            <input value={draft.sshAgent} onChange={(event) => update('sshAgent', event.target.value)} />
+        <Field label={t.form.publishedAgent} hint={t.form.publishedAgentHint}>
+            <input className="input" value={draft.sshAgent} onChange={(event) => update('sshAgent', event.target.value)} />
         </Field>
     );
 }
 function UrlField({ draft, update }: FieldsProps) {
+    const t = useT();
     return (
-        <Field label="URL" hint="Address of the agent, http: or https:.">
-            <input value={draft.url} onChange={(event) => update('url', event.target.value)} />
+        <Field label={t.form.url} hint={t.form.urlHint}>
+            <input className="input" value={draft.url} onChange={(event) => update('url', event.target.value)} />
         </Field>
     );
 }
 /** Where the agent is: a host over SSH, or an address. */
 function WhereFields({ draft, update }: { readonly draft: Draft; readonly update: Update }) {
     const overSsh = draft.sshTarget.trim() !== '';
+    const t = useT();
     return (
         <>
             <div className="field-row">
-                <Field label="SSH" hint="user@host: flotti opens the tunnel and gets the address and the token itself. Empty: reach the agent at URL.">
-                    <input value={draft.sshTarget} placeholder="user@host" onChange={(event) => update('sshTarget', event.target.value)} />
+                <Field label={t.form.ssh} hint={t.form.sshHint}>
+                    <input className="input" value={draft.sshTarget} placeholder="user@host" onChange={(event) => update('sshTarget', event.target.value)} />
                 </Field>
                 {overSsh ? <PublishedAgentField draft={draft} update={update} /> : null}
             </div>
@@ -124,32 +134,35 @@ function WhereFields({ draft, update }: { readonly draft: Draft; readonly update
     );
 }
 function AuthTypeField({ draft, update }: FieldsProps) {
+    const t = useT();
     const overSsh = draft.sshTarget.trim() !== '';
     return (
-        <Field label="Authentication" hint={overSsh ? 'Over SSH, the token the host publishes wins; this is for a host that publishes none.' : undefined}>
-            <select value={draft.authType} onChange={(event) => update('authType', event.target.value as RemoteAuth['type'])}>
-                <option value="none">none</option>
-                <option value="bearer">bearer token</option>
-                <option value="api-key">API key header</option>
+        <Field label={t.form.auth} hint={overSsh ? t.form.authSshHint : undefined}>
+            <select className="select" value={draft.authType} onChange={(event) => update('authType', event.target.value as RemoteAuth['type'])}>
+                <option value="none">{t.form.authNone}</option>
+                <option value="bearer">{t.form.authBearer}</option>
+                <option value="api-key">{t.form.authApiKey}</option>
             </select>
         </Field>
     );
 }
 function TokenEnvField({ draft, update }: FieldsProps) {
+    const t = useT();
     return (
-        <Field label="Token variable" hint="Environment variable with the token; the token itself stays out of the manifest.">
-            <input value={draft.tokenEnv} onChange={(event) => update('tokenEnv', event.target.value)} />
+        <Field label={t.form.tokenEnv} hint={t.form.tokenEnvHint}>
+            <input className="input" value={draft.tokenEnv} onChange={(event) => update('tokenEnv', event.target.value)} />
         </Field>
     );
 }
 function ApiKeyFields({ draft, update }: FieldsProps) {
+    const t = useT();
     return (
         <div className="field-row">
-            <Field label="Header">
-                <input value={draft.header} onChange={(event) => update('header', event.target.value)} />
+            <Field label={t.form.header}>
+                <input className="input" value={draft.header} onChange={(event) => update('header', event.target.value)} />
             </Field>
-            <Field label="Value variable" hint="Environment variable with the key.">
-                <input value={draft.valueEnv} onChange={(event) => update('valueEnv', event.target.value)} />
+            <Field label={t.form.valueEnv} hint={t.form.valueEnvHint}>
+                <input className="input" value={draft.valueEnv} onChange={(event) => update('valueEnv', event.target.value)} />
             </Field>
         </div>
     );
@@ -165,54 +178,77 @@ function RemoteFields({ draft, update }: { readonly draft: Draft; readonly updat
     );
 }
 /** Checks the draft, then hands it to the server; what either says is wrong ends up in the error. */
-function saveDraft(draft: Draft, onSave: AgentFormProps['onSave'], setError: (error: string | undefined) => void, setSaving: (saving: boolean) => void): void {
+type Saving = {
+    readonly t: Messages;
+    readonly setError: (error: string | undefined) => void;
+    readonly setSaving: (saving: boolean) => void;
+};
+function saveDraft(draft: Draft, onSave: AgentFormProps['onSave'], { t, setError, setSaving }: Saving): void {
     setError(undefined);
     let config: AgentConfig;
     try {
-        config = toConfig(draft);
+        config = toConfig(draft, t);
     } catch (reason) {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(errorText(reason, t));
         return;
     }
     setSaving(true);
     onSave(config).catch((reason: unknown) => {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(errorText(reason, t));
     }).finally(() => setSaving(false));
 }
 function useAgentForm(initial: Draft, onSave: AgentFormProps['onSave']) {
     const [draft, setDraft] = useState(initial);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string>();
+    const t = useT();
     const update: Update = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
     const submit = (event: FormEvent): void => {
         event.preventDefault();
-        saveDraft(draft, onSave, setError, setSaving);
+        saveDraft(draft, onSave, { t, setError, setSaving });
     };
     return { draft, setDraft, saving, error, update, submit };
 }
 function IdentityFields({ draft, update, isNew }: FieldsProps & { readonly isNew: boolean }) {
+    const t = useT();
     return (
         <>
-            <Field label="Id" hint={isNew ? 'Names the agent directory: letters, digits, ".", "_" and "-".' : 'The id is the directory name and stays.'}>
-                <input value={draft.id} readOnly={!isNew} onChange={(event) => update('id', event.target.value)} />
+            <Field label={t.form.id} hint={isNew ? t.form.idNewHint : t.form.idHint}>
+                <input className="input" value={draft.id} readOnly={!isNew} onChange={(event) => update('id', event.target.value)} />
             </Field>
-            <Field label="Name" hint="Empty: the id.">
-                <input value={draft.name} onChange={(event) => update('name', event.target.value)} />
+            <Field label={t.form.name} hint={t.form.nameHint}>
+                <input className="input" value={draft.name} onChange={(event) => update('name', event.target.value)} />
             </Field>
-            <Field label="Description">
-                <input value={draft.description} onChange={(event) => update('description', event.target.value)} />
+            <Field label={t.form.description}>
+                <input className="input" value={draft.description} onChange={(event) => update('description', event.target.value)} />
             </Field>
+            <AdminField draft={draft} update={update} />
         </>
     );
 }
+/** The role of an administrator: only a person gives and takes it, here or in the manifest. */
+function AdminField({ draft, update }: FieldsProps) {
+    const id = useId();
+    const t = useT();
+    return (
+        <div className="field field-check">
+            <label className="check">
+                <input type="checkbox" checked={draft.admin} aria-describedby={`${id}-hint`} onChange={(event) => update('admin', event.target.checked)} />
+                {' '}{t.form.administrator}
+            </label>
+            <span className="field-hint" id={`${id}-hint`}>{t.form.administratorHint}</span>
+        </div>
+    );
+}
 function FormFooter({ isNew, error, saving, onCancel }: { readonly isNew: boolean; readonly error: string | undefined; readonly saving: boolean; readonly onCancel: () => void }) {
+    const t = useT();
     return (
         <>
-            {isNew ? null : <p className="note">Saving restarts the agent with the new settings, unless it is stopped.</p>}
+            {isNew ? null : <p className="note">{t.form.restartsOnSave}</p>}
             {error === undefined ? null : <p className="error" role="alert">{error}</p>}
             <div className="actions">
-                <button type="submit" className="primary" disabled={saving}>{isNew ? 'Add agent' : 'Save'}</button>
-                <button type="button" onClick={onCancel}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={saving} aria-busy={saving}>{isNew ? t.form.addAgent : t.common.save}</button>
+                <button type="button" className="btn" onClick={onCancel}>{t.common.cancel}</button>
             </div>
         </>
     );
@@ -220,10 +256,11 @@ function FormFooter({ isNew, error, saving, onCancel }: { readonly isNew: boolea
 /** Every field of the manifest a person sets by hand; the server checks it before a file is written. */
 function AgentForm({ initial, isNew, onSave, onCancel }: AgentFormProps) {
     const { draft, setDraft, saving, error, update, submit } = useAgentForm(initial, onSave);
-    const title = isNew ? `New ${draft.kind} agent` : `${initial.name === '' ? initial.id : initial.name}`;
+    const t = useT();
+    const title = isNew ? t.form.newAgent(draft.kind) : `${initial.name === '' ? initial.id : initial.name}`;
     return (
-        <form className="agent-form" aria-label={isNew ? `New ${draft.kind} agent` : `Agent ${initial.id}`} onSubmit={submit}>
-            <h2>{title} <span className="kind">{draft.kind === 'local' ? 'local · ACP' : 'remote · A2A'}</span></h2>
+        <form className="agent-form" aria-label={isNew ? t.form.newAgent(draft.kind) : t.form.agentLabel(initial.id)} onSubmit={submit}>
+            <h2>{title} <span className="kind">{draft.kind === 'local' ? t.common.localKind : t.common.remoteKind}</span></h2>
             <IdentityFields draft={draft} update={update} isNew={isNew} />
             {draft.kind === 'local'
                 ? <LocalFields draft={draft} update={update} setDraft={setDraft} />
@@ -232,4 +269,4 @@ function AgentForm({ initial, isNew, onSave, onCancel }: AgentFormProps) {
         </form>
     );
 }
-export { AgentForm };
+export { AgentForm, Field };

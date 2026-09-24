@@ -41,6 +41,11 @@ type AgentBase = {
     readonly name: string;
     /** One line about the agent, for the dashboard. */
     readonly description?: string;
+    /**
+     * Set when the agent is an administrator of the fleet: it may restart the
+     * other agents and clear their context. Absent means it is not one.
+     */
+    readonly admin?: true;
     /** Absolute path of the agent directory. */
     readonly directory: string;
     /** Absolute path of the manifest inside it. */
@@ -84,7 +89,10 @@ type LocalAgent = AgentBase & {
     readonly systemPromptFile?: string;
     /** Absolute path of the agent's own skills; flotti creates it and never reads it. */
     readonly skillsDirectory: string;
-    /** Absolute path of the agent's memory bank; flotti creates it and never reads it. */
+    /**
+     * Absolute path of the agent's memory bank; flotti creates it and never
+     * writes to it. The dashboard shows its notes, read-only.
+     */
     readonly memoryDirectory: string;
 };
 /** An agent that runs elsewhere and is reached over the network, from `<fleet>/remote/<id>/`. */

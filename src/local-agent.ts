@@ -19,8 +19,9 @@ import type {
 import { AcpMessages, acpPermissionEvent, acpUpdateEvents } from './acp-events.js';
 import { prepareHandover } from './acp-adapters.js';
 import type { Handover } from './acp-adapters.js';
-import { AgentEvents, composeText, messageFields } from './agent-events.js';
+import { AgentEvents, WITHDRAWN, composeText, messageFields } from './agent-events.js';
 import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
+import { commandToSpawn } from './command-line.js';
 import { MCP_PATH, MCP_SERVER_NAME } from './fleet-mcp.js';
 import type { FleetToolsAccess } from './fleet-mcp.js';
 import { RemoteStartReader, parseTarget, remoteCommandArguments } from './ssh.js';
@@ -113,6 +114,8 @@ type Run = {
     permanent: boolean;
     /** While `session/load` replays the history, its updates are not news. */
     replaying: boolean;
+    /** What the session was opened with: a new session, when the context is cleared, is opened the same way. */
+    sessionRequest?: NewSessionRequest;
     trace?: WriteStream;
     stderrLog?: WriteStream;
     /** On an SSH host: reads where the command runs and the port of the way back, from standard error. */
@@ -148,6 +151,8 @@ class LocalAgentProcess implements FleetAgent {
     private readonly permissions = new Map<string, (response: RequestPermissionResponse) => void>();
     private permissionCount = 0;
     private waiters: { resolve: () => void; reject: (error: Error) => void }[] = [];
+    /** Set while the context is being cleared: the messages in line wait for the new session. */
+    private renewing = false;
     constructor(agent: LocalAgent, options: LocalAgentOptions = {}) {
         this.agent = agent;
         this.events = new AgentEvents(agent.id);
@@ -206,6 +211,8 @@ class LocalAgentProcess implements FleetAgent {
         this.clearBackoff();
         const run = this.run;
         if (run === undefined) {
+            // Waiting to start again: what waits in line has nowhere to go now.
+            this.dropWork(`agent "${this.agentId}" stopped`);
             this.setLifecycle('stopped', 'stopped');
             return;
         }
@@ -236,6 +243,37 @@ class LocalAgentProcess implements FleetAgent {
         return ready;
     }
     /**
+     * Opens a new ACP session with the running agent: the next message goes
+     * without the conversation before it. The message in work is cancelled
+     * first; the messages in line go to the new session. An agent that is not
+     * running gets a new session when it starts.
+     */
+    async clearContext(): Promise<void> {
+        const run = this.run;
+        if (this.lifecycle !== 'running' || run?.connection === undefined || run.sessionRequest === undefined) {
+            this.session = undefined;
+            return;
+        }
+        this.renewing = true;
+        try {
+            await this.cancel();
+            await this.renewSession(run, run.connection, run.sessionRequest);
+        } finally {
+            this.renewing = false;
+        }
+        this.pump();
+    }
+    /** The new session of {@link clearContext}; an agent that cannot open one is failed and restarted by its policy. */
+    private async renewSession(run: Run, connection: acp.ClientConnection, request: NewSessionRequest): Promise<void> {
+        this.session = undefined;
+        try {
+            await this.applyModel(run, await this.newSession(connection, request, false));
+        } catch (error) {
+            this.fail(run, `could not open a new session: ${message(error)}`);
+            throw error;
+        }
+    }
+    /**
      * Sends a message. While the agent works on another one, the message waits
      * in line. Resolves once the message went to the agent as `session/prompt`;
      * how it ended comes as a `turn-end` event with the ACP stop reason —
@@ -251,10 +289,26 @@ class LocalAgentProcess implements FleetAgent {
         if (this.lifecycle !== 'running' && this.lifecycle !== 'starting' && this.lifecycle !== 'backoff') {
             return Promise.reject(new Error(`agent "${this.agentId}" is ${this.lifecycle}; start it first`));
         }
+        const turnOptions = { ...options, messageId: options.messageId ?? randomUUID() };
         return new Promise((resolve, reject) => {
-            this.queue.push({ text, options, accepted: resolve, refused: reject });
+            const turn: Turn = { text, options: turnOptions, accepted: resolve, refused: reject };
+            this.queue.push(turn);
             this.pump();
+            if (this.queue.includes(turn)) {
+                this.emit({ type: 'queued', messageId: turnOptions.messageId, text, ...messageFields(turnOptions) });
+            }
         });
+    }
+    /** Takes a message that waits in line back out of it; its `send` rejects. */
+    withdraw(messageId: string): boolean {
+        const index = this.queue.findIndex((turn) => turn.options.messageId === messageId);
+        const [turn] = index === -1 ? [] : this.queue.splice(index, 1);
+        if (turn === undefined) {
+            return false;
+        }
+        this.emit({ type: 'unqueued', messageId, outcome: 'withdrawn' });
+        turn.refused(new Error(WITHDRAWN));
+        return true;
     }
     /**
      * Asks the agent to drop the message it works on. Open permission requests
@@ -349,14 +403,18 @@ class LocalAgentProcess implements FleetAgent {
     }
     private spawnChild(how: Invocation): ChildProcess {
         const posix = process.platform !== 'win32';
-        return spawn(how.command, how.arguments, {
+        // On Windows `npx` and `codex` are `.cmd` scripts: they go through `cmd.exe`, which
+        // taskkill /T stops together with everything under it.
+        const target = commandToSpawn(how.command, how.arguments, { env: how.env, ...(how.cwd === undefined ? {} : { cwd: how.cwd }) });
+        return spawn(target.command, target.arguments, {
             ...(how.cwd === undefined ? {} : { cwd: how.cwd }),
             env: how.env,
             stdio: ['pipe', 'pipe', 'pipe'],
             // Its own process group, so stopping it reaches what it started: the
             // adapter runs `claude` or `codex`, and those run MCP servers.
             detached: posix,
-            windowsHide: true
+            windowsHide: true,
+            ...(target.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {})
         });
     }
     /** Settles once the process is gone, and hands its end to {@link onExit}. */
@@ -511,6 +569,7 @@ class LocalAgentProcess implements FleetAgent {
     ): Promise<SessionConfigOption[] | null | undefined> {
         const agentCapabilities = capabilities.agentCapabilities;
         const common = this.sessionParameters(capabilities, handover, place);
+        run.sessionRequest = common;
         const previous = this.session;
         if (previous !== undefined && agentCapabilities?.sessionCapabilities?.resume) {
             return await this.resumeSession(connection, common, previous);
@@ -608,7 +667,7 @@ class LocalAgentProcess implements FleetAgent {
     // --- running ---------------------------------------------------------------------------------------------
     private pump(): void {
         const run = this.run;
-        if (this.active !== undefined || this.lifecycle !== 'running' || run?.connection === undefined) {
+        if (this.active !== undefined || this.renewing || this.lifecycle !== 'running' || run?.connection === undefined) {
             return;
         }
         const turn = this.queue.shift();
@@ -848,6 +907,7 @@ class LocalAgentProcess implements FleetAgent {
         }
         this.active = undefined;
         for (const turn of this.queue.splice(0)) {
+            this.emit({ type: 'unqueued', messageId: turn.options.messageId ?? '', outcome: 'dropped', reason });
             turn.refused(new Error(reason));
         }
     }

@@ -20,7 +20,8 @@ Commands:
           goes to ${LOG_FILE} in the fleet directory.
   stop    Stops the flotti that runs the fleet, and its agents with it.
   status  Lists the agents of the running fleet: id, local or remote,
-          harness, status.
+          harness, status; for a remote agent reached over SSH, also the
+          latency, the reconnects and the uptime of its connection.
   run     Does what start does, in the foreground: Ctrl+C stops it.
 
 Options:

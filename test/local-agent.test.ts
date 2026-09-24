@@ -3,6 +3,8 @@ import { readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { AgentEvent } from '../src/agent-events.js';
+import { Supervisor } from '../src/supervisor.js';
+import { fakeFleet } from './fake-fleet-agent.js';
 import { Harness, eventually, isAlive } from './local-agent-helpers.js';
 /** Events without the fields that change from run to run. */
 function shape(events: readonly AgentEvent[]): unknown[] {
@@ -136,6 +138,56 @@ describe('LocalAgentProcess: the queue', { timeout: 20_000 }, () => {
         await rejects(queued, /stopped/);
         strictEqual(harness.agent.status, 'stopped');
         deepStrictEqual(harness.recorded('session/prompt').map((entry) => entry['text']), ['wait']);
+    });
+});
+describe('LocalAgentProcess: the line of messages', { timeout: 20_000 }, () => {
+    it('says a message waits in line, and the same id comes back once the agent takes it', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        await harness.agent.send('wait');
+        const second = harness.agent.send('second', { messageId: 'q-2' });
+        const queued = harness.events.find((event) => event.type === 'queued');
+        ok(queued?.type === 'queued');
+        deepStrictEqual([queued.messageId, queued.text], ['q-2', 'second']);
+        await harness.agent.cancel();
+        await second;
+        const taken = await harness.next((event) => event.type === 'message' && event.role === 'user' && event.text === 'second');
+        ok(taken.type === 'message');
+        strictEqual(taken.messageId, 'q-2');
+        ok(taken.seq > queued.seq);
+    });
+    it('a message taken at once does not say it waits', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        await harness.talk('hello');
+        strictEqual(harness.events.some((event) => event.type === 'queued'), false);
+    });
+    it('takes a message back out of the line, and the agent never gets it', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        await harness.agent.send('wait');
+        const second = harness.agent.send('second', { messageId: 'q-2' });
+        strictEqual(harness.agent.withdraw('q-2'), true);
+        await rejects(second, /taken out of the line/);
+        strictEqual(harness.agent.withdraw('q-2'), false);
+        deepStrictEqual(harness.events.filter((event) => event.type === 'unqueued').map((event) => shape([event])[0]), [
+            { type: 'unqueued', messageId: 'q-2', outcome: 'withdrawn' }
+        ]);
+        await harness.agent.cancel();
+        await harness.next((event) => event.type === 'turn-end');
+        deepStrictEqual(harness.recorded('session/prompt').map((entry) => entry['text']), ['wait']);
+    });
+    it('a stop drops what waits in line, and says so for each message', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        await harness.agent.send('wait');
+        const second = harness.agent.send('second', { messageId: 'q-2' });
+        await harness.agent.stop();
+        await rejects(second, /stopped/);
+        const dropped = harness.events.find((event) => event.type === 'unqueued');
+        ok(dropped?.type === 'unqueued');
+        deepStrictEqual([dropped.messageId, dropped.outcome], ['q-2', 'dropped']);
+        match(dropped.reason ?? '', /stopped/);
     });
 });
 describe('LocalAgentProcess: permissions and cancelling', { timeout: 20_000 }, () => {
@@ -380,5 +432,24 @@ describe('LocalAgentProcess: what Codex and adapterless agents get', { timeout: 
         const harness = new Harness({ systemPrompt: 'Be brief.' });
         await harness.agent.start();
         await harness.next((event) => event.type === 'log' && /system-prompt.md is not passed on/.test(event.text));
+    });
+});
+describe('LocalAgentProcess: answering another agent of the fleet', { timeout: 20_000 }, () => {
+    it('sends what it answers to a message of another agent back to that agent, from itself', async () => {
+        const { fleet, fakes, createAgent } = fakeFleet('a');
+        const receiver = new Harness({ manifest: { id: 'b' } });
+        const agents = [...fleet.agents, { ...fleet.agents[0]!, id: 'b', name: 'B' }];
+        const supervisor = new Supervisor({ ...fleet, agents }, {
+            createAgent: (agent) => agent.id === 'b' ? receiver.agent : createAgent(agent)
+        });
+        await supervisor.start();
+        await supervisor.send('b', 'rerun the tests', { from: 'a' });
+        const sender = fakes.get('a');
+        await eventually(() => (sender?.calls.length ?? 0) > 1);
+        deepStrictEqual(sender?.calls, ['start', 'send you said: [from a] rerun the tests from b']);
+        deepStrictEqual(sender?.options.map((options) => options.replyTo?.text), ['rerun the tests']);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        deepStrictEqual(receiver.recorded('session/prompt').length, 1, 'the answer to the answer does not come back');
+        await supervisor.stop();
     });
 });

@@ -51,6 +51,8 @@ if (config.crashStarts !== undefined && config.counter !== undefined) {
 record({
     event: 'started',
     pid: process.pid,
+    ppid: process.ppid,
+    argv: process.argv.slice(2),
     cwd: process.cwd(),
     codexConfig: process.env['CODEX_CONFIG'] ?? null
 });
@@ -193,7 +195,7 @@ acp.agent({ name: 'fake-acp-agent' })
         const { sessionId } = context.params;
         const first = context.params.prompt[0];
         const text = first?.type === 'text' ? first.text : '';
-        record({ event: 'session/prompt', text });
+        record({ event: 'session/prompt', text, sessionId });
         switch (text) {
             case 'crash':
                 await say(context.client, sessionId, 'about to crash');

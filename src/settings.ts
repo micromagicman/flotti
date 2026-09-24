@@ -3,13 +3,19 @@ import { dirname, join } from 'node:path';
 import { ConfigurationError } from './errors.js';
 /**
  * What flotti remembers about itself between runs, as the dashboard set it:
- * `~/.flotti/settings.json`. Only the fleet directory for now — the command
+ * `~/.flotti/settings.json`. The fleet directory lives here, whether actions
+ * of administrators wait for a person, and — under `notifications`, read by
+ * notifications.ts — how to reach a person outside the browser. The command
  * line has nothing but `run` and `stop`, so whatever a flag used to say lives
  * here and is changed on the settings page.
+ *
+ * The file may hold secrets (a bot token), so it is written for its owner only.
  */
 type Settings = {
     /** Absolute path of the fleet directory the dashboard chose. */
     readonly fleet?: string;
+    /** Whether an action of an administrator of the fleet waits for a person to allow it; off when absent. */
+    readonly confirmAdminActions?: boolean;
 };
 type Environment = Readonly<Record<string, string | undefined>>;
 /** Where the settings live, relative to the home directory. */
@@ -40,6 +46,17 @@ function readSettings(env: Environment): Settings {
     return parseSettings(text, path);
 }
 /**
+ * One top-level field of the settings file, as it is there; `undefined` when
+ * there is no file or no such field.
+ *
+ * @throws ConfigurationError when the file is there but is not a JSON object.
+ */
+function readSettingsField(env: Environment, name: string): unknown {
+    const path = settingsFile(env);
+    const text = path === undefined ? undefined : settingsText(path);
+    return text === undefined || path === undefined ? undefined : (settingsObject(text, path) as Record<string, unknown>)[name];
+}
+/**
  * Text of the settings file; `undefined` when there is no file yet.
  *
  * @throws ConfigurationError when the file is there but cannot be read.
@@ -64,15 +81,17 @@ function settingsText(path: string): string | undefined {
  * @throws ConfigurationError when the text is not settings.
  */
 function parseSettings(text: string, path: string): Settings {
-    const value = settingsObject(text, path);
-    const { fleet } = value as { fleet?: unknown };
-    if (fleet === undefined) {
-        return {};
-    }
-    if (typeof fleet !== 'string' || fleet.trim() === '') {
+    const { fleet, confirmAdminActions } = settingsObject(text, path) as { fleet?: unknown; confirmAdminActions?: unknown };
+    if (fleet !== undefined && (typeof fleet !== 'string' || fleet.trim() === '')) {
         throw new ConfigurationError('wrong-type', `${path}: fleet must be a non-empty string`, { path });
     }
-    return { fleet };
+    if (confirmAdminActions !== undefined && typeof confirmAdminActions !== 'boolean') {
+        throw new ConfigurationError('wrong-type', `${path}: confirmAdminActions must be true or false`, { path });
+    }
+    return {
+        ...(fleet === undefined ? {} : { fleet }),
+        ...(confirmAdminActions === undefined ? {} : { confirmAdminActions })
+    };
 }
 /** @throws ConfigurationError when the text is not a JSON object. */
 function settingsObject(text: string, path: string): object {
@@ -93,7 +112,7 @@ function settingsObject(text: string, path: string): object {
  *
  * @returns Path of the settings file.
  */
-function writeSettings(env: Environment, settings: Settings): string {
+function writeSettings(env: Environment, settings: Settings | Readonly<Record<string, unknown>>): string {
     const path = settingsFile(env);
     if (path === undefined) {
         throw new ConfigurationError(
@@ -104,7 +123,7 @@ function writeSettings(env: Environment, settings: Settings): string {
     const kept = keptSettings(path);
     mkdirSync(dirname(path), { recursive: true });
     const temporary = `${path}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify({ ...kept, ...settings }, null, 4)}\n`);
+    writeFileSync(temporary, `${JSON.stringify({ ...kept, ...settings }, null, 4)}\n`, { mode: 0o600 });
     renameSync(temporary, path);
     return path;
 }
@@ -121,5 +140,5 @@ function keptSettings(path: string): Record<string, unknown> {
     }
     return kept;
 }
-export { readSettings, settingsFile, writeSettings };
+export { readSettings, readSettingsField, settingsFile, writeSettings };
 export type { Settings };

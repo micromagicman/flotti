@@ -1,4 +1,9 @@
-# flotti
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/flotti-logo-dark.svg">
+    <img src="assets/logo/flotti-logo.svg" alt="flotti" height="56">
+  </picture>
+</h1>
 
 Simple ai agents orchestrator for humans.
 
@@ -50,7 +55,10 @@ take `--port <port>` or `FLOTTI_PORT`.
   It asks over the dashboard rather than with a signal, because on Windows a signal kills at once and
   would leave the agents running. With nothing running it says so and exits with `0`.
 - **`flotti status`** asks the running flotti for its agents and prints them as a table, one line an
-  agent; the harness is `-` where flotti does not know it (see [A local agent](#a-local-agent)):
+  agent; the harness is `-` where flotti does not know it (see [A local agent](#a-local-agent)). When
+  an agent of the fleet is reached over SSH, the table also has the health of its connection — the
+  latency, the reconnects in all and in the last hour, how long the tunnel has been up, and `POOR:`
+  with the reason when it is poor (see [The health of the connection](#the-health-of-the-connection)):
 
   ```text
   flotti runs /home/me/.flotti/agents (process 4242), dashboard http://127.0.0.1:4870/
@@ -77,25 +85,49 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   for you`, `error`, `stopped` — and a dot when it has said something since you last looked.
   `waiting for you` — a permission to grant, an answer the agent asked for — stands out the most.
 - **The header of the tab** names the harness that runs the agent — `claude` or `codex`, from the
-  `adapter` of its manifest. A local agent with no `adapter` and a remote agent do not tell which
-  harness runs them, and the header says `harness unknown` rather than guess.
+  `adapter` of its manifest; a remote agent names its own in its published file or its card
+  ([docs/a2a-ssh.md](docs/a2a-ssh.md#which-harness-runs-the-agent)), and a name flotti does not know
+  is shown as it is. A local agent with no `adapter` and a remote agent that says nothing do not tell
+  which harness runs them, and the header says `harness unknown` rather than guess.
 - **Inside the tab**: the agent's output as it comes — messages, collapsed reasoning, tool calls with
   their progress, permission requests with the options the agent offered, diagnostics, and whatever
   else the protocol said, raw and collapsed. Below it, a field to write to the agent: Enter sends,
-  Shift+Enter makes a new line. A message to a busy agent waits in line, and the field says so.
+  Shift+Enter makes a new line. A message to a busy agent waits in line at the end of the feed, under a
+  dashed line "NEXT UP": each one with its place in line and **✕ cancel** to take it back before the
+  agent gets it; the tab in the sidebar says how many wait ("working · 2 in line"). Once the agent takes
+  a message, it joins the feed where its turn starts. A message the line lost — the agent was stopped
+  or restarted, or flotti was — says "Not delivered" and why, with **Send again**.
   **Restart** restarts the agent — a local one keeps its session when it can, a remote one is asked to
   restart itself or starts a new conversation (see [Lifecycle](#lifecycle) and
   [Talking to a remote agent](#talking-to-a-remote-agent)); **Stop** stops it until **Start** starts it
   again; **Cancel** drops the message in work.
+- **Chat and Memory**: the header of a tab switches between the chat and the agent's memory bank.
+  **Memory** shows the notes of `memory/`, read-only: the folders and a search on the left, the note on
+  the right — rendered markdown, where a `[[link]]` opens the note it names, a link to a note that is
+  not there is grey and dashed, and "Linked from" lists the notes that link to this one. On a narrow
+  screen the list comes first and a note opens over it, with **← All notes** back. Only `.md` files
+  inside the bank are read — no hidden ones, none a symbolic link leads out of it, none over a
+  megabyte — and nothing is ever written there. A remote agent, and a local one started over SSH, keep
+  their memory on another machine: the view says so instead.
 - **Reply and Forward** sit on the corner of every message, on hover or focus (always, on a touch
   screen). **Reply** puts the message above the field as a quote; the agent gets the quoted text above
   your answer, and in the tab the quote leads back to the message it answers — in this tab or another
   one — until the message is gone from the history. **Forward** sends the message, as it was, to
   another agent you pick: its tab shows it under a bar "FORWARDED · AUTHOR" in the colour of whoever
   wrote it, and the agent gets it as `Forwarded from …:` and the text. Escape drops the reply.
+- **Conversations**, under the agents, list every two agents that wrote to each other, the newest
+  first; a pair beyond the first four, and every pair on a narrow screen, is in **All conversations**.
+  The tab of a pair shows, in one lane and in the order they were sent, the messages the two sent
+  each other — with quotes and forwards, and nothing of their work or of what you wrote them. The
+  lane is read-only: **Write to …** opens the tab of either agent. Every agent keeps one colour
+  everywhere: the square by its name in the sidebar, the stripe over its tab, its envelopes.
 - **All agents** sends one message to every agent you leave ticked. Each gets it on its own, so an
   agent that is down or busy holds nobody up; the page shows, agent by agent, whether the message was
   delivered, waits in line or failed, and the answers come in each agent's tab.
+- **Administrators** of the fleet are marked `admin` in the header of their tab. What one does to an
+  agent — a restart, a cleared context — is a line in its own tab and in the tab of that agent; a
+  cleared context is a divider in the tab of the agent it was cleared for, and the history above it
+  stays. See [Administrators of the fleet](#administrators-of-the-fleet).
 - **Settings** sets the fleet up; see below.
 
 ### Settings
@@ -126,6 +158,43 @@ same files: the fleet stays directories a person can read and edit by hand.
   `.flotti-run.json` moves along so `flotti stop` still finds the run. A directory that is not there
   yet is created — that is how a new fleet begins; one with a broken manifest is refused, and nothing
   changes. The choice is saved in `~/.flotti/settings.json`, and the next `flotti run` opens it.
+- **Notifications.** For when you are away from the dashboard; see
+  [Notifications outside the browser](#notifications-outside-the-browser).
+- **Administrators.** **Administrator** in the form of an agent gives it the role (`admin` in its
+  manifest); only a person gives and takes it. **Ask me before an administrator restarts an agent or
+  clears its context** makes every such action wait for **Allow** in the tab of the administrator —
+  **Refuse** reaches the administrator as a refusal; off, the action is done at once. It is off by
+  default, saved in `~/.flotti/settings.json` and read at every action.
+
+### Notifications outside the browser
+
+The tab of the dashboard tells you when an agent waits — but only while it is open. Set up a channel on
+the settings page and flotti tells you wherever you are. Nothing is set up at first, and then nothing
+is sent.
+
+- **When.** Each switched on its own: an agent **waits** for an answer or a permission, an agent
+  **fails** or its process falls, the **SSH connection** to an agent is lost. One notification per
+  wait, failure or lost connection, however long it lasts. When the agent gets its answer, the
+  notification of the wait is taken back. **Remind every** tells again, every so many minutes, that an
+  agent still waits; `0` tells once.
+- **Telegram.** A bot of your own: its token from [@BotFather](https://t.me/BotFather) and the chat it
+  writes to — your id, or a group the bot is in. The message says who waits and why, with a link to
+  the tab of the agent; the answer deletes it (or, where Telegram no longer lets the bot, marks it
+  *Answered.*). `FLOTTI_TELEGRAM_API` points flotti at another Bot API server.
+- **Web Push.** **Notify this browser** registers the service worker of the dashboard and subscribes
+  the browser: notifications then come with the dashboard closed, as long as the browser runs. flotti
+  sends them itself — signed with a key of its own (VAPID) and encrypted for that browser — through
+  the push service of the browser, which sees neither the text nor the agents. While a page of the
+  dashboard is in front of you, it tells you itself.
+- **Link to the dashboard.** The links lead to this dashboard on `127.0.0.1`; if you reach it another
+  way — a tunnel, another name — put that address here.
+- **Send a test** sends one over every channel switched on, and says how each went.
+
+Everything is saved under `notifications` in `~/.flotti/settings.json`, which only its owner may
+read. The bot token and the private key never go back to the page — it learns only that a token is
+saved — and never into a log: a failed notification is reported on standard error without them.
+Types for any other channel are in `src/notifier.ts`: a channel sends a notification and takes back
+those of a key.
 
 The server is the one source of truth and the page only follows it: every event of an agent has a
 number, and a page that connects — or reconnects after losing the connection — says which it has seen
@@ -147,8 +216,9 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 
 | Request                                       | What it does                                           |
 |-----------------------------------------------|--------------------------------------------------------|
-| `GET /api/agents`                             | the agents and their statuses                          |
-| `POST /api/agents/<id>/messages` `{text, replyTo?, forwarded?}` | a message to one agent: `taken`, `queued` or `failed`; `replyTo` quotes a message, `forwarded` sends one on (`text` may then be empty) |
+| `GET /api/agents`                             | the agents and their statuses; `health` for an agent over SSH |
+| `POST /api/agents/<id>/messages` `{text, replyTo?, forwarded?, retryOf?}` | a message to one agent: `taken`, `queued` or `failed`; `replyTo` quotes a message, `forwarded` sends one on (`text` may then be empty), `retryOf` names the undelivered message it sends again |
+| `DELETE /api/agents/<id>/queue/<messageId>`   | takes a message that waits in line back out of it; 404 once the agent took it |
 | `POST /api/broadcast` `{text, agents?}`       | one message to these agents, or to all; a result each  |
 | `POST /api/agents/<id>/restart`               | restarts the agent; answers at once, the status follows |
 | `POST /api/agents/<id>/cancel`                | drops the message in work                              |
@@ -158,9 +228,16 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `GET /api/agents/<id>`                        | its manifest as the file says it, and its system prompt |
 | `PUT /api/agents/<id>` `{kind, id, …}`        | a changed manifest: writes it and restarts the agent    |
 | `DELETE /api/agents/<id>`                     | stops the agent and moves its directory to `.trash/`    |
+| `GET /api/agents/<id>/memory` `?q=`           | the notes of the agent's memory bank, with the words `q` when given; `available: false` and why for an agent whose memory is not here |
+| `GET /api/agents/<id>/memory/<path>`          | one note and its text; `<path>` is its path in the bank, encoded as one segment |
 | `GET /api/fleet`, `PUT /api/fleet` `{path}`   | the fleet directory; switches to another one            |
 | `POST /api/agents/<id>/permissions/<request>` `{optionId?}` | answers a permission request; no option refuses it |
-| `/ws`                                         | `fleet` first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and gets the events after them, then live ones |
+| `GET /api/notifications`, `PUT /api/notifications` `{events?, repeatMinutes?, dashboardUrl?, telegram?, webPush?}` | the notification settings, without secrets; a change of them |
+| `POST /api/notifications/subscriptions`, `DELETE …` `{endpoint, keys}` | a browser subscribes to Web Push, or stops |
+| `POST /api/notifications/test`                | a test notification over every channel switched on      |
+| `GET /api/admin-settings`, `PUT /api/admin-settings` `{confirmActions}` | whether actions of administrators wait for a person |
+| `POST /api/admin-actions/<action>` `{allow}`  | allows or refuses an action of an administrator waiting for it |
+| `/ws`                                         | `fleet` first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and gets the events after them, then live ones; `health` whenever the health of the SSH connection of an agent changes |
 
 With no login, the server guards against other web pages rather than against people: it answers only
 to the host names of this machine (a page elsewhere cannot rebind a name of its own to `127.0.0.1`),
@@ -192,7 +269,7 @@ Every agent is a directory, and the directory name is the agent id:
   in `local/` or `remote/` must be an agent directory.
 - `local/` and `remote/` may be absent — that group is simply empty.
 - `skills/` and `memory/` belong to the agent: flotti creates them when they are missing and never
-  reads them. It hands them to the agent, as told in [Running a local agent](#running-a-local-agent).
+  writes to them; the dashboard only shows the notes of `memory/`. It hands them to the agent, as told in [Running a local agent](#running-a-local-agent).
 - `logs/` is where flotti keeps what a running agent said; see the same section.
 - `.flotti-history.jsonl` is the history of the agent's tab, written by flotti; see
   [The dashboard](#the-dashboard).
@@ -246,6 +323,7 @@ The smallest one:
 | `env`                 | no       | object of strings               | `{}`                           | Variables added to the agent environment.                                        |
 | `restart`             | no       | `always`, `on-failure`, `never` | `on-failure`                   | What to do when the agent stops.                                                 |
 | `heartbeatTimeoutSec` | no       | positive number                 | `60`                           | Seconds without a heartbeat before the agent counts as lost.                      |
+| `admin`               | no       | `true`, `false`                 | `false`                        | An administrator of the fleet: see [Administrators of the fleet](#administrators-of-the-fleet). |
 
 The system prompt is not a field: it is the file `system-prompt.md` next to the manifest. A prompt is
 prose, often long, and a JSON string is a poor place to write prose in.
@@ -289,6 +367,7 @@ A full example:
 | `name`        | no       | non-empty string | the id             | Name shown to people.                            |
 | `description` | no       | non-empty string | —                  | One line about the agent.                        |
 | `id`          | no       | non-empty string | —                  | If given, must equal the directory name.         |
+| `admin`       | no       | `true`, `false`  | `false`            | An administrator of the fleet: see [Administrators of the fleet](#administrators-of-the-fleet). |
 
 `auth` is one of:
 
@@ -327,6 +406,9 @@ flotti starts `command` with `arguments` in `workdir` as a child process and tal
 
 Pin the adapter version: adapters move and change — both have already changed their package names
 once. Keep `-y`: without it `npx` asks whether to install, and it asks on stdin, which belongs to ACP.
+On Windows `npx`, `codex` and other npm commands are `.cmd` scripts: flotti finds them through `PATH`
+and `PATHEXT` like the shell does and runs them through `cmd.exe`, so `"command": "npx"` works as it
+is, without `.cmd`. `cmd.exe` cannot pass a line break on, so arguments of such a command hold none.
 Log in to Claude Code or Codex the usual way before: flotti keeps no keys, and an agent that wants a
 login stops at once with a message saying so.
 
@@ -355,18 +437,34 @@ and `session/load`. A bare Claude Code or Codex sees them as `mcp__flotti__…`:
 
 | Tool           | What it does                                                                          |
 |----------------|---------------------------------------------------------------------------------------|
-| `list_agents`  | the agents of the fleet — id, name, description, harness, status; the caller is marked `you` |
+| `list_agents`  | the agents of the fleet — id, name, description, harness, status; the caller is marked `you`, administrators `admin` |
 | `send_message` | sends a message to another agent: `to` — its id, `text`                                |
 | `reply`        | answers the agent whose message came last, quoting it                                  |
 | `forward`      | forwards the last message another agent sent, as it was, to another agent; `comment` goes before it |
+| `delegate`     | gives another agent a task: `to`, `text`, optional `deadline_minutes`; returns the id of the task |
+| `cancel_delegation` | takes back a task the caller gave: `id` — as `delegate` returned it                |
 
 A message sent so reaches the other agent like one from a person, but from that agent: its `message`
 event has `from` — the sender's id — and the agent gets it as `[from <id>] <text>`, the way every
-message from an agent reaches it (#23). What it says in its turn goes to its own tab, not back to the
-sender: an answer to an agent is a `send_message` or a `reply` too.
+message from an agent reaches it (#23). What it answers in its turn stays in its own tab and goes back
+to the sender as well, as a message from it that quotes the message answered — the same way for A2A and
+ACP agents, on both sides. An answer gets no answer back by itself, so two agents do not answer each
+other for ever; only the answer goes, not the progress of the turn, and a cancelled turn sends nothing (#45).
 A `reply` and a `forward` are the reply and the forward of the dashboard: the `message` event carries
 `replyTo` or `forwarded`, and the tab shows the quote or the forwarded message the same way (#30).
 Messages queue as a person's do; a tool call does not wait for the answer.
+
+`delegate` is `send_message` with an outcome. The task goes in line like a message, and the turn the
+other agent spends on it is its work: when the turn ends, flotti sends the outcome back to the agent that
+gave the task by itself, as a message from the other agent that quotes the task — `completed` with what
+the agent answered in the turn, `failed` or `canceled` with why. A turn that ends with `end_turn`
+completes the task, a cancelled one cancels it, any other end fails it; a turn that pauses to ask a
+person goes on with the answer. A task to an agent that is not in the fleet, is stopped, or refuses the
+message fails at once, and the tool says why. `cancel_delegation` takes the task out of the line, or
+cancels the turn working on it; the giver gets no outcome for a task it took back. A task not done by its
+deadline fails, and the agent working on it is told to stop. Both tabs show the task as a card — who gave
+it to whom, where it stands, and the result or the reason once it is over (#51). An A2A agent gives and
+takes back tasks through its inbox: see [docs/a2a-inbox.md](docs/a2a-inbox.md).
 
 The server speaks MCP over HTTP (the streamable transport, with plain JSON answers) on a free port of
 `127.0.0.1`, and every agent gets a token of its own in the `Authorization` header: the token tells who
@@ -376,6 +474,25 @@ both adapters take — claude-agent-acp 0.81.1 declares `mcpCapabilities` `http`
 tunnel carries to an agent on another host. An agent that declares no `http` gets no tools, and a log
 event says so. A remote A2A agent — one with a loop of its own — gets no tools; a message from an agent
 reaches it with a line saying who wrote.
+
+### Administrators of the fleet
+
+An agent with `"admin": true` in its manifest — or **Administrator** ticked in the settings — may
+look after the other agents without a person at hand. There may be several administrators or none;
+by default there are none. An administrator gets two more tools:
+
+| Tool             | What it does                                                                        |
+|------------------|-------------------------------------------------------------------------------------|
+| `restart_agent`  | restarts an agent: `id` — its id; a local agent as a process, a remote one through [the restart extension](docs/a2a-restart.md), or with a new conversation when it has none |
+| `clear_context`  | starts the conversation of an agent anew: a local agent gets a new ACP session, a remote one a new `contextId`; what it is doing now is cancelled |
+
+A remote administrator asks the same through [the inbox](docs/a2a-inbox.md#requests-of-an-administrator).
+An administrator may name itself; the action is then done once the turn it asked in is over.
+Whether the caller may is decided by flotti: an agent that is not an administrator is refused, with
+the reason, and nothing happens. No tool gives or takes the role — only a person does, in the manifest
+or the settings. A cleared context drops the session only: the tab keeps its history, with a divider
+where the context was cleared. With the confirmation on in the settings, every action waits for a
+person to allow it, and a refusal reaches the administrator as one.
 
 ### On another host
 
@@ -437,7 +554,10 @@ The states follow supervisord:
   extension request every third of `heartbeatTimeoutSec`. Any message from the agent counts as a sign
   of life, the "method not found" answer too. Silence longer than `heartbeatTimeoutSec` is a lost
   agent: it is killed, and the policy decides the rest.
-- **Messages** sent while the agent is busy wait in line.
+- **Messages** sent while the agent is busy wait in line, in memory: a `queued` event says so, and the
+  `message` event with the same `messageId` follows once the agent takes it. A stop, a restart or a
+  crash drops what waits, and an `unqueued` event says why; so does flotti itself when it starts again
+  and finds messages that were in line when it stopped.
 - **Cancel** sends `session/cancel` and answers the open permission requests with `cancelled`. An agent
   that does not end the message within 5 s is killed.
 - **Stop** cancels the message in work, then ends the process with SIGTERM and, 5 s later, SIGKILL —
@@ -501,10 +621,28 @@ says `"ssh": "user@host"`, and flotti does the rest with nothing but the user's 
 - **Says why it could not**: the key is not accepted (and where the public key goes), the host is not
   known, cannot be reached, or its key changed; the host publishes nothing, or several agents and the
   manifest does not say which.
+- **Shows how healthy the connection is** — see below.
 
 SSH runs non-interactively (`BatchMode=yes`) through the `ssh` of this machine, so `~/.ssh/config`,
 the SSH agent and the known hosts are the user's own; a host seen for the first time is remembered
 (`StrictHostKeyChecking=accept-new`), one whose key changed is refused.
+
+#### The health of the connection
+
+The status says whether the tunnel is up now; the health says whether it is stable. The header of the
+agent's tab and its row in **Settings** show, and keep up to date without a reload:
+
+- **latency** — the round trip of a request to the agent down the tunnel: flotti asks for the agent
+  card when the tunnel comes up and every 15 s after, with no secret in the request;
+- **reconnects** — how many times the tunnel came back after it dropped since the agent was started, how
+  many of them in the last hour, and when the last one was;
+- **last activity** — when the agent last said something or answered a request;
+- **tunnel up** — how long the tunnel that is open now has been up, or `down`.
+
+A connection with 3 or more reconnects in the last hour, or a latency of 1 s or more, is **poor**: the
+health turns red and says why, and the tab of the agent says `poor connection`, seen from any tab.
+`flotti status` shows the same numbers. The health carries numbers and times only — no address, no
+token, no header — and is not written to the history of the tab.
 
 Not done, on purpose:
 

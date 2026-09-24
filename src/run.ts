@@ -3,6 +3,8 @@ import type { ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { formatDuration } from './connection-health.js';
+import type { ConnectionHealth } from './connection-health.js';
 import { ConfigurationError } from './errors.js';
 import { DEFAULT_HOST, DEFAULT_PORT, startDashboard } from './dashboard-server.js';
 import type { Dashboard, DashboardOptions } from './dashboard-server.js';
@@ -12,6 +14,8 @@ import { FleetMcpServer } from './fleet-mcp.js';
 import { FleetSettings } from './fleet-settings.js';
 import type { LoadFleetOptions } from './fleet.js';
 import type { Environment } from './manifest.js';
+import { NotificationService } from './notifications.js';
+import { readSettings } from './settings.js';
 import { Supervisor } from './supervisor.js';
 import type { SupervisorOptions } from './supervisor.js';
 import type { Fleet } from './types.js';
@@ -159,17 +163,37 @@ type RunParts = {
     readonly tools: FleetMcpServer;
     readonly supervisor: Supervisor;
     readonly settings: FleetSettings;
+    readonly notifications: NotificationService;
 };
-/** Starts the fleet tools and puts the supervisor and the settings of the fleet on them. */
+/**
+ * Whether actions of administrators wait for a person, as the settings say
+ * now: the checkbox takes effect with the next action. Settings that cannot
+ * be read ask for the person rather than let an action through unasked.
+ */
+function confirmsAdminActions(env: Environment): boolean {
+    try {
+        return readSettings(env).confirmAdminActions === true;
+    } catch {
+        return true;
+    }
+}
+/** Starts the fleet tools and puts the supervisor, the settings of the fleet and its notifications on them. */
 async function startSupervisor(fleet: Fleet, file: RunFile, options: RunOptions): Promise<RunParts> {
     const tools = await FleetMcpServer.start();
-    const supervisor = new Supervisor(fleet, { persistHistory: true, fleetTools: tools, ...options.supervisor });
+    const env = options.env ?? process.env;
+    const supervisor = new Supervisor(fleet, {
+        persistHistory: true,
+        fleetTools: tools,
+        confirmAdminActions: () => confirmsAdminActions(env),
+        ...options.supervisor
+    });
     tools.serve(supervisor);
     const settings = new FleetSettings(fleet, supervisor, {
-        env: options.env ?? process.env,
+        env,
         onSwitch: (next) => file.move(next)
     });
-    return { tools, supervisor, settings };
+    const notifications = new NotificationService(supervisor, { env: options.env ?? process.env });
+    return { tools, supervisor, settings, notifications };
 }
 /** Serves the dashboard; when it cannot listen, closes the fleet tools and says why. */
 function serveDashboard(
@@ -181,10 +205,12 @@ function serveDashboard(
     return startDashboard(parts.supervisor, {
         host: DEFAULT_HOST,
         settings: parts.settings,
+        notifications: parts.notifications,
         ...options.dashboard,
         port,
         shutdown
     }).catch((error: unknown) => parts.tools.close().then(() => {
+        parts.notifications.close();
         throw describeListenError(error, port);
     }));
 }
@@ -203,6 +229,7 @@ function stopOnce(dashboard: Dashboard, parts: RunParts, file: RunFile): () => P
     return (): Promise<void> => {
         stopping ??= (async () => {
             await dashboard.close();
+            parts.notifications.close();
             await parts.supervisor.stop();
             await parts.tools.close();
             file.remove();
@@ -234,6 +261,7 @@ async function runFleet(options: RunOptions = {}): Promise<Running> {
     const parts = await startSupervisor(fleet, file, options);
     let requestStop = (): void => undefined;
     const dashboard = await serveDashboard(parts, options, port, { token, onRequest: () => requestStop() });
+    parts.notifications.setDashboardUrl(dashboard.url);
     file.write({ pid: process.pid, url: dashboard.url, token, startedAt: new Date().toISOString() });
     announceRun(print, created, fleet, dashboard.url);
     const stop = stopOnce(dashboard, parts, file);
@@ -393,7 +421,8 @@ function table(rows: readonly (readonly string[])[]): string[] {
 }
 /**
  * `flotti status`: lists every agent of the fleet that runs, as its dashboard
- * sees it — id, local or remote, harness, status.
+ * sees it — id, local or remote, harness, status, and the health of the SSH
+ * connection of a remote agent reached over one.
  *
  * @returns Whether the fleet runs.
  */
@@ -420,16 +449,39 @@ function askAgents(record: RunRecord): Promise<AgentSummary[] | undefined> {
     return fetch(new URL('/api/agents', record.url), { signal: AbortSignal.timeout(ASK_TIMEOUT_MS) })
         .then((response) => (response.ok ? response.json() as Promise<AgentSummary[]> : undefined), () => undefined);
 }
-/** One line per agent — id, local or remote, harness, status — under a header. */
-function printAgents(agents: readonly AgentSummary[], print: (line: string) => void): void {
+/**
+ * The health of a connection as `flotti status` shows it: latency, reconnects
+ * in all and in the last hour, how long it has been up, and what makes it poor.
+ */
+function healthCells(health: ConnectionHealth | undefined, now: number): string[] {
+    if (health === undefined) {
+        return ['-', '-', '-', ''];
+    }
+    return [
+        health.latencyMs === undefined ? '?' : `${health.latencyMs} ms`,
+        `${health.reconnects} (${health.reconnectsLastHour} in 1 h)`,
+        health.upSince === undefined ? 'down' : formatDuration(now - Date.parse(health.upSince)),
+        health.poor.length === 0 ? '' : `POOR: ${health.poor.join(', ')}`
+    ];
+}
+/**
+ * One line per agent — id, local or remote, harness, status — under a header;
+ * and, when any agent is reached over SSH, the health of its connection.
+ */
+function printAgents(agents: readonly AgentSummary[], print: (line: string) => void, now = Date.now()): void {
     if (agents.length === 0) {
         print('No agents in the fleet.');
         return;
     }
-    const rows = agents.map((agent) => [agent.id, agent.kind, agent.harness ?? '-', agent.status]);
-    for (const line of table([['ID', 'TYPE', 'HARNESS', 'STATUS'], ...rows])) {
+    const connected = agents.some((agent) => agent.health !== undefined);
+    const header = ['ID', 'TYPE', 'HARNESS', 'STATUS', ...(connected ? ['LATENCY', 'RECONNECTS', 'UP', ''] : [])];
+    const rows = agents.map((agent) => [
+        agent.id, agent.kind, agent.harness ?? '-', agent.status,
+        ...(connected ? healthCells(agent.health, now) : [])
+    ]);
+    for (const line of table([header, ...rows])) {
         print(line);
     }
 }
-export { LOG_FILE, PORT_ARGUMENT, PORT_VARIABLE, RUN_FILE, dashboardPort, fleetStatus, runFleet, startFleet, stopFleet };
+export { LOG_FILE, PORT_ARGUMENT, PORT_VARIABLE, RUN_FILE, dashboardPort, fleetStatus, printAgents, runFleet, startFleet, stopFleet };
 export type { RunOptions, Running };

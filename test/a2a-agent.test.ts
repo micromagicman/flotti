@@ -3,12 +3,15 @@ import { afterEach, describe, it } from 'node:test';
 import { TaskState } from '@a2a-js/sdk';
 import { AgentEvent } from '@a2a-js/sdk/server';
 import type { ExecutionEventBus, RequestContext } from '@a2a-js/sdk/server';
-import { A2AAgent, INBOX_EXTENSION, RESTART_EXTENSION, cardLocation } from '../src/a2a-agent.js';
+import { A2AAgent, HARNESS_EXTENSION, INBOX_EXTENSION, RESTART_EXTENSION, cardLocation } from '../src/a2a-agent.js';
 import type { A2AAgentOptions } from '../src/a2a-agent.js';
 import type { AgentEvent as DashboardEvent, AgentStatus } from '../src/agent-events.js';
+import { FleetMcpServer } from '../src/fleet-mcp.js';
+import { Supervisor } from '../src/supervisor.js';
 import type { RemoteAgent, RemoteAuth } from '../src/types.js';
 import { FakeAgent, agentMessage, artifact, gate, said, statusUpdate, task } from './a2a-fake-server.js';
 import type { FakeAgentOptions, Script } from './a2a-fake-server.js';
+import { Harness } from './local-agent-helpers.js';
 const running: FakeAgent[] = [];
 const clients: A2AAgent[] = [];
 afterEach(async () => {
@@ -126,6 +129,34 @@ describe('A2AAgent: connecting', () => {
         clients.push(client);
         await rejects(client.start());
         strictEqual(client.status, 'error');
+    });
+});
+describe('A2AAgent: the harness the card names', () => {
+    it('takes the harness the card names in the harness extension, as it is', async () => {
+        for (const [params, harness] of [
+            [{ harness: 'codex' }, 'codex'],
+            [{ harness: 'home-made' }, 'home-made'],
+            [{ harness: '' }, undefined],
+            [{ harness: 7 }, undefined],
+            [undefined, undefined]
+        ] as const) {
+            const agent = await fake({
+                script: echo,
+                extensions: [HARNESS_EXTENSION],
+                ...(params === undefined ? {} : { extensionParams: { [HARNESS_EXTENSION]: params } })
+            });
+            const { client } = connect(agent);
+            await client.start();
+            strictEqual(client.harness, harness, JSON.stringify(params));
+            strictEqual(client.info?.harness, harness);
+        }
+    });
+    it('knows no harness when the card does not name one', async () => {
+        const agent = await fake({ script: echo });
+        const { client } = connect(agent);
+        await client.start();
+        strictEqual(client.harness, undefined);
+        strictEqual(Object.keys(client.info ?? {}).includes('harness'), false);
     });
 });
 describe('A2AAgent: credentials', () => {
@@ -375,6 +406,65 @@ describe('A2AAgent: cancel and stop', () => {
         strictEqual(agent.received.length, 1);
     });
 });
+/** An agent that works on `first` until the gate opens, and answers anything else at once. */
+async function busyAgent() {
+    const hold = gate();
+    const agent = await fake({
+        script: async (context, bus) => {
+            bus.publish(task(context, TaskState.TASK_STATE_WORKING));
+            if (said(context) === 'first') {
+                await hold.promise;
+            }
+            bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_COMPLETED, agentMessage(`done ${said(context)}`, context)));
+            bus.finished();
+        }
+    });
+    const { client, events } = connect(agent);
+    await client.start();
+    await client.send('first');
+    return { agent, client, events, hold };
+}
+describe('A2AAgent: the line of messages', () => {
+    it('says a message waits in line, and the same id comes back once the agent takes it', async () => {
+        const { client, events, hold } = await busyAgent();
+        const second = client.send('second', { messageId: 'q-2' });
+        const queued = events.find(event => event.type === 'queued');
+        ok(queued?.type === 'queued');
+        deepStrictEqual([queued.messageId, queued.text], ['q-2', 'second']);
+        hold.open();
+        await second;
+        const taken = events.find(event => event.type === 'message' && event.role === 'user' && event.text === 'second');
+        ok(taken?.type === 'message');
+        strictEqual(taken.messageId, 'q-2');
+    });
+    it('a message to an agent with nothing to do does not wait in line', async () => {
+        const agent = await fake({ script: echo });
+        const { client, events } = connect(agent);
+        await client.start();
+        await client.send('hello');
+        strictEqual(events.some(event => event.type === 'queued'), false);
+    });
+    it('takes a message back out of the line, and the agent never gets it', async () => {
+        const { client, events, hold } = await busyAgent();
+        const second = client.send('second', { messageId: 'q-2' });
+        const third = client.send('third', { messageId: 'q-3' });
+        strictEqual(client.withdraw('q-2'), true);
+        strictEqual(client.withdraw('q-2'), false);
+        await rejects(second, /taken out of the line/);
+        hold.open();
+        await third;
+        await reaches(client, 'idle');
+        deepStrictEqual(messages(events).map(message => message.text), ['first', 'done first', 'third', 'done third']);
+        deepStrictEqual(events.flatMap(event => event.type === 'unqueued' ? [[event.messageId, event.outcome]] : []), [['q-2', 'withdrawn']]);
+    });
+    it('a stop drops what waits in line, and says so for each message', async () => {
+        const { client, events } = await busyAgent();
+        const second = client.send('second', { messageId: 'q-2' });
+        await client.stop();
+        await rejects(second, /stopped/);
+        deepStrictEqual(events.flatMap(event => event.type === 'unqueued' ? [[event.messageId, event.outcome]] : []), [['q-2', 'dropped']]);
+    });
+});
 describe('A2AAgent: restart without the extension', () => {
     it('starts a new conversation when the agent cannot restart itself', async () => {
         const agent = await fake({ script: echo });
@@ -587,6 +677,194 @@ describe('A2AAgent: replies', () => {
             ['user', 'which host?', replyTo],
             ['agent', 'echo: In reply to a message from the person:\n> deploy it\n\nwhich host?', undefined]
         ]);
+    });
+});
+/** The messages the agent got, the inbox request left out, with the metadata of the inbox extension. */
+function conversation(agent: FakeAgent): [string | undefined, unknown][] {
+    return agent.received.flatMap(request => {
+        const message = request.params['message'] as { parts?: { text?: string }[]; metadata?: Record<string, unknown> } | undefined;
+        const inbox = message?.metadata?.[INBOX_EXTENSION] as { action?: string } | undefined;
+        return message === undefined || inbox?.action === 'subscribe' ? [] : [[message.parts?.[0]?.text, inbox]];
+    });
+}
+describe('A2AAgent: answering another agent of the fleet', () => {
+    it('sends what the receiver answers in its task back to the sender, from the receiver, once', async () => {
+        const sender = await inboxAgent();
+        const receiver = await inboxAgent();
+        const agents = [{ ...manifest(sender.agent.url), id: 'a' }, { ...manifest(receiver.agent.url), id: 'b' }];
+        const running = new Map(agents.map(agent => [agent.id, new A2AAgent(agent, { reconnectDelayMs: 10, pollIntervalMs: 10 })]));
+        clients.push(...running.values());
+        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents }, {
+            createAgent: agent => running.get(agent.id) as A2AAgent
+        });
+        await supervisor.start();
+        await eventually(() => sender.isOpen() && receiver.isOpen());
+        sender.post('Please rerun the e2e job', 'to-1', { [INBOX_EXTENSION]: { to: 'b' } });
+        await eventually(() => conversation(sender.agent).length === 1);
+        deepStrictEqual(conversation(sender.agent), [
+            ['In reply to a message from you:\n> Please rerun the e2e job\n\necho: Please rerun the e2e job', { from: 'b' }]
+        ]);
+        await eventually(() => supervisor.history('a').some(event => event.type === 'turn-end'));
+        await new Promise(resolve => setTimeout(resolve, 50));
+        deepStrictEqual(conversation(receiver.agent), [['Please rerun the e2e job', { from: 'a' }]], 'the answer to the answer does not come back');
+        const answer = supervisor.history('a').find(event => event.type === 'message' && event.role === 'user');
+        deepStrictEqual(answer?.type === 'message' ? [answer.from, answer.replyTo?.text] : undefined, ['b', 'Please rerun the e2e job']);
+    });
+});
+/** A supervisor over these running agents, as a fleet of their ids. */
+async function fleetOf(agents: ReadonlyMap<string, A2AAgent | Harness>): Promise<Supervisor> {
+    const manifests = [...agents].map(([id, agent]) => agent instanceof Harness ? { ...agent.agent.agent, id } : { ...manifest('http://127.0.0.1/'), id });
+    const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents: manifests }, {
+        createAgent: agent => {
+            const found = agents.get(agent.id);
+            return found instanceof Harness ? found.agent : found as A2AAgent;
+        }
+    });
+    await supervisor.start();
+    return supervisor;
+}
+function a2a(agent: FakeAgent, id: string): A2AAgent {
+    const client = new A2AAgent({ ...manifest(agent.url), id }, { reconnectDelayMs: 10, pollIntervalMs: 10 });
+    clients.push(client);
+    return client;
+}
+/** The task, or its outcome, under the inbox extension of a message the agent got. */
+function taskParams(inbox: unknown): unknown {
+    return (inbox as { task?: unknown } | undefined)?.task;
+}
+/** An agent that works on every message until it is cancelled. */
+const endless: Script = async (context, bus) => {
+    bus.publish(task(context, TaskState.TASK_STATE_WORKING));
+    await new Promise(() => undefined);
+};
+describe('A2AAgent: tasks agents give one another', { timeout: 20_000 }, () => {
+    it('A2A to A2A: the agent gives a task through its inbox, and the outcome comes back to it with the task id', async () => {
+        const sender = await inboxAgent();
+        const receiver = await inboxAgent();
+        const supervisor = await fleetOf(new Map([['a', a2a(sender.agent, 'a')], ['b', a2a(receiver.agent, 'b')]]));
+        await eventually(() => sender.isOpen() && receiver.isOpen());
+        sender.post('Please rerun the e2e job', 'task-1', { [INBOX_EXTENSION]: { to: 'b', task: {} } });
+        await eventually(() => conversation(sender.agent).length === 1);
+        const [[given, givenParams]] = conversation(receiver.agent) as [[string, unknown]];
+        match(given, /^Task task-1, given to you\. What you answer in this turn is its result/);
+        deepStrictEqual(givenParams, { from: 'a', task: { id: 'task-1' } });
+        const [[outcome, outcomeParams]] = conversation(sender.agent) as [[string, unknown]];
+        deepStrictEqual(outcomeParams, { from: 'b', task: { id: 'task-1', state: 'completed' } });
+        match(outcome, /^In reply to a message from you:\n> Please rerun the e2e job\n\nThe task task-1 you gave is completed\.\n\necho: Task task-1/);
+        await eventually(() => supervisor.history('b').some(event => event.type === 'delegation' && event.state === 'completed'));
+        await supervisor.stop();
+    });
+    it('A2A to A2A: taking the task back through the inbox cancels the task of the other agent', async () => {
+        const sender = await inboxAgent();
+        const receiver = await fake({ streaming: true, script: endless });
+        const supervisor = await fleetOf(new Map([['a', a2a(sender.agent, 'a')], ['b', a2a(receiver, 'b')]]));
+        await eventually(() => sender.isOpen());
+        sender.post('Refactor the parser', 'task-2', { [INBOX_EXTENSION]: { to: 'b', task: {} } });
+        await eventually(() => supervisor.history('b').some(event => event.type === 'message' && event.role === 'user'));
+        sender.post('', 'take-back', { [INBOX_EXTENSION]: { cancel: 'task-2' } });
+        await eventually(() => receiver.methods().includes('CancelTask'));
+        await eventually(() => supervisor.history('a').some(event => event.type === 'delegation' && event.state === 'canceled'));
+        await new Promise(resolve => setTimeout(resolve, 50));
+        deepStrictEqual(conversation(sender.agent), [], 'the one who took it back gets no outcome');
+        await supervisor.stop();
+    });
+    it('A2A to an agent that is not there: the task fails at once, and the inbox agent is told why', async () => {
+        const sender = await inboxAgent();
+        const supervisor = await fleetOf(new Map([['a', a2a(sender.agent, 'a')]]));
+        await eventually(() => sender.isOpen());
+        sender.post('Hello', 'task-3', { [INBOX_EXTENSION]: { to: 'ghost', task: {} } });
+        await eventually(() => conversation(sender.agent).length === 1);
+        const [[text, params]] = conversation(sender.agent) as [[string, unknown]];
+        deepStrictEqual(taskParams(params), { id: 'task-3', state: 'failed' });
+        match(text, /The task task-3 you gave has failed\.\n\nthere is no agent "ghost" in the fleet$/);
+        await supervisor.stop();
+    });
+});
+describe('A2AAgent: tasks between an A2A agent and a local one', { timeout: 20_000 }, () => {
+    it('ACP to A2A: the local agent gives the task with a tool, and gets the outcome as a message from the other', async () => {
+        const server = await FleetMcpServer.start();
+        try {
+            const local = new Harness({ fake: { mcpHttp: true }, manifest: { id: 'a' }, options: { fleetTools: server.access('a') } });
+            const receiver = await inboxAgent();
+            const supervisor = await fleetOf(new Map<string, A2AAgent | Harness>([['a', local], ['b', a2a(receiver.agent, 'b')]]));
+            server.serve(supervisor);
+            await local.talk('mcp {"name":"delegate","arguments":{"to":"b","text":"Summarise the release"}}');
+            await eventually(() => local.recorded('session/prompt').length === 2, 5_000);
+            const said = local.events.flatMap(event => event.type === 'message' && event.role === 'agent' ? [event.text] : []);
+            const id = /mcp: Task (\S+) is with "b"/.exec(said[0] ?? '')?.[1];
+            ok(id !== undefined, said[0]);
+            const prompt = String(local.recorded('session/prompt')[1]?.['text']);
+            ok(prompt.startsWith(`[from b] In reply to a message from you:\n> Summarise the release\n\nThe task ${id} you gave is completed.\n\necho: `), prompt);
+            await supervisor.stop();
+        } finally {
+            await server.close();
+        }
+    });
+    it('A2A to ACP: the local agent works on the task in its turn, and the end of the turn is the outcome', async () => {
+        const sender = await inboxAgent();
+        const local = new Harness({ manifest: { id: 'b' } });
+        const supervisor = await fleetOf(new Map<string, A2AAgent | Harness>([['a', a2a(sender.agent, 'a')], ['b', local]]));
+        await eventually(() => sender.isOpen());
+        sender.post('Check the logs', 'task-5', { [INBOX_EXTENSION]: { to: 'b', task: {} } });
+        await eventually(() => conversation(sender.agent).length === 1, 5_000);
+        match(String(local.recorded('session/prompt')[0]?.['text']), /^\[from a\] Task task-5, given to you\./);
+        const [[text, params]] = conversation(sender.agent) as [[string, unknown]];
+        deepStrictEqual(taskParams(params), { id: 'task-5', state: 'completed' });
+        match(text, /The task task-5 you gave is completed\.\n\nyou said: \[from a\] Task task-5/);
+        await supervisor.stop();
+    });
+});
+describe('A2AAgent: clearing the context', () => {
+    it('sends the next message without the context of the conversation before', async () => {
+        const agent = await fake({ script: echo });
+        const { client } = connect(agent);
+        await client.start();
+        await client.send('one');
+        await client.send('two');
+        await reaches(client, 'idle');
+        ok((agent.received[1]?.params['message'] as { contextId?: string }).contextId);
+        await client.clearContext();
+        await client.send('three');
+        await reaches(client, 'idle');
+        const third = agent.received.at(-1)?.params['message'] as { contextId?: string; parts?: { text?: string }[] };
+        strictEqual(third.parts?.[0]?.text, 'three');
+        strictEqual(third.contextId, undefined);
+    });
+});
+describe('A2AAgent: requests of an administrator through the inbox', () => {
+    it('hands a request over once, and only a request it understands', async () => {
+        const { agent, post, isOpen } = await inboxAgent();
+        const requests: unknown[] = [];
+        const { client, events } = connect(agent, { onAdminRequest: request => requests.push(request) });
+        await client.start();
+        await eventually(isOpen);
+        post('', 'adm-1', { [INBOX_EXTENSION]: { kind: 'admin', action: 'clear-context', agent: 'builder' } });
+        post('', 'adm-1', { [INBOX_EXTENSION]: { kind: 'admin', action: 'clear-context', agent: 'builder' } });
+        post('', 'adm-2', { [INBOX_EXTENSION]: { kind: 'admin', action: 'delete', agent: 'builder' } });
+        post('', 'adm-3', { [INBOX_EXTENSION]: { kind: 'admin', action: 'restart', agent: 'fake' } });
+        await eventually(() => requests.length === 2);
+        await new Promise(resolve => setTimeout(resolve, 50));
+        deepStrictEqual(requests, [{ action: 'clear-context', target: 'builder' }, { action: 'restart', target: 'fake' }]);
+        ok(events.some(event => event.type === 'log' && /flotti does not know/.test(event.text)));
+        deepStrictEqual(messages(events), [], 'a request is not a message of the agent');
+    });
+    it('lets an administrator clear the context of another agent, and tells a non-administrator it may not', async (t) => {
+        const admin = await inboxAgent();
+        const other = await inboxAgent();
+        const agents = [{ ...manifest(admin.agent.url), id: 'a', admin: true as const }, { ...manifest(other.agent.url), id: 'b' }];
+        // No createAgent: the supervisor wires the inbox requests to its administrators itself.
+        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents });
+        t.after(() => supervisor.stop());
+        await supervisor.start();
+        await eventually(() => admin.isOpen() && other.isOpen());
+        admin.post('', 'adm-1', { [INBOX_EXTENSION]: { kind: 'admin', action: 'clear-context', agent: 'b' } });
+        const done = (id: string) => supervisor.history(id)
+            .some(event => event.type === 'admin-action' && event.state === 'done' && event.admin === 'a' && event.target === 'b');
+        await eventually(() => done('a') && done('b'));
+        other.post('', 'adm-2', { [INBOX_EXTENSION]: { kind: 'admin', action: 'restart', agent: 'a' } });
+        await eventually(() => conversation(other.agent).length === 1);
+        match(conversation(other.agent)[0]?.[0] ?? '', /Refused: only an administrator/);
+        ok(!supervisor.history('a').some(event => event.type === 'admin-action' && event.admin === 'b'), 'nothing happened to "a"');
     });
 });
 describe('cardLocation', () => {

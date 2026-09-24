@@ -5,5 +5,5 @@
         "outDir": "build-test",
         "declaration": false
     },
-    "include": ["src", "test", "web/src/feed.ts", "web/src/attention.ts", "web/src/agent-colors.ts"]
+    "include": ["src", "test", "web/src/feed.ts", "web/src/attention.ts", "web/src/agent-colors.ts", "web/src/links.ts", "web/src/fleet-state.ts", "web/src/health.ts", "web/src/markdown.ts", "web/src/memory.ts", "web/src/i18n/en.ts", "web/src/i18n/ru.ts", "web/src/i18n/format.ts", "web/src/i18n/languages.ts", "web/src/i18n/errors.ts"]
 }

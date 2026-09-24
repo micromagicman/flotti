@@ -11,8 +11,10 @@ import { startDashboard } from '../src/dashboard-server.js';
 import type { Dashboard } from '../src/dashboard-server.js';
 import { loadFleet } from '../src/fleet.js';
 import { FleetSettings } from '../src/fleet-settings.js';
+import { NotificationService } from '../src/notifications.js';
 import { SshError } from '../src/ssh.js';
 import { Supervisor } from '../src/supervisor.js';
+import type { Agent } from '../src/types.js';
 import { FakeFleetAgent, fakeFleet } from './fake-fleet-agent.js';
 const webRoot = mkdtempSync(join(tmpdir(), 'flotti-web-'));
 writeFileSync(join(webRoot, 'index.html'), '<!doctype html><title>flotti</title>');
@@ -147,6 +149,27 @@ test('restarts, cancels and answers permission requests', async () => {
     strictEqual((await call(dashboard.port, 'POST', '/api/agents/a/permissions/r1', { optionId: 'yes' })).status, 200);
     deepStrictEqual(fake('a').calls, ['start', 'restart', 'cancel', 'permission r1 yes', 'permission r1 yes']);
 });
+test('takes a message back out of the line, and sends a dropped one again', async () => {
+    const { dashboard, fake, sockets } = await serve('a');
+    const { port } = dashboard;
+    const { messages } = await page(port, sockets, {});
+    fake('a').busy = true;
+    const sent = await call(port, 'POST', '/api/agents/a/messages', { text: 'later' });
+    deepStrictEqual(sent.body, { agentId: 'a', result: 'queued' });
+    await eventually(() => events(messages).some((event) => event.type === 'queued'));
+    const queued = events(messages).find((event) => event.type === 'queued');
+    ok(queued?.type === 'queued');
+    const path = `/api/agents/a/queue/${encodeURIComponent(queued.messageId)}`;
+    strictEqual((await call(port, 'DELETE', path, {})).status, 200);
+    await eventually(() => events(messages).some((event) => event.type === 'unqueued' && event.messageId === queued.messageId));
+    const again = await call(port, 'DELETE', path, {});
+    deepStrictEqual([again.status, (again.body as { error?: string }).error], [404, 'No such message waits in line: the agent may have taken it already.']);
+    strictEqual((await call(port, 'DELETE', '/api/agents/nobody/queue/x', {})).status, 404);
+    fake('a').release();
+    strictEqual((await call(port, 'POST', '/api/agents/a/messages', { text: 'later', retryOf: 'lost-1' })).status, 200);
+    strictEqual(fake('a').options.at(-1)?.retryOf, 'lost-1');
+    strictEqual((await call(port, 'POST', '/api/agents/a/messages', { text: 'later', retryOf: 7 })).status, 400);
+});
 test('refuses what it should', async () => {
     const { dashboard } = await serve('a');
     const { port } = dashboard;
@@ -199,6 +222,33 @@ test('without fleet settings the page cannot change the fleet', async () => {
     const { dashboard } = await serve('a');
     strictEqual((await call(dashboard.port, 'GET', '/api/fleet')).status, 404);
     strictEqual((await call(dashboard.port, 'POST', '/api/agents', { kind: 'local', id: 'b', command: 'x' })).status, 404);
+});
+test('the settings page sets up the notifications, and never gets a secret back', async () => {
+    const { dashboard: bare } = await serve('a');
+    strictEqual((await call(bare.port, 'GET', '/api/notifications')).status, 404);
+    const home = mkdtempSync(join(webRoot, 'home-'));
+    const { fleet, createAgent } = fakeFleet('a');
+    const supervisor = new Supervisor(fleet, { createAgent });
+    const notifications = new NotificationService(supervisor, {
+        env: { HOME: home, FLOTTI_TELEGRAM_API: 'http://127.0.0.1:1' },
+        warn: () => undefined
+    });
+    const dashboard = await startDashboard(supervisor, { port: 0, webRoot, notifications });
+    open.push({ dashboard, supervisor, sockets: [] });
+    const { port } = dashboard;
+    const token = '123456:a-token-the-page-must-not-see';
+    const changed = await call(port, 'PUT', '/api/notifications', { telegram: { enabled: true, botToken: token, chatId: '42' } });
+    strictEqual(changed.status, 200, changed.text);
+    ok(!changed.text.includes(token));
+    const read = await call(port, 'GET', '/api/notifications');
+    ok(!read.text.includes(token));
+    deepStrictEqual((read.body as { telegram: object }).telegram, { enabled: true, chatId: '42', botTokenSet: true });
+    strictEqual((await call(port, 'PUT', '/api/notifications', { repeatMinutes: 'often' })).status, 400);
+    const subscribed = await call(port, 'POST', '/api/notifications/subscriptions', { endpoint: 'https://push.example.org/1', keys: { p256dh: 'k', auth: 'a' } });
+    deepStrictEqual([subscribed.status, (subscribed.body as { webPush: { subscriptions: number } }).webPush.subscriptions], [201, 1]);
+    const left = await call(port, 'DELETE', '/api/notifications/subscriptions', { endpoint: 'https://push.example.org/1' });
+    strictEqual((left.body as { webPush: { subscriptions: number } }).webPush.subscriptions, 0);
+    notifications.close();
 });
 test('the settings page adds, reads, changes and removes agents, and switches the fleet', async () => {
     const home = mkdtempSync(join(webRoot, 'home-'));
@@ -279,4 +329,31 @@ test('the settings page adds the agents of user@host in one step, and says why i
     const away = await call(dashboard.port, 'POST', '/api/ssh-agents', { target: 'eva@away.example.org' });
     deepStrictEqual([away.status, (away.body as { error: string }).error], [502, 'Cannot reach away.example.org over SSH (Connection refused).']);
     strictEqual((await call(dashboard.port, 'POST', '/api/ssh-agents', { target: '-oProxyCommand=x' })).status, 400);
+});
+test('shows the memory bank of a local agent, read-only, and nothing outside it', async () => {
+    const memory = mkdtempSync(join(webRoot, 'memory-'));
+    mkdirSync(join(memory, 'process'));
+    writeFileSync(join(memory, 'index.md'), '# Home\nSee [[Release]].');
+    writeFileSync(join(memory, 'process', 'release.md'), '# Release\nTag it.');
+    writeFileSync(join(webRoot, 'outside.md'), '# Outside');
+    const { fleet, createAgent } = fakeFleet('claude', 'codex');
+    const agents = fleet.agents.map((agent): Agent => (agent.kind !== 'local' ? agent : agent.id === 'claude' ? { ...agent, memoryDirectory: memory } : { ...agent, ssh: 'dev@build.example.org' }));
+    const supervisor = new Supervisor({ ...fleet, agents }, { createAgent });
+    const dashboard = await startDashboard(supervisor, { port: 0, webRoot });
+    open.push({ dashboard, supervisor, sockets: [] });
+    const bank = await call(dashboard.port, 'GET', '/api/agents/claude/memory');
+    strictEqual(bank.status, 200, bank.text);
+    deepStrictEqual((bank.body as { notes: { path: string }[] }).notes.map((note) => note.path), ['index.md', 'process/release.md']);
+    const found = await call(dashboard.port, 'GET', '/api/agents/claude/memory?q=tag%20it');
+    deepStrictEqual((found.body as { notes: { path: string }[] }).notes.map((note) => note.path), ['process/release.md']);
+    const note = await call(dashboard.port, 'GET', `/api/agents/claude/memory/${encodeURIComponent('process/release.md')}`);
+    deepStrictEqual([note.status, (note.body as { text: string }).text], [200, '# Release\nTag it.']);
+    for (const path of ['..%2Foutside.md', encodeURIComponent('../outside.md'), '..%5Coutside.md']) {
+        strictEqual((await call(dashboard.port, 'GET', `/api/agents/claude/memory/${path}`)).status, 400, path);
+    }
+    strictEqual((await call(dashboard.port, 'GET', '/api/agents/claude/memory/none.md')).status, 404);
+    strictEqual((await call(dashboard.port, 'GET', '/api/agents/nobody/memory')).status, 404);
+    strictEqual((await call(dashboard.port, 'PUT', '/api/agents/claude/memory/index.md', { text: 'x' })).status, 405);
+    const far = await call(dashboard.port, 'GET', '/api/agents/codex/memory');
+    deepStrictEqual([far.status, (far.body as { available: boolean }).available], [200, false]);
 });

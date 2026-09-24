@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import type {
+    AdminSettings,
     AgentConfig,
     AgentSummary,
     FleetInfo,
@@ -21,7 +22,7 @@ import {
 } from './fleet.js';
 import { MANIFEST_FILE, SYSTEM_PROMPT_FILE, readLocalManifest, readRemoteManifest } from './manifest.js';
 import type { Environment, ManifestContext } from './manifest.js';
-import { settingsFile, writeSettings } from './settings.js';
+import { readSettings, settingsFile, writeSettings } from './settings.js';
 import { SshError, discover, parseTarget } from './ssh.js';
 import type { PublishedAgent, SshTarget } from './ssh.js';
 import type { Supervisor } from './supervisor.js';
@@ -38,9 +39,10 @@ const LOCAL_FIELDS = [
     'workdir',
     'env',
     'restart',
-    'heartbeatTimeoutSec'
+    'heartbeatTimeoutSec',
+    'admin'
 ] as const;
-const REMOTE_FIELDS = ['name', 'description', 'url', 'ssh', 'auth'] as const;
+const REMOTE_FIELDS = ['name', 'description', 'url', 'ssh', 'auth', 'admin'] as const;
 /**
  * Where a removed agent goes, in the fleet directory. Removing an agent
  * would otherwise take its memory bank and skills with it; from here they can
@@ -49,7 +51,7 @@ const REMOTE_FIELDS = ['name', 'description', 'url', 'ssh', 'auth'] as const;
 const TRASH_DIRECTORY = '.trash';
 type Fields = Record<string, unknown>;
 /** What the config of every agent has, local or remote. */
-type CommonConfig = { readonly id: string; readonly name?: string; readonly description?: string };
+type CommonConfig = { readonly id: string; readonly name?: string; readonly description?: string; readonly admin?: boolean };
 type FleetSettingsOptions = {
     /** Environment for `~` and the settings file; `process.env` by default. */
     readonly env?: Environment;
@@ -64,10 +66,11 @@ type FleetSettingsOptions = {
 function isObject(value: unknown): value is Fields {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
-/** What the page may leave out: an empty field, list or map is a field left out of the file. */
+/** What the page may leave out: an empty field, list or map — or `false` — is a field left out of the file. */
 function isBlank(value: unknown): boolean {
     return value === undefined
         || value === null
+        || value === false
         || (typeof value === 'string' && value.trim() === '')
         || (Array.isArray(value) && value.length === 0)
         || (isObject(value) && Object.keys(value).length === 0)
@@ -234,7 +237,8 @@ function readConfig(agent: Agent): AgentConfig {
     const common = {
         id: agent.id,
         ...(pick<string>(fields, 'name', isString) === undefined ? {} : { name: fields['name'] as string }),
-        ...(pick<string>(fields, 'description', isString) === undefined ? {} : { description: fields['description'] as string })
+        ...(pick<string>(fields, 'description', isString) === undefined ? {} : { description: fields['description'] as string }),
+        ...(agent.admin === true ? { admin: true } : {})
     };
     if (agent.kind === 'remote') {
         return remoteConfig(agent, fields, common);
@@ -256,7 +260,7 @@ function remoteConfig(agent: RemoteAgent, fields: Fields, common: CommonConfig):
 function localConfig(agent: Agent, fields: Fields, common: CommonConfig): LocalAgentConfig {
     const optional: Fields = {};
     for (const field of LOCAL_FIELDS) {
-        if (field !== 'name' && field !== 'description' && field !== 'command' && fields[field] !== undefined) {
+        if (field !== 'name' && field !== 'description' && field !== 'command' && field !== 'admin' && fields[field] !== undefined) {
             optional[field] = fields[field];
         }
     }
@@ -463,6 +467,22 @@ class FleetSettings {
             await this.supervisor.load(fleet);
         }
         return this.info();
+    }
+    /** Whether actions of administrators wait for a person, as the settings file says. */
+    adminSettings(): AdminSettings {
+        return { confirmActions: readSettings(this.env).confirmAdminActions === true };
+    }
+    /**
+     * Turns the confirmation of administrator actions on or off, in the
+     * settings file: it holds for the next action, and for the next runs.
+     */
+    setAdminSettings(body: unknown): AdminSettings {
+        const { confirmActions } = (isObject(body) ? body : {}) as Partial<AdminSettings>;
+        if (typeof confirmActions !== 'boolean') {
+            throw invalid('confirmActions must be true or false.');
+        }
+        writeSettings(this.env, { confirmAdminActions: confirmActions });
+        return this.adminSettings();
     }
     /**
      * Checks the manifest the way `flotti run` would, and only then writes the

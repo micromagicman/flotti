@@ -64,7 +64,7 @@ describe('local manifest: paths', () => {
         const relative = single('local', { ...LOCAL, workdir: 'repo' });
         strictEqual(relative.agent.kind === 'local' && relative.agent.workdir, join(relative.directory, 'repo'));
         const home = single('local', { ...LOCAL, workdir: '~/src' }).agent;
-        strictEqual(home.kind === 'local' && home.workdir, '/home/eva/src');
+        strictEqual(home.kind === 'local' && home.workdir, join('/home/eva', 'src'));
     });
     it('points at system-prompt.md when the agent has one', () => {
         const root = fleetDirectory();
@@ -117,6 +117,17 @@ describe('local manifest: fields it refuses', () => {
         const error = rejected('local', { ...LOCAL, id: 'claude' });
         strictEqual(error.kind, 'id-mismatch');
         match(error.message, /id is "claude", but the agent directory is "agent"/);
+    });
+});
+describe('manifest: the administrator of the fleet', () => {
+    it('reads admin: true, local or remote, and leaves the agent without the role otherwise', () => {
+        strictEqual(single('local', { ...LOCAL, admin: true }).agent.admin, true);
+        strictEqual(single('remote', { ...REMOTE, admin: true }).agent.admin, true);
+        strictEqual('admin' in single('local', { ...LOCAL, admin: false }).agent, false);
+        strictEqual('admin' in single('local', LOCAL).agent, false);
+    });
+    it('reports admin that is not true or false', () => {
+        match(rejected('local', { ...LOCAL, admin: 'yes' }).message, /admin must be true or false, got "yes"/);
     });
 });
 describe('remote manifest', () => {

@@ -139,6 +139,26 @@ describe('FleetSettings: an agent of the fleet', () => {
         strictEqual(manifestAt(root, 'local', 'codex')['name'], 'Codex');
     });
 });
+describe('FleetSettings: administrators', () => {
+    test('the role is written to the manifest when ticked, left out when not, and the fleet lists it', async () => {
+        const { root, supervisor, settings } = setUp(existing);
+        await settings.update('codex', { kind: 'local', id: 'codex', command: 'codex-acp', admin: true });
+        strictEqual(manifestAt(root, 'local', 'codex')['admin'], true);
+        strictEqual(settings.config('codex').admin, true);
+        strictEqual(supervisor.agents()[0]?.admin, true);
+        await settings.update('codex', { kind: 'local', id: 'codex', command: 'codex-acp', admin: false });
+        ok(!('admin' in manifestAt(root, 'local', 'codex')), 'no role, no field');
+        strictEqual(supervisor.agents()[0]?.admin, undefined);
+    });
+    test('the confirmation of their actions is off by default, and saved with the other settings', () => {
+        const { env, settings } = setUp();
+        deepStrictEqual(settings.adminSettings(), { confirmActions: false });
+        deepStrictEqual(settings.setAdminSettings({ confirmActions: true }), { confirmActions: true });
+        strictEqual(readSettings(env).confirmAdminActions, true);
+        throws(() => settings.setAdminSettings({ confirmActions: 'yes' }), ConfigurationError);
+        deepStrictEqual(settings.adminSettings(), { confirmActions: true });
+    });
+});
 describe('FleetSettings: removing an agent', () => {
     test('removing stops the agent and moves its directory, memory and all, to .trash', async () => {
         const { root, supervisor, settings, fakes } = setUp(existing);
