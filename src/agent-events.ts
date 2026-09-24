@@ -49,9 +49,34 @@ type AgentEventBody =
         readonly messageId: string;
         readonly text: string;
         readonly append: boolean;
+        /**
+         * Id of the agent of the fleet that sent this message through flotti
+         * (`role: 'user'`): it goes where a person's message goes, and the tab
+         * shows who sent it. Absent for a message a person sent.
+         */
+        readonly from?: string;
+        /**
+         * Id of the agent of the fleet this message of the agent is for
+         * (`role: 'agent'`): flotti sends it on to that agent, and the tab of the
+         * sender shows it as sent there. Absent for an answer to a person.
+         */
+        readonly to?: string;
+        /** The message this one answers: a reply, from a person or from an agent. */
+        readonly replyTo?: Quote;
+        /**
+         * A message sent on as it was. The `text` of the event is then what the
+         * one who forwarded it wrote above it, and may be empty.
+         */
+        readonly forwarded?: Forwarded;
     }
     /** A piece of the agent's reasoning, shown apart from its answer. */
     | { readonly type: 'thought'; readonly text: string }
+    /**
+     * A line about what the agent is doing — "running the tests", "waiting for
+     * CI" — said while it works, in a turn or on its own. Shown in the open, unlike
+     * a thought, and not a message: it answers nobody.
+     */
+    | { readonly type: 'progress'; readonly text: string }
     /**
      * A tool call started or changed. The first event of a `toolCallId` carries
      * what is known; the later ones carry only what changed.
@@ -90,6 +115,80 @@ type AgentEvent = AgentEventBody & {
     readonly time: string;
 };
 type AgentEventListener = (event: AgentEvent) => void;
+/**
+ * The message a reply answers, as the reply carries it: where it is, who wrote
+ * it and what it said. The text travels with the reply, so the agent reads
+ * what it is answered to even when that message is long gone from its feed.
+ */
+type Quote = {
+    /** Id of the agent in whose tab the quoted message is. */
+    readonly agentId: string;
+    /** The `messageId` of the quoted message in that tab. */
+    readonly messageId: string;
+    /**
+     * The `seq` of the event that began the quoted message, when the one who
+     * quotes saw it: an agent may use one message id turn after turn, a `seq`
+     * is never used twice in a tab.
+     */
+    readonly seq?: number;
+    /** Id of the agent that wrote it; absent when a person did. */
+    readonly author?: string;
+    readonly text: string;
+};
+/** A message sent on to another agent as it was. */
+type Forwarded = {
+    /** Id of the agent that wrote it; absent when a person did. */
+    readonly author?: string;
+    readonly text: string;
+};
+/**
+ * Who a message is from, when it is not a person, and what it answers or
+ * sends on. A person in the dashboard and an agent calling a tool of flotti
+ * say it the same way.
+ */
+type SendOptions = {
+    /** Id of the agent of the fleet that sends the message; see the `from` of a `message` event. */
+    readonly from?: string;
+    /** The `messageId` the message gets in the tab of the receiver; a new one when absent. */
+    readonly messageId?: string;
+    readonly replyTo?: Quote;
+    readonly forwarded?: Forwarded;
+};
+/** The fields of a `message` event a sent message carries on, beyond its text. */
+function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message' }, 'from' | 'replyTo' | 'forwarded'> {
+    return {
+        ...(options.from === undefined ? {} : { from: options.from }),
+        ...(options.replyTo === undefined ? {} : { replyTo: options.replyTo }),
+        ...(options.forwarded === undefined ? {} : { forwarded: options.forwarded })
+    };
+}
+/** Whose message it was, as the agent that reads it is told. */
+function whose(author: string | undefined, reader: string): string {
+    if (author === undefined) {
+        return 'the person';
+    }
+    return author === reader ? 'you' : `agent "${author}"`;
+}
+/**
+ * The text the agent `reader` gets for a message: a reply puts the quoted
+ * message above the answer, a forward puts the forwarded one under what was
+ * written above it. Who sent it is not in here: each kind of agent says that
+ * its own way.
+ */
+function composeText(text: string, options: SendOptions, reader: string): string {
+    const parts: string[] = [];
+    if (options.replyTo !== undefined) {
+        const quoted = options.replyTo.text.split('\n').map((line) => `> ${line}`).join('\n');
+        parts.push(`In reply to a message from ${whose(options.replyTo.author, reader)}:\n${quoted}`);
+    }
+    if (text.trim() !== '') {
+        parts.push(text);
+    }
+    if (options.forwarded !== undefined) {
+        parts.push(`Forwarded from ${whose(options.forwarded.author, reader)}:\n\n${options.forwarded.text}`);
+    }
+    return parts.join('\n\n');
+}
 /** An agent of the fleet as the dashboard drives it, local or remote. */
 interface FleetAgent {
     /** Id of the agent: the name of its directory in the fleet. */
@@ -106,8 +205,11 @@ interface FleetAgent {
      * agent has taken the message, not when it has answered: what comes of it
      * arrives as events, down to `turn-end`. Rejects when the message never
      * reached the agent — not started, stopped, gone before its turn.
+     *
+     * A message another agent sends goes the same way, with `from` naming the
+     * sender: the agent is told who it is from, and its `message` event says so.
      */
-    send(text: string): Promise<void>;
+    send(text: string, options?: SendOptions): Promise<void>;
     /** Asks the agent to drop what it is working on; does nothing when it is not busy. */
     cancel(): Promise<void>;
     /**
@@ -155,13 +257,16 @@ class AgentEvents {
         this.listeners.clear();
     }
 }
-export { AgentEvents };
+export { AgentEvents, composeText, messageFields };
 export type {
     AgentEvent,
     AgentEventBody,
     AgentEventListener,
     AgentStatus,
     FleetAgent,
+    Forwarded,
     PermissionOption,
+    Quote,
+    SendOptions,
     ToolCallStatus
 };

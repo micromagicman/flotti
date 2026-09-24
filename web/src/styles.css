@@ -12,6 +12,20 @@
     --wait: #bf6a02;
     --bad: #cf222e;
     --off: #8c959f;
+    /*
+     * Colours of agents, for the messages they send one another (#23): white
+     * text on each is 4.5:1 or more. Kept away from the status colours — no
+     * green, amber, red, nor the blue of work.
+     */
+    --agent-ink: #ffffff;
+    --agent-0: #0f7b6c;
+    --agent-1: #b3407a;
+    --agent-2: #6f42c1;
+    --agent-3: #0b6e99;
+    --agent-4: #4b5bbd;
+    --agent-5: #455a64;
+    /* A person, where a message says who wrote it: the bar of a forwarded message of a person. */
+    --person: #656d76;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     color-scheme: light dark;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -32,6 +46,13 @@
         --wait: #e3a008;
         --bad: #f85149;
         --off: #6e7681;
+        /* A shade lighter, still 4.5:1 with white text, and 3:1 at least against the panel. */
+        --agent-0: #12806f;
+        --agent-1: #bf4583;
+        --agent-2: #7c52cc;
+        --agent-3: #0c76a3;
+        --agent-4: #5667c8;
+        --agent-5: #546e7a;
     }
 }
 * { box-sizing: border-box; }
@@ -63,6 +84,8 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
     background: var(--panel);
 }
 .brand { font-weight: 600; letter-spacing: .02em; }
+.topbar-side { display: flex; align-items: center; gap: 12px; }
+.notify { font-size: 12px; padding: 2px 10px; }
 .link { font-size: 12px; color: var(--muted); }
 .link-closed, .link-gone { color: var(--bad); }
 .sidebar {
@@ -88,6 +111,20 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .tab-name { font-weight: 500; display: flex; align-items: center; gap: 6px; }
 .tab-hint { font-size: 12px; color: var(--muted); }
 .tab-waiting .tab-name { color: var(--wait); }
+/* An agent waiting for a person stands out until it is answered (#27). */
+.tab.tab-waiting {
+    background: color-mix(in srgb, var(--wait) 14%, var(--panel));
+    border-color: var(--wait);
+    box-shadow: inset 3px 0 0 var(--wait);
+    animation: waiting-pulse 2s ease-in-out infinite;
+}
+.tab.tab-waiting[aria-selected="true"] { background: color-mix(in srgb, var(--wait) 20%, var(--panel)); border-color: var(--wait); }
+@keyframes waiting-pulse {
+    50% { box-shadow: inset 3px 0 0 var(--wait), 0 0 0 3px color-mix(in srgb, var(--wait) 30%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .tab.tab-waiting { animation: none; }
+}
 .unread { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 .status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--off); }
@@ -99,11 +136,13 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .status-error { color: var(--bad); }
 .status-error .dot { background: var(--bad); }
 .main { min-width: 0; min-height: 0; display: flex; }
-.agent-panel, .broadcast { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.agent-panel, .broadcast { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .agent-header { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--panel); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
 .agent-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; flex: 1; }
 .agent-title h1, .broadcast h1 { font-size: 18px; margin: 0; }
 .kind, .reason, .muted, .description { color: var(--muted); font-size: 12px; }
+.harness { font-family: var(--mono); font-size: 12px; padding: 0 6px; border: 1px solid var(--border); border-radius: 4px; }
+.harness-unknown { font-family: inherit; color: var(--muted); border-style: dashed; }
 .description { margin: 0; width: 100%; order: 3; }
 .actions { display: flex; gap: 8px; }
 .error { color: var(--bad); font-size: 12px; }
@@ -115,7 +154,105 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .message { padding: 8px 12px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); }
 .message-user { background: var(--user); align-self: flex-end; }
+/* A message one agent sent another: an envelope with a bar in the sender's colour (#23). */
+/* overflow: hidden rounds the bar off at the corners; flex-shrink: 0 keeps it from letting the feed squeeze the message flat. */
+.message-peer, .message-sent { padding: 0; overflow: hidden; flex-shrink: 0; border: 1px solid var(--agent-color); }
+.envelope-body { padding: 8px 12px; }
+.envelope-bar, .fwd-bar {
+    background: var(--agent-color);
+    color: var(--agent-ink);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    padding: 3px 12px;
+}
+.agent-color-0 { --agent-color: var(--agent-0); }
+.agent-color-1 { --agent-color: var(--agent-1); }
+.agent-color-2 { --agent-color: var(--agent-2); }
+.agent-color-3 { --agent-color: var(--agent-3); }
+.agent-color-4 { --agent-color: var(--agent-4); }
+.agent-color-5 { --agent-color: var(--agent-5); }
+.author-person { --agent-color: var(--person); }
+/*
+ * One message with what can be done with it (#30). The row takes the place of
+ * the bubble in the feed: the side, and the room it needs.
+ */
+/* min-width: 0 all the way down lets a long quote end in an ellipsis instead of widening the feed. */
+.message-row { position: relative; display: flex; flex-direction: column; gap: 4px; max-width: min(900px, 100%); min-width: 0; flex-shrink: 0; }
+.message-row-user { align-self: flex-end; align-items: flex-end; }
+.message-row > .message { max-width: 100%; min-width: 0; }
+.message-found > .message { animation: message-found 1.2s ease-out; }
+@keyframes message-found {
+    from { outline: 2px solid var(--accent); outline-offset: 2px; }
+    to { outline: 2px solid transparent; outline-offset: 2px; }
+}
+.message-actions {
+    position: absolute;
+    top: -10px;
+    right: 8px;
+    display: flex;
+    gap: 2px;
+    padding: 1px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    opacity: 0;
+    pointer-events: none;
+}
+.message-row:hover > .message-actions, .message-row:focus-within > .message-actions { opacity: 1; pointer-events: auto; }
+@media (hover: none) {
+    .message-actions { position: static; opacity: 1; pointer-events: auto; background: transparent; border: 0; }
+}
+button.message-action { background: transparent; border: 0; border-radius: 4px; padding: 1px 8px; font-size: 12px; color: var(--muted); }
+button.message-action:hover:not(:disabled) { color: var(--text); background: color-mix(in srgb, var(--muted) 14%, transparent); }
+.message-action:focus-visible, .forward-target:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.forward-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+.forward-label { color: var(--muted); }
+button.forward-target { font-size: 12px; padding: 1px 10px; border-color: var(--agent-color); box-shadow: inset 3px 0 0 var(--agent-color); }
+button.forward-target:hover:not(:disabled) { border-color: var(--agent-color); background: color-mix(in srgb, var(--agent-color) 12%, var(--panel)); }
+/* The message a reply answers (#30): a quote in the style of mail, in the colour of whoever wrote it. */
+.quote {
+    --q: var(--muted);
+    display: block;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    border: 0;
+    border-left: 4px double var(--q);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--q) 8%, transparent);
+    padding: 4px 8px;
+    margin: 2px 0 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+    min-width: 0;
+    max-width: 100%;
+}
+.quote-agent { --q: var(--agent-color); }
+button.quote:hover:not(:disabled) { border-color: var(--q); background: color-mix(in srgb, var(--q) 16%, transparent); }
+button.quote:active:not(:disabled) { background: color-mix(in srgb, var(--q) 24%, transparent); }
+.quote:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.quote-gone { cursor: default; opacity: .6; }
+/* The colour of the author, toward the text: dark enough on the light panel, light enough on the dark one. */
+.quote-who { display: block; font-weight: 600; color: color-mix(in srgb, var(--q) 70%, var(--text)); }
+.quote-text { display: block; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A message sent on as it was (#30): the envelope of #23, with the bar in the colour of whoever wrote it. */
+.fwd { border: 1px solid var(--agent-color); border-radius: 6px; overflow: hidden; background: var(--panel); margin-top: 2px; }
+.fwd > .text { padding: 6px 10px; }
+.text + .fwd { margin-top: 6px; }
+.composer-reply { display: flex; align-items: center; gap: 8px; }
+.composer-reply .quote { flex: 1; min-width: 0; margin: 0; cursor: default; }
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
 .thought { color: var(--muted); font-size: 13px; }
+.progress { font-size: 13px; color: var(--muted); padding: 2px 10px; border-left: 3px solid var(--busy); white-space: pre-wrap; overflow-wrap: anywhere; }
 .thought summary, .raw summary { cursor: pointer; font-size: 12px; }
 .tool { display: flex; justify-content: space-between; gap: 12px; font-family: var(--mono); font-size: 12px; padding: 4px 10px; border-left: 3px solid var(--border); }
 .tool-completed { border-left-color: var(--ok); }

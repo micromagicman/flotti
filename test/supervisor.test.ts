@@ -2,6 +2,7 @@ import { deepStrictEqual, rejects, strictEqual, throws } from 'node:assert/stric
 import { test } from 'node:test';
 import { Supervisor, UnknownAgentError } from '../src/supervisor.js';
 import type { SupervisorNotice } from '../src/supervisor.js';
+import type { Agent, RemoteAgent } from '../src/types.js';
 import { FakeFleetAgent, fakeFleet } from './fake-fleet-agent.js';
 function supervised(...ids: string[]) {
     const { fleet, fakes, createAgent } = fakeFleet(...ids);
@@ -24,6 +25,34 @@ test('starts every agent, and one that fails does not stop the others', async ()
         ['a', 'A', 'local', 'error'],
         ['b', 'B', 'local', 'idle']
     ]);
+});
+test('names the harness of an agent only where the manifest tells it', () => {
+    const { fleet, createAgent } = fakeFleet('claude', 'codex', 'plain', 'eva');
+    const [claude, codex, plain, eva] = fleet.agents.map((agent) => fake(agent.kind === 'local' ? agent : undefined));
+    const remote: RemoteAgent = {
+        kind: 'remote',
+        id: fake(eva).id,
+        name: fake(eva).name,
+        directory: '/fleet/remote/eva',
+        manifestPath: '/fleet/remote/eva/agent.json',
+        protocol: 'a2a',
+        url: 'https://eva.example.org/a2a',
+        auth: { type: 'none' }
+    };
+    const agents: Agent[] = [
+        { ...fake(claude), adapter: 'claude-code' },
+        { ...fake(codex), adapter: 'codex' },
+        fake(plain),
+        remote
+    ];
+    const supervisor = new Supervisor({ ...fleet, agents }, { createAgent });
+    deepStrictEqual(supervisor.agents().map((agent) => [agent.id, agent.harness]), [
+        ['claude', 'claude'],
+        ['codex', 'codex'],
+        ['plain', undefined],
+        ['eva', undefined]
+    ]);
+    deepStrictEqual(Object.keys(supervisor.agents()[2] ?? {}).includes('harness'), false, 'an unknown harness is left out, not guessed');
 });
 test('keeps the last events of each agent and hands out those after a seq', async () => {
     const { supervisor } = supervised('a');
@@ -121,4 +150,47 @@ test('another fleet: the old agents stop, the new ones start', async () => {
     deepStrictEqual(fake(fakes.get('a')).calls, ['start', 'stop']);
     deepStrictEqual(supervisor.agents().map((agent) => [agent.id, agent.status]), [['x', 'idle']]);
     deepStrictEqual(notices.filter((notice) => notice.type === 'fleet').length, 1);
+});
+test('a message from another agent goes where a message of a person goes, and says who sent it', async () => {
+    const { supervisor, fakes } = supervised('a', 'b');
+    await supervisor.start();
+    deepStrictEqual(await supervisor.send('b', 'rerun the tests', { from: 'a' }), { agentId: 'b', result: 'taken' });
+    deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send rerun the tests from a']);
+    const message = supervisor.history('b').find((event) => event.type === 'message' && event.role === 'user');
+    strictEqual(message?.type === 'message' ? message.from : undefined, 'a');
+    throws(() => supervisor.send('b', 'hi', { from: 'nobody' }), UnknownAgentError);
+});
+test('what an agent says to another agent is sent on to it, from the sender', async () => {
+    const { supervisor, fakes } = supervised('a', 'b');
+    await supervisor.start();
+    fake(fakes.get('a')).emit({ type: 'message', role: 'agent', messageId: 'm1', text: 'rerun the tests', append: false, to: 'b' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send rerun the tests from a']);
+    const received = supervisor.history('b').find((event) => event.type === 'message' && event.role === 'user');
+    deepStrictEqual(received?.type === 'message' ? [received.text, received.from] : undefined, ['rerun the tests', 'a']);
+    deepStrictEqual(supervisor.history('a').map((event) => event.type), ['status', 'message'], 'the sender sees its message, and nothing else');
+});
+test('a message to another agent that cannot be delivered is a line in the tab of the sender', async () => {
+    const { fleet, fakes, createAgent } = fakeFleet('a', 'b');
+    const supervisor = new Supervisor(fleet, { createAgent });
+    await supervisor.start();
+    fake(fakes.get('b')).broken = true;
+    const a = fake(fakes.get('a'));
+    a.emit({ type: 'message', role: 'agent', messageId: 'm1', text: 'hi', append: false, to: 'nobody' });
+    a.emit({ type: 'message', role: 'agent', messageId: 'm2', text: 'hi', append: false, to: 'a' });
+    a.emit({ type: 'message', role: 'agent', messageId: 'm3', text: 'hi', append: false, to: 'b' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    a.emit({ type: 'turn-end', reason: 'end_turn' });
+    const history = supervisor.history('a', 1);
+    deepStrictEqual(history.map((event) => (event.type === 'log' ? event.text : event.type)), [
+        'message',
+        'could not deliver the message to "nobody": there is no such agent in the fleet',
+        'message',
+        'could not deliver the message to "a": an agent does not send messages to itself',
+        'message',
+        'could not deliver the message to "b": b is broken',
+        'turn-end'
+    ]);
+    deepStrictEqual(history.map((event) => event.seq), [2, 3, 4, 5, 6, 7, 8], 'the lines take numbers of their own, and the events after them go on');
+    deepStrictEqual(a.calls, ['start'], 'the sender is not sent anything');
 });

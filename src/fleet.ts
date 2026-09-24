@@ -74,14 +74,7 @@ function loadFleet(options: LoadFleetOptions = {}): Fleet {
     const readFile = options.readFile ?? readFileFromDisk;
     const root = inspect(location.path);
     if (root === undefined) {
-        if (location.source === 'argument' || location.source === 'environment') {
-            throw new ConfigurationError('missing-fleet', `Fleet directory not found: ${location.path}`, {
-                path: location.path,
-                hint: `It was named by ${location.source === 'argument' ? FLEET_PATH_ARGUMENT : FLEET_PATH_VARIABLE}; `
-                    + 'check the path, or create the directory.'
-            });
-        }
-        return { location, exists: false, agents: [] };
+        return missingFleet(location);
     }
     requireDirectory(root, location.path, 'the fleet directory');
     const local = agentDirectories(join(location.path, LOCAL_DIRECTORY)).map((id: string) =>
@@ -90,6 +83,22 @@ function loadFleet(options: LoadFleetOptions = {}): Fleet {
         readRemoteManifest(...manifest(location.path, REMOTE_DIRECTORY, id, env, readFile)));
     requireUniqueIds(local, remote);
     return { location, exists: true, agents: [...local, ...remote] };
+}
+/**
+ * The fleet whose directory is not there: an empty one at the default or saved
+ * path, an error when the user named the path.
+ *
+ * @throws ConfigurationError when the argument or the variable named the missing directory.
+ */
+function missingFleet(location: FleetLocation): Fleet {
+    if (location.source === 'argument' || location.source === 'environment') {
+        throw new ConfigurationError('missing-fleet', `Fleet directory not found: ${location.path}`, {
+            path: location.path,
+            hint: `It was named by ${location.source === 'argument' ? FLEET_PATH_ARGUMENT : FLEET_PATH_VARIABLE}; `
+                + 'check the path, or create the directory.'
+        });
+    }
+    return { location, exists: false, agents: [] };
 }
 /**
  * Creates the directories a local agent owns but flotti never reads —
@@ -139,6 +148,14 @@ function manifest(
     const directory = join(root, group, id);
     const manifestPath = join(directory, MANIFEST_FILE);
     const contents = readManifest(manifestPath, readFile);
+    const prompt = systemPrompt(directory, group);
+    return [
+        parseManifest(contents, manifestPath),
+        { id, directory, manifestPath, env, hasSystemPrompt: prompt !== undefined }
+    ];
+}
+/** What is at `system-prompt.md` of a local agent; `undefined` when it is absent or the agent is remote. */
+function systemPrompt(directory: string, group: string): Stats | undefined {
     const prompt = group === LOCAL_DIRECTORY ? inspect(join(directory, SYSTEM_PROMPT_FILE)) : undefined;
     if (prompt !== undefined && !prompt.isFile()) {
         throw new ConfigurationError(
@@ -147,10 +164,7 @@ function manifest(
             { path: join(directory, SYSTEM_PROMPT_FILE) }
         );
     }
-    return [
-        parseManifest(contents, manifestPath),
-        { id, directory, manifestPath, env, hasSystemPrompt: prompt !== undefined }
-    ];
+    return prompt;
 }
 /** Names of the agent directories in `local/` or `remote/`, ordered; none when the directory is absent. */
 function agentDirectories(path: string): string[] {
@@ -161,25 +175,29 @@ function agentDirectories(path: string): string[] {
     requireDirectory(found, path, 'a fleet group');
     const names = listDirectory(path).filter((name: string) => !name.startsWith('.')).sort();
     for (const name of names) {
-        const entry = join(path, name);
-        const stats = inspect(entry);
-        if (stats === undefined || !stats.isDirectory()) {
-            throw new ConfigurationError(
-                'not-a-directory',
-                `${entry}: every agent is a directory with ${MANIFEST_FILE} in it, and this is not a directory`,
-                { path: entry }
-            );
-        }
-        if (!AGENT_ID.test(name)) {
-            throw new ConfigurationError(
-                'invalid-agent-id',
-                `${entry}: "${name}" cannot be an agent id — use letters, digits, ".", "_" and "-", `
-                + 'starting with a letter or a digit',
-                { path: entry }
-            );
-        }
+        requireAgentDirectory(path, name);
     }
     return names;
+}
+/** Checks that an entry of a fleet group is a directory named like an agent id. */
+function requireAgentDirectory(path: string, name: string): void {
+    const entry = join(path, name);
+    const stats = inspect(entry);
+    if (stats === undefined || !stats.isDirectory()) {
+        throw new ConfigurationError(
+            'not-a-directory',
+            `${entry}: every agent is a directory with ${MANIFEST_FILE} in it, and this is not a directory`,
+            { path: entry }
+        );
+    }
+    if (!AGENT_ID.test(name)) {
+        throw new ConfigurationError(
+            'invalid-agent-id',
+            `${entry}: "${name}" cannot be an agent id — use letters, digits, ".", "_" and "-", `
+            + 'starting with a letter or a digit',
+            { path: entry }
+        );
+    }
 }
 function requireUniqueIds(local: readonly LocalAgent[], remote: readonly Agent[]): void {
     const localIds = new Map(local.map((agent: LocalAgent) => [agent.id, agent.directory]));
@@ -207,15 +225,19 @@ function fleetPathArgument(argv: readonly string[]): string | undefined {
         } else {
             continue;
         }
-        if (path === undefined || path.trim() === '') {
-            throw new ConfigurationError(
-                'invalid-argument',
-                `${FLEET_PATH_ARGUMENT} requires a path, for example ${FLEET_PATH_ARGUMENT} ${DEFAULT_FLEET_PATH}`
-            );
-        }
-        path = path.trim();
+        path = fleetPathValue(path);
     }
     return path;
+}
+/** The path given to `--fleet`, trimmed. */
+function fleetPathValue(path: string | undefined): string {
+    if (path === undefined || path.trim() === '') {
+        throw new ConfigurationError(
+            'invalid-argument',
+            `${FLEET_PATH_ARGUMENT} requires a path, for example ${FLEET_PATH_ARGUMENT} ${DEFAULT_FLEET_PATH}`
+        );
+    }
+    return path.trim();
 }
 function absolutePath(path: string, env: Environment, cwd: string): string {
     return resolve(cwd, expandHome(path, env));

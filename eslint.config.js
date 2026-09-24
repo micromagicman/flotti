@@ -29,6 +29,18 @@ export default tseslint.config(
             'max-lines-per-function': [
                 'error',
                 {
+                    max: 20,
+                    skipComments: true
+                }
+            ],
+        },
+    },
+    {
+        files: [ 'test/**', 'e2e/**' ],
+        rules: {
+            'max-lines-per-function': [
+                'error',
+                {
                     max: 50,
                     skipComments: true
                 }

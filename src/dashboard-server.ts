@@ -15,6 +15,7 @@ import type {
     SendRequest,
     ServerMessage
 } from './dashboard-protocol.js';
+import type { Forwarded, Quote, SendOptions } from './agent-events.js';
 import { ConfigurationError } from './errors.js';
 import type { FleetSettings } from './fleet-settings.js';
 import { UnknownAgentError } from './supervisor.js';
@@ -96,6 +97,11 @@ const ROUTES: readonly Route[] = [
         handle: async (context, _match, body) => [201, requireSettings(context).create(body)]
     },
     {
+        method: 'POST',
+        pattern: /^\/api\/ssh-agents$/,
+        handle: async (context, _match, body) => [201, await requireSettings(context).addOverSsh(body)]
+    },
+    {
         method: 'GET',
         pattern: /^\/api\/agents\/([^/]+)$/,
         handle: async (context, [id]) => [200, requireSettings(context).config(id ?? '')]
@@ -126,7 +132,10 @@ const ROUTES: readonly Route[] = [
     {
         method: 'POST',
         pattern: /^\/api\/agents\/([^/]+)\/messages$/,
-        handle: async ({ supervisor }, [id], body) => [200, await supervisor.send(id ?? '', messageText(body))]
+        handle: async ({ supervisor }, [id], body) => {
+            const options = messageOptions(body);
+            return [200, await supervisor.send(id ?? '', messageText(body, options.forwarded !== undefined), options)];
+        }
     },
     {
         method: 'POST',
@@ -180,12 +189,51 @@ const ROUTES: readonly Route[] = [
         }
     }
 ];
-function messageText(body: unknown): string {
-    const { text } = (body ?? {}) as Partial<SendRequest>;
-    if (typeof text !== 'string' || text.trim() === '') {
+/** The text of a message; a forwarded one may come without a word above it. */
+function messageText(body: unknown, mayBeEmpty = false): string {
+    const { text = mayBeEmpty ? '' : undefined } = (body ?? {}) as Partial<SendRequest>;
+    if (typeof text !== 'string' || (!mayBeEmpty && text.trim() === '')) {
         throw new HttpError(400, 'The message is empty.');
     }
     return text;
+}
+function optionalString(value: unknown, name: string): string | undefined {
+    if (value !== undefined && typeof value !== 'string') {
+        throw new HttpError(400, `"${name}" must be text.`);
+    }
+    return value;
+}
+function quoteOf(value: unknown): Quote | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+    const { agentId, messageId, seq, author, text } = (value ?? {}) as Partial<Quote>;
+    if (typeof agentId !== 'string' || typeof messageId !== 'string' || typeof text !== 'string') {
+        throw new HttpError(400, '"replyTo" needs the "agentId", "messageId" and "text" of the message it answers.');
+    }
+    if (seq !== undefined && !Number.isInteger(seq)) {
+        throw new HttpError(400, '"replyTo.seq" must be a whole number.');
+    }
+    const by = optionalString(author, 'replyTo.author');
+    return { agentId, messageId, text, ...(seq === undefined ? {} : { seq }), ...(by === undefined ? {} : { author: by }) };
+}
+function forwardedOf(value: unknown): Forwarded | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+    const { author, text } = (value ?? {}) as Partial<Forwarded>;
+    if (typeof text !== 'string' || text.trim() === '') {
+        throw new HttpError(400, '"forwarded" needs the "text" of the message sent on.');
+    }
+    const by = optionalString(author, 'forwarded.author');
+    return { text, ...(by === undefined ? {} : { author: by }) };
+}
+/** What a message of a person answers or sends on; the sender is a person, always. */
+function messageOptions(body: unknown): SendOptions {
+    const request = (body ?? {}) as Partial<SendRequest>;
+    const replyTo = quoteOf(request.replyTo);
+    const forwarded = forwardedOf(request.forwarded);
+    return { ...(replyTo === undefined ? {} : { replyTo }), ...(forwarded === undefined ? {} : { forwarded }) };
 }
 function broadcastTargets(body: unknown): string[] | undefined {
     const { agents } = (body ?? {}) as Partial<SendRequest>;
@@ -215,17 +263,7 @@ function send(response: ServerResponse, status: number, body: unknown): void {
 }
 function readBody(request: IncomingMessage): Promise<unknown> {
     return new Promise((resolve, reject) => {
-        const chunks: Buffer[] = [];
-        let size = 0;
-        request.on('data', (chunk: Buffer) => {
-            size += chunk.length;
-            if (size > MAX_BODY_BYTES) {
-                reject(new HttpError(413, 'The request is too large.'));
-                request.destroy();
-                return;
-            }
-            chunks.push(chunk);
-        });
+        const chunks = collectChunks(request, reject);
         request.on('end', () => {
             const text = Buffer.concat(chunks).toString('utf8');
             try {
@@ -236,6 +274,21 @@ function readBody(request: IncomingMessage): Promise<unknown> {
         });
         request.on('error', reject);
     });
+}
+/** Gathers the chunks of the body as they come; one past the limit rejects the read and drops the request. */
+function collectChunks(request: IncomingMessage, reject: (reason: unknown) => void): Buffer[] {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    request.on('data', (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > MAX_BODY_BYTES) {
+            reject(new HttpError(413, 'The request is too large.'));
+            request.destroy();
+            return;
+        }
+        chunks.push(chunk);
+    });
+    return chunks;
 }
 async function handleApi(context: Context, request: IncomingMessage, path: string): Promise<[number, unknown]> {
     const matching = ROUTES.map((candidate) => ({ candidate, match: candidate.pattern.exec(path) }))
@@ -258,11 +311,7 @@ async function handleApi(context: Context, request: IncomingMessage, path: strin
 }
 /** Serves a file of the built page; any other path gets `index.html`, the page routes itself. */
 async function serveStatic(webRoot: string, path: string, response: ServerResponse): Promise<void> {
-    const relative = normalize(decodeURIComponent(path)).replace(/^([/\\])+/, '');
-    const file = join(webRoot, relative);
-    const inside = file.startsWith(webRoot.endsWith(sep) ? webRoot : webRoot + sep);
-    const extension = extname(file);
-    const target = inside && extension !== '' ? file : join(webRoot, 'index.html');
+    const target = staticTarget(webRoot, path);
     try {
         const contents = await readFile(target);
         const type = CONTENT_TYPES[extname(target)] ?? 'application/octet-stream';
@@ -278,6 +327,14 @@ async function serveStatic(webRoot: string, path: string, response: ServerRespon
         response.end('Not found.');
     }
 }
+/** The file a path asks for: one inside the web root with an extension, or else `index.html`. */
+function staticTarget(webRoot: string, path: string): string {
+    const relative = normalize(decodeURIComponent(path)).replace(/^([/\\])+/, '');
+    const file = join(webRoot, relative);
+    const inside = file.startsWith(webRoot.endsWith(sep) ? webRoot : webRoot + sep);
+    const extension = extname(file);
+    return inside && extension !== '' ? file : join(webRoot, 'index.html');
+}
 function errorResponse(error: unknown): [number, ErrorResponse] {
     if (error instanceof HttpError) {
         return [error.status, { error: error.message }];
@@ -286,7 +343,9 @@ function errorResponse(error: unknown): [number, ErrorResponse] {
         return [404, { error: error.message }];
     }
     if (error instanceof ConfigurationError) {
-        const status = error.kind === 'duplicate-agent-id' || error.kind === 'already-running' ? 409 : 400;
+        const status = error.kind === 'duplicate-agent-id' || error.kind === 'already-running'
+            ? 409
+            : error.kind === 'ssh-failed' ? 502 : 400;
         return [status, { error: error.hint === undefined ? error.message : `${error.message} ${error.hint}` }];
     }
     return [500, { error: error instanceof Error ? error.message : String(error) }];
@@ -315,11 +374,15 @@ function requestHandler(supervisor: Supervisor, hosts: Set<string>, options: Das
             void serveStatic(webRoot, path, response);
             return;
         }
-        handleApi({ supervisor, settings: options.settings }, request, path).then(
-            ([status, body]) => send(response, status, body),
-            (error: unknown) => send(response, ...errorResponse(error))
-        );
+        answerApi({ supervisor, settings: options.settings }, request, path, response);
     };
+}
+/** Answers an API request with what its route gives, or with the error it fails with. */
+function answerApi(context: Context, request: IncomingMessage, path: string, response: ServerResponse): void {
+    handleApi(context, request, path).then(
+        ([status, body]) => send(response, status, body),
+        (error: unknown) => send(response, ...errorResponse(error))
+    );
 }
 function post(socket: WebSocket, message: ServerMessage): void {
     if (socket.readyState === socket.OPEN) {
@@ -339,32 +402,52 @@ function attachPage(supervisor: Supervisor, socket: WebSocket): () => void {
     const unsubscribe = supervisor.subscribe((notice) => (caughtUp ? deliver(notice) : held.push(notice)));
     post(socket, { type: 'fleet', agents: supervisor.agents() });
     socket.on('message', (data) => {
-        let message: ClientMessage;
-        try {
-            message = JSON.parse(String(data)) as ClientMessage;
-        } catch {
+        const message = parseClientMessage(String(data));
+        if (message === undefined || message.type !== 'subscribe' || caughtUp) {
             return;
         }
-        if (message.type !== 'subscribe' || caughtUp) {
-            return;
-        }
-        const last = new Map<string, number>();
-        for (const agent of supervisor.agents()) {
-            const since = Number(message.since?.[agent.id] ?? 0);
-            for (const event of supervisor.history(agent.id, since)) {
-                post(socket, { type: 'event', event });
-                last.set(agent.id, event.seq);
-            }
-        }
+        const last = replayMissed(supervisor, socket, message);
         caughtUp = true;
-        for (const notice of held.splice(0)) {
-            if (notice.type !== 'event' || notice.event.seq > (last.get(notice.event.agentId) ?? 0)) {
-                deliver(notice);
-            }
-        }
+        deliverHeld(held, last, deliver);
     });
     socket.on('close', unsubscribe);
     return unsubscribe;
+}
+/** The message of a page; nothing when it is not JSON. */
+function parseClientMessage(data: string): ClientMessage | undefined {
+    try {
+        return JSON.parse(data) as ClientMessage;
+    } catch {
+        return undefined;
+    }
+}
+/**
+ * Posts the events the page has not seen yet, agent by agent.
+ *
+ * @returns The number of the last event posted, per agent.
+ */
+function replayMissed(supervisor: Supervisor, socket: WebSocket, message: ClientMessage): Map<string, number> {
+    const last = new Map<string, number>();
+    for (const agent of supervisor.agents()) {
+        const since = Number(message.since?.[agent.id] ?? 0);
+        for (const event of supervisor.history(agent.id, since)) {
+            post(socket, { type: 'event', event });
+            last.set(agent.id, event.seq);
+        }
+    }
+    return last;
+}
+/** Delivers what was held back while the page caught up, except the events it has already been sent. */
+function deliverHeld(
+    held: SupervisorNotice[],
+    last: ReadonlyMap<string, number>,
+    deliver: (notice: SupervisorNotice) => void
+): void {
+    for (const notice of held.splice(0)) {
+        if (notice.type !== 'event' || notice.event.seq > (last.get(notice.event.agentId) ?? 0)) {
+            deliver(notice);
+        }
+    }
 }
 function hostOf(origin: string): string {
     try {
@@ -416,15 +499,19 @@ async function startDashboard(supervisor: Supervisor, options: DashboardOptions 
         url: `http://${host}:${port}/`,
         port,
         close: async () => {
-            for (const page of sockets.clients) {
-                post(page, { type: 'shutdown' });
-                page.close(1001, 'flotti is stopping');
-            }
-            sockets.close();
-            server.closeAllConnections();
-            await new Promise<void>((resolve) => server.close(() => resolve()));
+            await closeDashboard(server, sockets);
         }
     };
+}
+/** Tells the pages the dashboard is going away, closes their sockets and stops listening. */
+async function closeDashboard(server: Server, sockets: WebSocketServer): Promise<void> {
+    for (const page of sockets.clients) {
+        post(page, { type: 'shutdown' });
+        page.close(1001, 'flotti is stopping');
+    }
+    sockets.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 export { DEFAULT_HOST, DEFAULT_PORT, startDashboard };
 export type { Dashboard, DashboardOptions };

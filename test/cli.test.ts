@@ -11,8 +11,15 @@ import { FAKE_AGENT, eventually, isAlive } from './local-agent-helpers.js';
 const CLI = fileURLToPath(new URL('../src/index.js', import.meta.url));
 const workspace = mkdtempSync(join(tmpdir(), 'flotti-cli-'));
 const children: ChildProcess[] = [];
+const backgrounded: number[] = [];
 after(() => {
     children.forEach((child) => child.kill('SIGKILL'));
+    // A flotti started in the background is nobody's child: find it by its run file.
+    for (const pid of backgrounded) {
+        if (isAlive(pid)) {
+            process.kill(pid, 'SIGKILL');
+        }
+    }
     rmSync(workspace, { recursive: true, force: true });
 });
 /** A fleet with one local agent: the pretend ACP agent, recording what it is asked. */
@@ -104,12 +111,58 @@ test('stop with nothing running says so', async () => {
     strictEqual(stop.status, 0);
     match(stop.output, /flotti is not running/);
 });
-test('commands other than run and stop are refused', async () => {
+test('start runs the fleet in the background; status lists its agents; stop stops it', async () => {
+    const { fleet, record } = fleetWithAgent('fleet-start');
+    const start = await cli('start', '--fleet', fleet, '--port', '0');
+    strictEqual(start.status, 0, start.output);
+    const url = /Dashboard: (http:\/\/\S+)/.exec(start.output)?.[1];
+    ok(url !== undefined, start.output);
+    const { pid } = JSON.parse(readFileSync(join(fleet, RUN_FILE), 'utf8')) as { pid: number };
+    backgrounded.push(pid);
+    ok(isAlive(pid), 'the fleet outlives the start command');
+    await eventually(() => started(record).length === 1, 10_000);
+    const again = await cli('start', '--fleet', fleet, '--port', '0');
+    strictEqual(again.status, 0, again.output);
+    match(again.output, /flotti already runs this fleet/);
+    ok(again.output.includes(`Dashboard: ${url}`), again.output);
+    await eventually(() => started(record).length === 1, 1000);
+    const status = await poll(() => cli('status', '--fleet', fleet), (result) => /echo\s+local\s+-\s+idle/.test(result.output));
+    strictEqual(status.status, 0, status.output);
+    match(status.output, /ID\s+TYPE\s+HARNESS\s+STATUS/);
+    match(status.output, /echo\s+local\s+-\s+idle/);
+    const stop = await cli('stop', '--fleet', fleet);
+    strictEqual(stop.status, 0, stop.output);
+    ok(!isAlive(pid), 'stop waits for the fleet to go');
+    const [agent] = started(record);
+    await eventually(() => agent !== undefined && !isAlive(agent), 5000);
+    const none = await cli('status', '--fleet', fleet);
+    strictEqual(none.status, 1);
+    match(none.output, /flotti is not running/);
+});
+test('start reports a fleet that fails to come up and leaves nothing running', async () => {
+    const fleet = join(workspace, 'fleet-bad');
+    mkdirSync(join(fleet, 'local', 'broken'), { recursive: true });
+    const start = await cli('start', '--fleet', fleet, '--port', '0');
+    strictEqual(start.status, 1, start.output);
+    match(start.output, /Agent manifest not found/);
+    ok(!existsSync(join(fleet, RUN_FILE)));
+    const busy = fleetWithAgent('fleet-busy-port');
+    const holder = fleetWithAgent('fleet-holds-port').fleet;
+    const { url } = await run(holder);
+    const taken = await cli('start', '--fleet', busy.fleet, '--port', new URL(url).port);
+    strictEqual(taken.status, 1, taken.output);
+    match(taken.output, /is taken, so the dashboard cannot start/);
+    ok(!existsSync(join(busy.fleet, RUN_FILE)));
+    strictEqual((await cli('stop', '--fleet', holder)).status, 0);
+});
+test('commands other than run, start, stop and status are refused', async () => {
     const unknown = await cli('agents');
     strictEqual(unknown.status, 1);
     match(unknown.output, /Unknown command "agents"/);
     const help = await cli();
     strictEqual(help.status, 0);
     match(help.output, /flotti run/);
+    match(help.output, /flotti start/);
+    match(help.output, /flotti status/);
     match((await cli('run', '--fleet', join(workspace, 'fleet-idle'), '--port', 'eighty')).output, /"eighty" is not a port/);
 });

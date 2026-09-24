@@ -3,10 +3,27 @@
  * glued into one message, updates of a tool call folded into one card. Pure
  * functions, no React: the reducer of the page and the tests share them.
  */
-import type { AgentEvent, AgentStatus, PermissionOption, ToolCallStatus } from '../../src/agent-events.js';
+import type { AgentEvent, AgentStatus, Forwarded, PermissionOption, Quote, ToolCallStatus } from '../../src/agent-events.js';
 type FeedItem =
-    | { readonly kind: 'message'; readonly key: string; readonly role: 'user' | 'agent'; readonly messageId: string; readonly text: string }
+    | {
+        readonly kind: 'message';
+        readonly key: string;
+        readonly role: 'user' | 'agent';
+        readonly messageId: string;
+        /** The `seq` of the event that began it: unique in the tab, unlike the message id. */
+        readonly seq: number;
+        readonly text: string;
+        /** Id of the agent that sent it, when not a person: shown on the person's side, marked with the sender. */
+        readonly from?: string;
+        /** Id of the agent this message of the agent went to, when it went to another agent and not to a person. */
+        readonly to?: string;
+        /** The message this one answers. */
+        readonly replyTo?: Quote;
+        /** A message sent on as it was; `text` is then what was written above it. */
+        readonly forwarded?: Forwarded;
+    }
     | { readonly kind: 'thought'; readonly key: string; readonly text: string }
+    | { readonly kind: 'progress'; readonly key: string; readonly text: string }
     | {
         readonly kind: 'tool';
         readonly key: string;
@@ -72,7 +89,18 @@ function withMessage(items: readonly FeedItem[], event: AgentEvent & { type: 'me
     const index = lastIndex(items, (item) => item.kind === 'message' && item.messageId === event.messageId);
     const found = index > turnStart ? items[index] : undefined;
     if (found?.kind !== 'message') {
-        return [...items, { kind: 'message', key: `m${event.seq}`, role: event.role, messageId: event.messageId, text: event.text }];
+        return [...items, {
+            kind: 'message',
+            key: `m${event.seq}`,
+            seq: event.seq,
+            role: event.role,
+            messageId: event.messageId,
+            text: event.text,
+            ...(event.from === undefined ? {} : { from: event.from }),
+            ...(event.to === undefined ? {} : { to: event.to }),
+            ...(event.replyTo === undefined ? {} : { replyTo: event.replyTo }),
+            ...(event.forwarded === undefined ? {} : { forwarded: event.forwarded })
+        }];
     }
     return replaced(items, index, { ...found, text: event.append ? found.text + event.text : event.text });
 }
@@ -92,8 +120,27 @@ function withToolCall(items: readonly FeedItem[], event: AgentEvent & { type: 't
     }
     return replaced(items, index, { ...found, title: event.title ?? found.title, status: event.status ?? found.status });
 }
-function withEvent(items: readonly FeedItem[], event: AgentEvent): readonly FeedItem[] {
+function withStatus(items: readonly FeedItem[], event: AgentEvent & { type: 'status' }): readonly FeedItem[] {
+    const settled = event.status === 'waiting' ? items : settlePermissions(items);
+    return isNoteworthy(event.status, event.reason)
+        ? [...settled, { kind: 'status', key: `e${event.seq}`, status: event.status, reason: event.reason }]
+        : settled;
+}
+/** The events that each add one item of their own. */
+function withItem(items: readonly FeedItem[], event: AgentEvent & { type: 'progress' | 'permission' | 'log' | 'raw' }): readonly FeedItem[] {
     const key = `e${event.seq}`;
+    switch (event.type) {
+        case 'progress':
+            return [...items, { kind: 'progress', key, text: event.text }];
+        case 'permission':
+            return [...items, { kind: 'permission', key, requestId: event.requestId, title: event.title, options: event.options, settled: false }];
+        case 'log':
+            return [...items, { kind: 'log', key, source: event.source, text: event.text }];
+        case 'raw':
+            return [...items, { kind: 'raw', key, protocol: event.protocol, payload: event.payload }];
+    }
+}
+function withEvent(items: readonly FeedItem[], event: AgentEvent): readonly FeedItem[] {
     switch (event.type) {
         case 'message':
             return withMessage(items, event);
@@ -101,20 +148,12 @@ function withEvent(items: readonly FeedItem[], event: AgentEvent): readonly Feed
             return withThought(items, event);
         case 'tool-call':
             return withToolCall(items, event);
-        case 'permission':
-            return [...items, { kind: 'permission', key, requestId: event.requestId, title: event.title, options: event.options, settled: false }];
         case 'turn-end':
-            return [...settlePermissions(items), { kind: 'turn-end', key, reason: event.reason }];
-        case 'status': {
-            const settled = event.status === 'waiting' ? items : settlePermissions(items);
-            return isNoteworthy(event.status, event.reason)
-                ? [...settled, { kind: 'status', key, status: event.status, reason: event.reason }]
-                : settled;
-        }
-        case 'log':
-            return [...items, { kind: 'log', key, source: event.source, text: event.text }];
-        case 'raw':
-            return [...items, { kind: 'raw', key, protocol: event.protocol, payload: event.payload }];
+            return [...settlePermissions(items), { kind: 'turn-end', key: `e${event.seq}`, reason: event.reason }];
+        case 'status':
+            return withStatus(items, event);
+        default:
+            return withItem(items, event);
     }
 }
 /**
@@ -136,5 +175,37 @@ function settlePermission(feed: AgentFeed, requestId: string): AgentFeed {
         (item.kind === 'permission' && item.requestId === requestId ? { ...item, settled: true } : item));
     return { ...feed, items };
 }
-export { applyEvent, emptyFeed, settlePermission };
-export type { AgentFeed, FeedItem };
+type MessageItem = FeedItem & { kind: 'message' };
+/** Who wrote a message of the tab of `agentId`: that agent, another one, or a person (`undefined`). */
+function authorOf(item: MessageItem, agentId: string): string | undefined {
+    return item.role === 'agent' ? agentId : item.from;
+}
+/**
+ * What a forward of the message sends on: the message as its author wrote
+ * it. A forward with nothing written above it goes on as the forward it was,
+ * naming who wrote it first.
+ */
+function forwardOf(item: MessageItem, agentId: string): Forwarded {
+    if (item.forwarded !== undefined && item.text.trim() === '') {
+        return item.forwarded;
+    }
+    const author = authorOf(item, agentId);
+    return { text: item.text, ...(author === undefined ? {} : { author }) };
+}
+/** What a reply to the message quotes: where it is, who wrote it and what it says. */
+function quoteOf(item: MessageItem, agentId: string): Quote {
+    const { text, author } = forwardOf(item, agentId);
+    return { agentId, messageId: item.messageId, seq: item.seq, text, ...(author === undefined ? {} : { author }) };
+}
+/**
+ * The message of the feed a quote points at: by its `seq` when the quote has
+ * one, else the last one with its id. None once it is gone: history is bounded.
+ */
+function quotedMessage(feed: AgentFeed | undefined, quote: Pick<Quote, 'messageId' | 'seq'>): MessageItem | undefined {
+    const items = feed?.items ?? [];
+    const found = items[lastIndex(items, (item) => item.kind === 'message'
+        && (quote.seq === undefined ? item.messageId === quote.messageId : item.seq === quote.seq))];
+    return found?.kind === 'message' ? found : undefined;
+}
+export { applyEvent, emptyFeed, forwardOf, quoteOf, quotedMessage, settlePermission };
+export type { AgentFeed, FeedItem, MessageItem };

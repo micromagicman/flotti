@@ -32,7 +32,9 @@ type ConfigurationErrorKind =
     /** `flotti run` found another flotti running the same fleet. */
     | 'already-running'
     /** The dashboard port is taken by another program. */
-    | 'port-in-use';
+    | 'port-in-use'
+    /** A host reached over SSH refused, could not be reached, or publishes nothing usable. */
+    | 'ssh-failed';
 type ConfigurationErrorOptions = {
     /** File or directory the complaint is about, when one is already known. */
     readonly path?: string;

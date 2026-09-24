@@ -10,6 +10,10 @@
  * - `deaf`            — ignores cancel and never ends;
  * - `permission`      — asks for a permission and says which option came back;
  * - `spawn`           — starts a grandchild process and writes its pid to the record;
+ * - `later`           — answers, and a moment after the turn is over goes on of its own:
+ *                       a tool call and a message without `messageId`;
+ * - `mcp <call>`      — calls a tool of the MCP server `flotti` it was given, `<call>` being the
+ *                       JSON of `tools/call` params, and says the text of the result;
  * - anything else     — answers "you said: <message>" with a tool call on the way.
  */
 import { spawn } from 'node:child_process';
@@ -29,6 +33,8 @@ type FakeConfig = {
     readonly models?: readonly string[];
     /** Answer session/new with `auth_required`. */
     readonly authRequired?: boolean;
+    /** Say it takes MCP servers over HTTP. */
+    readonly mcpHttp?: boolean;
 };
 const config = JSON.parse(process.env['FAKE_ACP'] ?? '{}') as FakeConfig;
 function record(entry: object): void {
@@ -50,6 +56,32 @@ record({
 });
 process.stderr.write('fake agent: ready\n');
 let sessionCount = 0;
+/** The MCP server over HTTP the last session was given. */
+let mcpServer: { url: string; headers: { name: string; value: string }[] } | undefined;
+function keepMcp(servers: readonly acp.McpServer[] | undefined): void {
+    const http = servers?.find((server) => 'type' in server && server.type === 'http');
+    if (http !== undefined && 'url' in http && 'headers' in http) {
+        mcpServer = { url: http.url, headers: [...http.headers] };
+    }
+}
+/** One `tools/call` to the MCP server: the text of its result, or why there is none. */
+async function callTool(params: string): Promise<string> {
+    if (mcpServer === undefined) {
+        return 'no MCP server';
+    }
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
+    for (const header of mcpServer.headers) {
+        headers[header.name] = header.value;
+    }
+    const response = await fetch(mcpServer.url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: JSON.parse(params) as unknown })
+    });
+    const body = await response.json() as { result?: { content: { text: string }[]; isError?: boolean } };
+    const result = body.result;
+    return result === undefined ? `HTTP ${response.status}` : `${result.isError === true ? 'error: ' : ''}${result.content[0]?.text ?? ''}`;
+}
 const cancels = new Map<string, () => void>();
 function modelOptions(current: string | undefined): acp.SessionConfigOption[] {
     if (config.models === undefined) {
@@ -100,6 +132,17 @@ async function say(client: acp.AgentContext, sessionId: string, text: string): P
         update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text }, messageId: 'm1' }
     });
 }
+/** What an agent does with no prompt to answer: works on, and says so. */
+async function onMyOwn(client: acp.AgentContext, sessionId: string): Promise<void> {
+    await client.notify(acp.methods.client.session.update, {
+        sessionId,
+        update: { sessionUpdate: 'tool_call', toolCallId: 'call-2', title: 'Check CI', status: 'completed' }
+    });
+    await client.notify(acp.methods.client.session.update, {
+        sessionId,
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'CI is green' } }
+    });
+}
 acp.agent({ name: 'fake-acp-agent' })
     .onRequest(acp.methods.agent.initialize, (context) => {
         record({ event: 'initialize', params: context.params });
@@ -107,6 +150,7 @@ acp.agent({ name: 'fake-acp-agent' })
             protocolVersion: acp.PROTOCOL_VERSION,
             agentCapabilities: {
                 loadSession: config.load === true,
+                ...(config.mcpHttp === true ? { mcpCapabilities: { http: true } } : {}),
                 sessionCapabilities: {
                     ...(config.resume === true ? { resume: {} } : {}),
                     ...(config.additionalDirectories === true ? { additionalDirectories: {} } : {})
@@ -117,6 +161,7 @@ acp.agent({ name: 'fake-acp-agent' })
     })
     .onRequest(acp.methods.agent.session.new, (context) => {
         record({ event: 'session/new', params: context.params });
+        keepMcp(context.params.mcpServers);
         if (config.authRequired === true) {
             throw acp.RequestError.authRequired();
         }
@@ -124,6 +169,7 @@ acp.agent({ name: 'fake-acp-agent' })
     })
     .onRequest(acp.methods.agent.session.resume, (context) => {
         record({ event: 'session/resume', params: context.params });
+        keepMcp(context.params.mcpServers);
         return { configOptions: modelOptions(undefined) };
     })
     .onRequest(acp.methods.agent.session.load, async (context) => {
@@ -174,7 +220,15 @@ acp.agent({ name: 'fake-acp-agent' })
                 await say(context.client, sessionId, 'spawned');
                 break;
             }
+            case 'later':
+                await say(context.client, sessionId, 'on it');
+                setTimeout(() => void onMyOwn(context.client, sessionId), 50);
+                break;
             default:
+                if (text.startsWith('mcp ')) {
+                    await say(context.client, sessionId, `mcp: ${await callTool(text.slice(4))}`);
+                    break;
+                }
                 await answer(context.client, sessionId, text);
         }
         return { stopReason: 'end_turn' };

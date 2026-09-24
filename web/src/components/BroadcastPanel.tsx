@@ -43,46 +43,60 @@ function Results({ sent, late, agents }: { readonly sent: readonly Delivery[]; r
         </ul>
     );
 }
+type Sent = { readonly deliveries: readonly Delivery[]; readonly after: number };
+function NoAgents({ onSettings }: { readonly onSettings: () => void }) {
+    return (
+        <section className="broadcast">
+            <h1>No agents yet</h1>
+            <p className="muted">Add the first one in the settings.</p>
+            <div className="actions"><button type="button" className="primary" onClick={onSettings}>Open settings</button></div>
+        </section>
+    );
+}
+function Targets({ agents, excluded, toggle }: { readonly agents: readonly AgentSummary[]; readonly excluded: ReadonlySet<string>; readonly toggle: (id: string) => void }) {
+    return (
+        <fieldset className="targets">
+            <legend>Send to</legend>
+            {agents.map((agent) => (
+                <label key={agent.id} className="target">
+                    <input type="checkbox" checked={!excluded.has(agent.id)} onChange={() => toggle(agent.id)} />
+                    <span>{agent.name}</span>
+                    <StatusBadge status={agent.status} />
+                </label>
+            ))}
+        </fieldset>
+    );
+}
+function BroadcastComposer({ targets, deliveries, onSent }: { readonly targets: readonly AgentSummary[]; readonly deliveries: readonly Delivery[]; readonly onSent: (sent: Sent) => void }) {
+    return (
+        <Composer
+            label="Message to all agents"
+            placeholder="Message the fleet…"
+            submitLabel={`Send to ${targets.length} agent${targets.length === 1 ? '' : 's'}`}
+            disabled={targets.length === 0}
+            onSend={async (text) => {
+                const after = deliveries.length;
+                const answer = await api.broadcast(text, targets.map((agent) => agent.id));
+                onSent({ deliveries: answer.deliveries, after });
+                return undefined;
+            }}
+        />
+    );
+}
 /** One message to many agents at once; the answers come in each agent's own tab. */
 function BroadcastPanel({ agents, deliveries, empty, onSettings }: BroadcastPanelProps) {
     const [excluded, toggle] = useExcluded();
-    const [sent, setSent] = useState<{ readonly deliveries: readonly Delivery[]; readonly after: number }>();
+    const [sent, setSent] = useState<Sent>();
     const targets = agents.filter((agent) => !excluded.has(agent.id));
     if (empty) {
-        return (
-            <section className="broadcast">
-                <h1>No agents yet</h1>
-                <p className="muted">Add the first one in the settings.</p>
-                <div className="actions"><button type="button" className="primary" onClick={onSettings}>Open settings</button></div>
-            </section>
-        );
+        return <NoAgents onSettings={onSettings} />;
     }
     return (
         <section className="broadcast" aria-label="Broadcast">
             <h1>Message all agents</h1>
             <p className="muted">Each agent gets the message on its own; the answers come in its tab.</p>
-            <fieldset className="targets">
-                <legend>Send to</legend>
-                {agents.map((agent) => (
-                    <label key={agent.id} className="target">
-                        <input type="checkbox" checked={!excluded.has(agent.id)} onChange={() => toggle(agent.id)} />
-                        <span>{agent.name}</span>
-                        <StatusBadge status={agent.status} />
-                    </label>
-                ))}
-            </fieldset>
-            <Composer
-                label="Message to all agents"
-                placeholder="Message the fleet…"
-                submitLabel={`Send to ${targets.length} agent${targets.length === 1 ? '' : 's'}`}
-                disabled={targets.length === 0}
-                onSend={async (text) => {
-                    const after = deliveries.length;
-                    const answer = await api.broadcast(text, targets.map((agent) => agent.id));
-                    setSent({ deliveries: answer.deliveries, after });
-                    return undefined;
-                }}
-            />
+            <Targets agents={agents} excluded={excluded} toggle={toggle} />
+            <BroadcastComposer targets={targets} deliveries={deliveries} onSent={setSent} />
             {sent === undefined ? null : <Results sent={sent.deliveries} late={deliveries.slice(sent.after)} agents={agents} />}
         </section>
     );

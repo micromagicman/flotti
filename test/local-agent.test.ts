@@ -42,6 +42,19 @@ describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
         const seqs = harness.events.map((event) => event.seq);
         deepStrictEqual(seqs, seqs.map((_, index) => index + 1));
     });
+    it('tells the agent which agent a message is from, in front of the text', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        const from = harness.lastSeq;
+        await harness.agent.send('rerun the tests', { from: 'reviewer' });
+        await harness.next((event) => event.seq > from && event.type === 'turn-end');
+        deepStrictEqual(harness.events.filter((event) => event.seq > from).flatMap((event) =>
+            (event.type === 'message' ? [[event.role, event.text, event.from]] : [])), [
+            ['user', 'rerun the tests', 'reviewer'],
+            ['agent', 'you said: [from reviewer] rerun the tests', undefined]
+        ]);
+        await harness.agent.stop();
+    });
     it('turns the agent stderr into log events and keeps it with the ACP trace in logs/', async () => {
         const harness = new Harness();
         await harness.agent.start();
@@ -53,6 +66,46 @@ describe('LocalAgentProcess: a conversation', { timeout: 20_000 }, () => {
         deepStrictEqual(trace[0]?.direction, 'out');
         deepStrictEqual(trace[0]?.message.method, 'initialize');
         ok(trace.some((line) => line.direction === 'in'));
+    });
+});
+describe('LocalAgentProcess: replies and forwards', { timeout: 20_000 }, () => {
+    it('writes out the quoted message of a reply and the forwarded one, and keeps both on the event', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        const from = harness.lastSeq;
+        const replyTo = { agentId: 'agent', messageId: 'm1', author: 'reviewer', text: 'tests fail\non CI' };
+        await harness.agent.send('rerun them', { replyTo, messageId: 'reply-1' });
+        await harness.next((event) => event.seq > from && event.type === 'turn-end');
+        const middle = harness.lastSeq;
+        await harness.agent.send('', { from: 'reviewer', forwarded: { text: 'the fix is merged' } });
+        await harness.next((event) => event.seq > middle && event.type === 'turn-end');
+        deepStrictEqual(harness.events.filter((event) => event.seq > from).flatMap((event) =>
+            (event.type === 'message' ? [[event.role, event.text, event.replyTo, event.forwarded]] : [])), [
+            ['user', 'rerun them', replyTo, undefined],
+            ['agent', 'you said: In reply to a message from agent "reviewer":\n> tests fail\n> on CI\n\nrerun them', undefined, undefined],
+            ['user', '', undefined, { text: 'the fix is merged' }],
+            ['agent', 'you said: [from reviewer] Forwarded from the person:\n\nthe fix is merged', undefined, undefined]
+        ]);
+        const reply = harness.events.find((event) => event.type === 'message' && event.text === 'rerun them');
+        strictEqual(reply?.type === 'message' ? reply.messageId : undefined, 'reply-1');
+        await harness.agent.stop();
+    });
+});
+describe('LocalAgentProcess: what the agent does of its own', { timeout: 20_000 }, () => {
+    it('shows what the agent says and does after the turn is over, as a message of its own', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        strictEqual(await harness.talk('later'), 'end_turn');
+        const from = harness.lastSeq;
+        await harness.next((event) => event.type === 'message' && event.text === 'CI is green');
+        const after = shape(harness.events.filter((event) => event.seq > from));
+        deepStrictEqual(after[0], { type: 'tool-call', toolCallId: 'call-2', title: 'Check CI', status: 'completed', raw: undefined });
+        const message = harness.events.find((event) => event.seq > from && event.type === 'message');
+        ok(message?.type === 'message');
+        strictEqual(message.role, 'agent');
+        strictEqual(message.append, false);
+        ok(message.messageId !== 'm1', 'the message of its own must not go on the answer of the turn');
+        strictEqual(harness.agent.status, 'idle');
     });
 });
 describe('LocalAgentProcess: the queue', { timeout: 20_000 }, () => {

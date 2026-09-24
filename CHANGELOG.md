@@ -2,6 +2,58 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.2.0]
+
+A fleet that lives on: agents that talk to each other and speak first, remote hosts over SSH, a chat
+history that survives restarts, and a global install with `flotti start`.
+
+### Added
+
+- **Reply and forward in the chat of an agent.** Any message of a tab can be answered with a reply —
+  the agent gets the quoted message above the answer, and the tab shows the quote as a link back to it
+  — or forwarded to another agent of the fleet, whose tab shows it under a bar "FORWARDED · AUTHOR" in
+  the author's colour. The `reply` and `forward` tools of the agents send the same `replyTo` and
+  `forwarded` as the dashboard does (#30).
+- **`flotti start` and `flotti status`.** After `npm install -g flotti` the fleet runs with
+  `flotti start`: in the background, giving the terminal back with the address of the dashboard; a
+  second `start` of a running fleet says it runs. `flotti stop` stops it, `flotti status` lists the
+  agents of the running fleet — id, local or remote, harness, status. `flotti run` stays for the
+  foreground (#36).
+- **Bare agents talk to each other.** Every agent flotti starts gets the fleet as MCP tools in its
+  session — `list_agents`, `send_message`, `reply`, `forward` — with nothing to configure in Claude Code
+  or Codex. A message from an agent carries `from`, the id of the sender (#38).
+- **An agent on another host, started by flotti.** `"ssh": "user@host"` in a local manifest starts the
+  agent there over SSH and runs it like a local one; ACP goes through the SSH connection, the fleet
+  tools through a reverse tunnel (#38).
+- **The history of a tab survives a restart.** Every event of an agent — messages, tool calls,
+  permission requests, status lines — is written to `.flotti-history.jsonl` in its directory and read
+  back when flotti starts; the last 5000 events of each agent are kept (#28).
+- **The agent speaks first.** What an agent says or does on its own, between the messages of a person,
+  shows in its tab: a local agent through any ACP update it sends outside a prompt, a remote one through
+  the new [inbox extension](docs/a2a-inbox.md) of A2A. A new `progress` event carries lines about what
+  the agent is busy with, shown in the open (#29).
+- **Remote agents over SSH, in one step.** Settings → **Connect over SSH** takes `user@host` and
+  nothing else: flotti asks the host which agents it publishes, adds them, opens an SSH tunnel to each
+  one with the published token and keeps it up, reopening it after a drop. The dashboard shows the
+  state of the connection and why it failed. In a manifest, `"ssh": "user@host"` takes the place of
+  `url`; the contract for agents is in [docs/a2a-ssh.md](docs/a2a-ssh.md) (#22).
+- **Agents write to one another.** A remote agent names another agent of the fleet in `to` of an inbox
+  message, and flotti delivers it to that agent as a message from the sender: an A2A agent gets `from`
+  in the metadata, an ACP agent `[from <id>]` in front of the text. In the receiver's tab the message
+  stands on the person's side as an envelope with a bar "SENDER → RECEIVER" in the sender's colour;
+  the sender's tab shows the same envelope, and a line when it could not be delivered. Each agent gets
+  a colour of its own, picked at random and kept (#23).
+- **Waiting agents get attention.** A tab whose agent waits for an answer is highlighted, the page
+  title counts the waiting agents, and a browser notification tells when one starts to wait (#27).
+- **The harness in the header.** The header of an agent's chat names its harness — `claude`, `codex`
+  — or says it is unknown (#24).
+- **CI.** Checks run on pull requests and on pushes to `main` and `develop`; a `v*` tag publishes the
+  package to npm (#25).
+
+### Changed
+
+- The linter limits functions in `src` and `web` to 20 lines; tests are exempt (#39).
+
 ## [0.1.0] — MVP
 
 The first release: a fleet of AI agents and one dashboard to work with them.
@@ -38,4 +90,5 @@ The first release: a fleet of AI agents and one dashboard to work with them.
   ([micromagicman/eva#266](https://github.com/micromagicman/eva/issues/266)).
 - The A2A adapter of Cutie, on the same contract as Eva's (owners/quanthread-ai-hub#218, !194).
 
+[0.2.0]: https://github.com/micromagicman/flotti/releases/tag/v0.2.0
 [0.1.0]: https://github.com/micromagicman/flotti/releases/tag/v0.1.0

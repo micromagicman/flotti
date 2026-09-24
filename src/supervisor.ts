@@ -1,8 +1,28 @@
 import { A2AAgent } from './a2a-agent.js';
-import type { AgentEvent, FleetAgent } from './agent-events.js';
-import type { AgentSummary, Delivery } from './dashboard-protocol.js';
+import type { AgentEvent, FleetAgent, SendOptions } from './agent-events.js';
+import { HistoryFile } from './agent-history.js';
+import type { AgentSummary, Delivery, Harness } from './dashboard-protocol.js';
+import type { FleetToolsAccess } from './fleet-mcp.js';
 import { LocalAgentProcess } from './local-agent.js';
 import type { Agent, Fleet } from './types.js';
+/**
+ * The harness of an agent, as far as its manifest tells: the adapter of a local
+ * one. A plain ACP agent and a remote A2A one say nothing about it, and the
+ * summary leaves the field out rather than guess.
+ */
+function harnessOf(agent: Agent): { readonly harness?: Harness } {
+    if (agent.kind !== 'local') {
+        return {};
+    }
+    switch (agent.adapter) {
+        case 'claude-code':
+            return { harness: 'claude' };
+        case 'codex':
+            return { harness: 'codex' };
+        case undefined:
+            return {};
+    }
+}
 /** What the supervisor says besides the agents' own events. */
 type SupervisorNotice =
     | { readonly type: 'event'; readonly event: AgentEvent }
@@ -15,8 +35,21 @@ type SupervisorOptions = {
     readonly createAgent?: (agent: Agent) => FleetAgent;
     /** Events kept per agent for a page that connects later or reconnects. */
     readonly historyLimit?: number;
+    /**
+     * Whether the events of each agent are also written to its directory and
+     * read back when flotti starts again, so its tab survives the restart.
+     * Off unless asked for: `flotti run` asks, tests of fake fleets do not.
+     */
+    readonly persistHistory?: boolean;
+    /** Where a problem with the history on disk is reported; standard error by default. */
+    readonly warn?: (text: string) => void;
     /** How long a message may take to reach the agent before it counts as queued. */
     readonly queuedAfterMs?: number;
+    /**
+     * The fleet tools each agent flotti starts gets in its sessions; none when
+     * absent. `flotti run` gives them, tests of fake fleets do not.
+     */
+    readonly fleetTools?: { access(agentId: string): FleetToolsAccess };
 };
 /** One agent of the fleet with what the dashboard needs of it. */
 type Member = {
@@ -28,13 +61,19 @@ type Member = {
      * new running one that counts from one again; the offset keeps the numbers
      * of its id growing, so a page that has seen N still gets what comes next.
      */
-    readonly offset: number;
+    offset: number;
+    /** The history on disk; absent when it is kept in memory only. */
+    readonly file: HistoryFile | undefined;
     unsubscribe: () => void;
 };
 /** An agent the request names that is not in the fleet. */
 class UnknownAgentError extends Error {}
-function defaultAgent(agent: Agent): FleetAgent {
-    return agent.kind === 'local' ? new LocalAgentProcess(agent) : new A2AAgent(agent);
+function defaultAgent(
+    fleetTools: SupervisorOptions['fleetTools']
+): (agent: Agent) => FleetAgent {
+    return (agent) => agent.kind === 'local'
+        ? new LocalAgentProcess(agent, fleetTools === undefined ? {} : { fleetTools: fleetTools.access(agent.id) })
+        : new A2AAgent(agent);
 }
 function describeError(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -60,12 +99,16 @@ class Supervisor {
     private readonly createAgent: (agent: Agent) => FleetAgent;
     private readonly historyLimit: number;
     private readonly queuedAfterMs: number;
+    private readonly persistHistory: boolean;
+    private readonly warn: (text: string) => void;
     /** Last number given to an event of each id, kept when the agent goes: numbers of an id only grow. */
     private readonly lastSeq = new Map<string, number>();
     constructor(fleet: Fleet, options: SupervisorOptions = {}) {
-        this.createAgent = options.createAgent ?? defaultAgent;
+        this.createAgent = options.createAgent ?? defaultAgent(options.fleetTools);
         this.historyLimit = options.historyLimit ?? 5000;
         this.queuedAfterMs = options.queuedAfterMs ?? 500;
+        this.persistHistory = options.persistHistory ?? false;
+        this.warn = options.warn ?? ((text) => console.error(text));
         for (const agent of fleet.agents) {
             this.join(agent, []);
         }
@@ -79,6 +122,7 @@ class Supervisor {
                 name: agent.name,
                 kind: agent.kind,
                 ...(agent.description === undefined ? {} : { description: agent.description }),
+                ...harnessOf(agent),
                 status: running.status
             }));
     }
@@ -144,7 +188,7 @@ class Supervisor {
         const wasStopped = old.running.status === 'stopped';
         await old.running.stop().catch(() => undefined);
         old.unsubscribe();
-        const member = this.join(agent, old.history);
+        const member = this.join(agent, old.history, old.file);
         this.announce();
         if (!wasStopped) {
             void member.running.start().catch(() => undefined);
@@ -173,9 +217,23 @@ class Supervisor {
         this.announce();
         void this.start();
     }
-    /** Sends a message to one agent; says whether it was taken, waits in line, or failed. */
-    send(agentId: string, text: string): Promise<Delivery> {
-        return this.deliver(this.member(agentId), text);
+    /**
+     * Sends a message to one agent; says whether it was taken, waits in line, or failed.
+     *
+     * A message from another agent of the fleet names it in `from`: the
+     * receiver is told who it is from, and its tab shows the message as sent by
+     * that agent. This is how one agent writes to another, whatever carries the
+     * words to flotti — the A2A inbox (`to` of a `message` event), or a tool of
+     * flotti the agent calls.
+     *
+     * @throws UnknownAgentError when either agent is not in the fleet.
+     */
+    send(agentId: string, text: string, options: SendOptions = {}): Promise<Delivery> {
+        const member = this.member(agentId);
+        if (options.from !== undefined) {
+            this.member(options.from);
+        }
+        return this.deliver(member, text, options);
     }
     /**
      * Sends one message to many agents, each on its own: an agent that is down
@@ -206,28 +264,102 @@ class Supervisor {
         }
         return member;
     }
-    private join(agent: Agent, history: AgentEvent[]): Member {
+    /**
+     * Puts an agent to work in the fleet. A changed one goes on with the
+     * history it had; any other reads what its directory kept from the runs
+     * before, and a line says where that ends.
+     */
+    private join(agent: Agent, history: AgentEvent[], file?: HistoryFile): Member {
+        const { offset, historyFile, restoredAny } = this.restoreHistory(agent, history, file);
         const member: Member = {
             agent,
             running: this.createAgent(agent),
             history,
-            offset: this.lastSeq.get(agent.id) ?? 0,
+            offset,
+            file: historyFile,
             unsubscribe: () => undefined
         };
         this.members.set(agent.id, member);
-        member.unsubscribe = member.running.subscribe((event) => this.keep(member, event));
+        if (restoredAny) {
+            this.markRestored(member);
+        }
+        this.listen(member);
         return member;
+    }
+    /** Keeps every event of the member's agent, and forwards what it says to another agent. */
+    private listen(member: Member): void {
+        member.unsubscribe = member.running.subscribe((event) => {
+            this.keep(member, event);
+            if (event.type === 'message' && event.role === 'agent' && event.to !== undefined) {
+                this.forward(member, event.to, event.text);
+            }
+        });
+    }
+    /**
+     * Opens the history file of an agent that has none yet and, when the
+     * given history is empty, fills it with what the file kept from before.
+     */
+    private restoreHistory(
+        agent: Agent,
+        history: AgentEvent[],
+        file: HistoryFile | undefined
+    ): { offset: number; historyFile: HistoryFile | undefined; restoredAny: boolean } {
+        let offset = this.lastSeq.get(agent.id) ?? 0;
+        let historyFile = file;
+        let restoredAny = false;
+        if (historyFile === undefined && this.persistHistory) {
+            historyFile = new HistoryFile(agent.id, agent.directory, this.historyLimit, this.warn);
+            const restored = historyFile.load();
+            const last = restored.at(-1)?.seq ?? 0;
+            if (history.length === 0 && restored.length > 0 && last > offset) {
+                history.push(...restored);
+                offset = last;
+                restoredAny = true;
+            }
+        }
+        return { offset, historyFile, restoredAny };
+    }
+    /** The line that says where the restored history ends. */
+    private markRestored(member: Member): void {
+        this.keep(member, {
+            type: 'log',
+            source: 'flotti',
+            text: 'flotti was started again; everything above is from before.',
+            agentId: member.agent.id,
+            seq: 1,
+            time: new Date().toISOString()
+        });
+        member.offset += 1;
     }
     private announce(): void {
         this.notify({ type: 'fleet', agents: this.agents() });
     }
     private keep(member: Member, received: AgentEvent): void {
-        const event = member.offset === 0 ? received : { ...received, seq: received.seq + member.offset };
+        this.store(member, member.offset === 0 ? received : { ...received, seq: received.seq + member.offset });
+    }
+    /**
+     * Puts a line of flotti's own into the tab of an agent, between its events:
+     * it takes the next number, and the agent's events after it move one up.
+     */
+    private say(member: Member, text: string): void {
+        const agentId = member.agent.id;
+        member.offset += 1;
+        this.store(member, {
+            type: 'log',
+            source: 'flotti',
+            text,
+            agentId,
+            seq: (this.lastSeq.get(agentId) ?? 0) + 1,
+            time: new Date().toISOString()
+        });
+    }
+    private store(member: Member, event: AgentEvent): void {
         this.lastSeq.set(event.agentId, event.seq);
         member.history.push(event);
         if (member.history.length > this.historyLimit) {
             member.history.splice(0, member.history.length - this.historyLimit);
         }
+        member.file?.append(event, member.history);
         this.notify({ type: 'event', event });
     }
     private notify(notice: SupervisorNotice): void {
@@ -240,16 +372,47 @@ class Supervisor {
         }
     }
     /**
+     * Sends on what an agent said to another one. The sender does not wait for
+     * the receiver: a message that cannot be delivered is a line in the tab of
+     * the sender, saying why.
+     */
+    private forward(sender: Member, to: string, text: string): void {
+        const from = sender.agent.id;
+        const receiver = this.members.get(to);
+        const failed = (why: string): void => {
+            // Still in the fleet: it may have been removed while the message went.
+            if (this.members.get(from) === sender) {
+                this.say(sender, `could not deliver the message to "${to}": ${why}`);
+            }
+        };
+        if (receiver === undefined) {
+            failed('there is no such agent in the fleet');
+        } else if (receiver === sender) {
+            failed('an agent does not send messages to itself');
+        } else {
+            void this.hand(receiver, text, { from }).then((delivery) => {
+                if (delivery.result === 'failed') {
+                    failed(delivery.error ?? 'the agent did not take it');
+                }
+            });
+        }
+    }
+    /** Hands the message over; resolves once the agent took it or it failed, however long that takes. */
+    private hand(member: Member, text: string, options: SendOptions): Promise<Delivery> {
+        const agentId = member.agent.id;
+        return member.running.send(text, options).then(
+            (): Delivery => ({ agentId, result: 'taken' }),
+            (error: unknown): Delivery => ({ agentId, result: 'failed', error: describeError(error) })
+        );
+    }
+    /**
      * Hands the message over and answers within `queuedAfterMs`: an agent busy
      * with another message takes it only later, and the answer does not wait
      * for that — a `delivery` notice tells how it ended.
      */
-    private deliver(member: Member, text: string): Promise<Delivery> {
+    private deliver(member: Member, text: string, options: SendOptions = {}): Promise<Delivery> {
         const agentId = member.agent.id;
-        const sent = member.running.send(text).then(
-            (): Delivery => ({ agentId, result: 'taken' }),
-            (error: unknown): Delivery => ({ agentId, result: 'failed', error: describeError(error) })
-        );
+        const sent = this.hand(member, text, options);
         return new Promise((resolve) => {
             let answered = false;
             const timer = setTimeout(() => {

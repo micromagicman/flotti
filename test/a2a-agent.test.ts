@@ -2,8 +2,8 @@ import { deepStrictEqual, match, ok, rejects, strictEqual } from 'node:assert/st
 import { afterEach, describe, it } from 'node:test';
 import { TaskState } from '@a2a-js/sdk';
 import { AgentEvent } from '@a2a-js/sdk/server';
-import type { RequestContext } from '@a2a-js/sdk/server';
-import { A2AAgent, RESTART_EXTENSION, cardLocation } from '../src/a2a-agent.js';
+import type { ExecutionEventBus, RequestContext } from '@a2a-js/sdk/server';
+import { A2AAgent, INBOX_EXTENSION, RESTART_EXTENSION, cardLocation } from '../src/a2a-agent.js';
 import type { A2AAgentOptions } from '../src/a2a-agent.js';
 import type { AgentEvent as DashboardEvent, AgentStatus } from '../src/agent-events.js';
 import type { RemoteAgent, RemoteAuth } from '../src/types.js';
@@ -433,6 +433,160 @@ describe('A2AAgent: restart with the extension', () => {
         await client.start();
         await rejects(client.restart(), /refused to restart/);
         strictEqual(client.status, 'error');
+    });
+});
+/**
+ * An agent with the inbox: it keeps the inbox task open, and the test makes it
+ * say things of its own with `post`.
+ */
+async function inboxAgent(options: Partial<FakeAgentOptions> = {}) {
+    const subscriptions: RequestContext[] = [];
+    let inbox: { bus: ExecutionEventBus; context: RequestContext } | undefined;
+    const agent = await fake({
+        extensions: [INBOX_EXTENSION],
+        ...options,
+        script: async (context, bus) => {
+            const params = context.userMessage.metadata?.[INBOX_EXTENSION] as { action?: string } | undefined;
+            if (params?.action === 'subscribe') {
+                subscriptions.push(context);
+                inbox = { bus, context };
+                bus.publish(task(context, TaskState.TASK_STATE_WORKING));
+                // The inbox stays open for as long as the executor runs.
+                await new Promise(() => undefined);
+            }
+            await echo(context, bus);
+        }
+    });
+    const post = (text: string, messageId: string, metadata?: Record<string, unknown>) => {
+        ok(inbox !== undefined, 'the inbox is not open');
+        const message = { ...agentMessage(text, inbox.context, messageId), metadata };
+        inbox.bus.publish(statusUpdate(inbox.context.taskId, inbox.context.contextId, TaskState.TASK_STATE_WORKING, message));
+    };
+    return { agent, subscriptions, post, isOpen: () => inbox !== undefined };
+}
+describe('A2AAgent: what the agent says of its own (the inbox extension)', () => {
+    it('shows a message the agent sends of its own, before and after a turn', async () => {
+        const { agent, subscriptions, post, isOpen } = await inboxAgent();
+        const { client, events } = connect(agent);
+        await client.start();
+        await eventually(isOpen);
+        deepStrictEqual(subscriptions[0]?.userMessage.metadata?.[INBOX_EXTENSION], { action: 'subscribe' });
+        strictEqual(agent.received[0]?.headers['a2a-extensions'], INBOX_EXTENSION);
+        post('MR is ready', 'own-1');
+        await eventually(() => messages(events).length === 1);
+        await client.send('hi');
+        await eventually(() => turnEnds(events).length === 1);
+        post('CI is green', 'own-2');
+        await eventually(() => messages(events).length === 4);
+        deepStrictEqual(messages(events).map(message => `${message.role}: ${message.text}`), [
+            'agent: MR is ready',
+            'user: hi',
+            'agent: echo: hi',
+            'agent: CI is green'
+        ]);
+        deepStrictEqual(turnEnds(events), ['end_turn']);
+        strictEqual(client.status, 'idle');
+    });
+    it('shows the progress of the agent and the status it reports while busy on its own', async () => {
+        const { agent, post, isOpen } = await inboxAgent();
+        const { client, events } = connect(agent);
+        await client.start();
+        await eventually(isOpen);
+        post('Running the tests', 'p1', { [INBOX_EXTENSION]: { kind: 'progress', busy: true } });
+        await reaches(client, 'working');
+        post('Tests are green', 'p2', { [INBOX_EXTENSION]: { kind: 'progress', busy: false } });
+        await reaches(client, 'idle');
+        deepStrictEqual(events.flatMap(event => event.type === 'progress' ? [event.text] : []), ['Running the tests', 'Tests are green']);
+        deepStrictEqual(messages(events), []);
+    });
+});
+describe('A2AAgent: messages between agents of the fleet', () => {
+    it('says which agent a message of its own is for', async () => {
+        const { agent, post, isOpen } = await inboxAgent();
+        const { client, events } = connect(agent);
+        await client.start();
+        await eventually(isOpen);
+        post('Please rerun the e2e job', 'to-1', { [INBOX_EXTENSION]: { to: 'builder' } });
+        post('Done here', 'to-2', { [INBOX_EXTENSION]: { to: '' } });
+        await eventually(() => messages(events).length === 2);
+        deepStrictEqual(events.flatMap(event => event.type === 'message' ? [[event.role, event.text, event.to]] : []), [
+            ['agent', 'Please rerun the e2e job', 'builder'],
+            ['agent', 'Done here', undefined]
+        ]);
+    });
+    it('tells the agent which agent a message is from, in the metadata', async () => {
+        const { agent, isOpen } = await inboxAgent();
+        const { client, events } = connect(agent);
+        await client.start();
+        await eventually(isOpen);
+        await client.send('rerun the tests', { from: 'reviewer' });
+        await eventually(() => turnEnds(events).length === 1);
+        const sent = agent.received.at(-1)?.params['message'] as { parts?: unknown; metadata?: Record<string, unknown> };
+        deepStrictEqual(sent.metadata?.[INBOX_EXTENSION], { from: 'reviewer' });
+        deepStrictEqual(events.flatMap(event => event.type === 'message' ? [[event.role, event.text, event.from]] : []), [
+            ['user', 'rerun the tests', 'reviewer'],
+            ['agent', 'echo: rerun the tests', undefined]
+        ]);
+    });
+    it('names the sender in the text as well to an agent without the inbox', async () => {
+        const agent = await fake({ script: echo });
+        const { client, events } = connect(agent);
+        await client.start();
+        await client.send('rerun the tests', { from: 'reviewer' });
+        await eventually(() => turnEnds(events).length === 1);
+        deepStrictEqual(events.flatMap(event => event.type === 'message' ? [[event.role, event.text, event.from]] : []), [
+            ['user', 'rerun the tests', 'reviewer'],
+            ['agent', 'echo: [from reviewer] rerun the tests', undefined]
+        ]);
+    });
+});
+describe('A2AAgent: keeping the inbox open', () => {
+    it('goes back to the inbox after its stream broke off, without losing what was said', async () => {
+        let drops = 0;
+        const { agent, post, isOpen } = await inboxAgent({
+            dropStream: (method, index) => method === 'SendStreamingMessage' && index === 1 && drops++ === 0
+        });
+        const { client, events } = connect(agent);
+        await client.start();
+        await eventually(isOpen);
+        post('said while the stream broke', 'own-1');
+        await eventually(() => agent.methods().includes('SubscribeToTask'));
+        post('said after', 'own-2');
+        await eventually(() => messages(events).length === 2);
+        deepStrictEqual(messages(events).map(message => message.text), ['said while the stream broke', 'said after']);
+        strictEqual(agent.methods().filter(method => method === 'SendStreamingMessage').length, 1);
+    });
+    it('closes the inbox when stopped and does not come back to it', async () => {
+        const { agent, isOpen } = await inboxAgent();
+        const { client } = connect(agent);
+        await client.start();
+        await eventually(isOpen);
+        await client.stop();
+        const asked = agent.received.length;
+        await new Promise(resolve => setTimeout(resolve, 100));
+        strictEqual(agent.received.length, asked);
+    });
+    it('does not open the inbox of an agent that cannot stream', async () => {
+        const { agent } = await inboxAgent({ streaming: false });
+        const { client, events } = connect(agent);
+        await client.start();
+        await new Promise(resolve => setTimeout(resolve, 50));
+        deepStrictEqual(agent.methods(), []);
+        ok(events.some(event => event.type === 'log' && /cannot stream/.test(event.text)));
+    });
+});
+describe('A2AAgent: replies', () => {
+    it('writes out the quoted message of a reply for the agent, and keeps the quote on the event', async () => {
+        const agent = await fake({ script: echo });
+        const { client, events } = connect(agent);
+        await client.start();
+        const replyTo = { agentId: 'remote', messageId: 'm1', text: 'deploy it' };
+        await client.send('which host?', { replyTo });
+        await eventually(() => turnEnds(events).length === 1);
+        deepStrictEqual(events.flatMap(event => event.type === 'message' ? [[event.role, event.text, event.replyTo]] : []), [
+            ['user', 'which host?', replyTo],
+            ['agent', 'echo: In reply to a message from the person:\n> deploy it\n\nwhich host?', undefined]
+        ]);
     });
 });
 describe('cardLocation', () => {

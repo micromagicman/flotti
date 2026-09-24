@@ -37,33 +37,85 @@ type Handover = {
  */
 function prepareHandover(agent: LocalAgent, env: Readonly<Record<string, string | undefined>>): Handover {
     const systemPrompt = readSystemPrompt(agent);
+    if (agent.ssh !== undefined) {
+        return remoteHandover(agent, env, systemPrompt);
+    }
     switch (agent.adapter) {
         case 'claude-code':
-            return {
-                env: {},
-                meta: {
-                    ...(systemPrompt === undefined ? {} : { systemPrompt: { append: systemPrompt } }),
-                    claudeCode: { options: { plugins: [{ type: 'local', path: agent.directory }] } }
-                },
-                additionalDirectories: [agent.directory],
-                notes: []
-            };
+            return localClaudeCodeHandover(agent, systemPrompt);
         case 'codex':
             linkCodexSkills(agent);
-            return {
-                env: systemPrompt === undefined ? {} : { [CODEX_CONFIG_VARIABLE]: codexConfig(env, systemPrompt) },
-                additionalDirectories: [agent.directory],
-                notes: []
-            };
+            return codexHandover(env, systemPrompt, [agent.directory], []);
         default:
-            return {
-                env: {},
-                additionalDirectories: [],
-                notes: systemPrompt === undefined
-                    ? []
-                    : ['system-prompt.md is not passed on: the manifest names no adapter, and ACP itself has no field for it']
-            };
+            return noAdapterHandover(systemPrompt);
     }
+}
+/** Claude Code on this machine: the system prompt in `_meta`, the agent directory as a local plugin. */
+function localClaudeCodeHandover(agent: LocalAgent, systemPrompt: string | undefined): Handover {
+    return {
+        env: {},
+        meta: {
+            ...(systemPrompt === undefined ? {} : { systemPrompt: { append: systemPrompt } }),
+            claudeCode: { options: { plugins: [{ type: 'local', path: agent.directory }] } }
+        },
+        additionalDirectories: [agent.directory],
+        notes: []
+    };
+}
+/** Codex, here or on another host: the system prompt goes in `CODEX_CONFIG`. */
+function codexHandover(
+    env: Readonly<Record<string, string | undefined>>,
+    systemPrompt: string | undefined,
+    additionalDirectories: readonly string[],
+    notes: readonly string[]
+): Handover {
+    return {
+        env: systemPrompt === undefined ? {} : { [CODEX_CONFIG_VARIABLE]: codexConfig(env, systemPrompt) },
+        additionalDirectories,
+        notes
+    };
+}
+/** An agent on this machine whose manifest names no adapter: nothing can be handed over. */
+function noAdapterHandover(systemPrompt: string | undefined): Handover {
+    return {
+        env: {},
+        additionalDirectories: [],
+        notes: systemPrompt === undefined
+            ? []
+            : ['system-prompt.md is not passed on: the manifest names no adapter, and ACP itself has no field for it']
+    };
+}
+/**
+ * An agent started on another host gets the system prompt — it goes as text —
+ * but not the agent directory: that is on this machine, and the agent works
+ * with the files of its host.
+ */
+function remoteHandover(
+    agent: LocalAgent,
+    env: Readonly<Record<string, string | undefined>>,
+    systemPrompt: string | undefined
+): Handover {
+    const notes = agent.adapter === undefined && systemPrompt !== undefined
+        ? ['system-prompt.md is not passed on: the manifest names no adapter, and ACP itself has no field for it']
+        : [];
+    const skipped = `skills/ and memory/ stay on this machine: the agent runs on ${agent.ssh}`;
+    switch (agent.adapter) {
+        case 'claude-code':
+            return remoteClaudeCodeHandover(systemPrompt, skipped);
+        case 'codex':
+            return codexHandover(env, systemPrompt, [], [skipped]);
+        default:
+            return { env: {}, additionalDirectories: [], notes };
+    }
+}
+/** Claude Code on another host: the system prompt in `_meta`, nothing from the agent directory. */
+function remoteClaudeCodeHandover(systemPrompt: string | undefined, skipped: string): Handover {
+    return {
+        env: {},
+        ...(systemPrompt === undefined ? {} : { meta: { systemPrompt: { append: systemPrompt } } }),
+        additionalDirectories: [],
+        notes: [skipped]
+    };
 }
 function readSystemPrompt(agent: LocalAgent): string | undefined {
     if (agent.systemPromptFile === undefined) {

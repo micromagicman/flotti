@@ -23,6 +23,12 @@ type FakeSetup = {
     readonly options?: LocalAgentOptions;
     /** Contents of system-prompt.md; no file when absent. */
     readonly systemPrompt?: string;
+    /**
+     * Started "on a host" over SSH — the pretend ssh of `options.ssh` — which
+     * passes on no variable of this side: what the pretend agent is to do goes
+     * in the manifest's `env` then.
+     */
+    readonly remote?: boolean;
 };
 /** A local agent that runs the pretend ACP agent, with its own directory and record file. */
 class Harness {
@@ -40,6 +46,7 @@ class Harness {
         if (setup.systemPrompt !== undefined) {
             writeFileSync(systemPromptFile, setup.systemPrompt);
         }
+        const fake = { record: this.recordFile, counter: join(this.directory, 'counter'), ...setup.fake };
         const manifest: LocalAgent = {
             kind: 'local',
             id: `agent-${made}`,
@@ -55,9 +62,9 @@ class Harness {
             skillsDirectory: join(this.directory, 'skills'),
             memoryDirectory: join(this.directory, 'memory'),
             ...(setup.systemPrompt === undefined ? {} : { systemPromptFile }),
+            ...(setup.remote === true ? { ssh: 'eva@example.org', workdir: '~', env: { FAKE_ACP: JSON.stringify(fake) } } : {}),
             ...setup.manifest
         };
-        const fake = { record: this.recordFile, counter: join(this.directory, 'counter'), ...setup.fake };
         this.agent = new LocalAgentProcess(manifest, {
             env: { ...process.env, FAKE_ACP: JSON.stringify(fake) },
             startSecs: 5,

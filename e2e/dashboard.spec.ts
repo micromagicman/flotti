@@ -15,6 +15,7 @@ import type { Page } from '@playwright/test';
 import { TaskState } from '@a2a-js/sdk';
 // The compiled helpers of the unit tests: `npm run test:e2e` builds them first.
 import { FakeAgent, agentMessage, said, statusUpdate, task } from '../build-test/test/a2a-fake-server.js';
+import { INBOX_EXTENSION } from '../build-test/src/a2a-agent.js';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CLI = join(ROOT, 'build', 'index.js');
 const FAKE_ACP = join(ROOT, 'build-test', 'test', 'fake-acp-agent.js');
@@ -22,24 +23,49 @@ const workspace = mkdtempSync(join(tmpdir(), 'flotti-e2e-'));
 let flotti: ChildProcess | undefined;
 let remote: InstanceType<typeof FakeAgent> | undefined;
 let url = '';
-function localAgent(fleet: string, id: string): void {
+function localAgent(fleet: string, id: string, adapter?: string): void {
     const directory = join(fleet, 'local', id);
     mkdirSync(directory, { recursive: true });
     const record = join(directory, 'record.jsonl');
     writeFileSync(join(directory, 'agent.json'), JSON.stringify({
         name: id,
+        ...(adapter === undefined ? {} : { adapter }),
         command: process.execPath,
         arguments: [FAKE_ACP],
         env: { FAKE_ACP: JSON.stringify({ record }) }
     }));
 }
+/**
+ * What the remote agent says of its own when asked to `write later`: a line of
+ * progress and then a message, through the inbox — after the turn is over.
+ * Asked to `write to claude`, it sends a message to that agent the same way.
+ */
 async function remoteAgent(fleet: string, id: string): Promise<void> {
+    let inbox: ((text: string, kind: string, to?: string) => void) | undefined;
     remote = await new FakeAgent({
         streaming: true,
+        extensions: [INBOX_EXTENSION],
         script: async (context, bus) => {
             bus.publish(task(context, TaskState.TASK_STATE_WORKING));
+            if ((context.userMessage.metadata?.[INBOX_EXTENSION] as { action?: string } | undefined)?.action === 'subscribe') {
+                let count = 0;
+                inbox = (text, kind, to) => bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_WORKING, {
+                    ...agentMessage(text, context, `own-${++count}`),
+                    metadata: { [INBOX_EXTENSION]: { kind, ...(to === undefined ? {} : { to }) } }
+                }));
+                await new Promise(() => undefined);
+            }
             bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_COMPLETED, agentMessage(`echo: ${said(context)}`, context)));
             bus.finished();
+            if (said(context) === 'write later') {
+                setTimeout(() => {
+                    inbox?.('Checking the pipeline', 'progress');
+                    inbox?.('The merge request is ready', 'message');
+                }, 100);
+            }
+            if (said(context) === 'write to claude') {
+                setTimeout(() => inbox?.('Please rerun the e2e job', 'message', 'claude'), 100);
+            }
         }
     }).listen();
     const directory = join(fleet, 'remote', id);
@@ -72,8 +98,8 @@ function starts(id: string): number {
 }
 test.beforeAll(async () => {
     const fleet = join(workspace, 'fleet');
-    localAgent(fleet, 'claude');
-    localAgent(fleet, 'codex');
+    localAgent(fleet, 'claude', 'claude-code');
+    localAgent(fleet, 'codex', 'codex');
     await remoteAgent(fleet, 'eva');
     url = await startFlotti(fleet);
 });
@@ -99,6 +125,13 @@ test('every agent has a tab with its status', async ({ page }) => {
         await expect(tab(page, name).locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     }
 });
+test('the header of an agent names its harness, and says when it is not known', async ({ page }) => {
+    await page.goto(url);
+    for (const [name, harness] of [['claude', 'claude'], ['codex', 'codex'], ['eva', 'harness unknown']] as const) {
+        await tab(page, name).click();
+        await expect(page.locator('.agent-header [data-harness]')).toHaveText(harness);
+    }
+});
 test('writes to one agent, and the answer stays in its tab', async ({ page }) => {
     await page.goto(url);
     await say(page, 'claude', 'hello claude');
@@ -110,6 +143,65 @@ test('writes to one agent, and the answer stays in its tab', async ({ page }) =>
     await expect(feed(page, 'codex')).not.toContainText('you said');
     await tab(page, 'claude').click();
     await expect(feed(page, 'claude')).toContainText('you said: hello claude');
+});
+test('what an agent says of its own shows in its tab, local and remote alike', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'claude', 'later');
+    await expect(feed(page, 'claude')).toContainText('CI is green');
+    await expect(feed(page, 'claude')).toContainText('Check CI');
+    await say(page, 'eva', 'write later');
+    await expect(feed(page, 'eva')).toContainText('echo: write later');
+    await expect(feed(page, 'eva').locator('.progress')).toHaveText('Checking the pipeline');
+    await expect(feed(page, 'eva').locator('.message-agent').last()).toContainText('The merge request is ready');
+});
+test('an agent writes to another: both tabs show who wrote to whom, apart from what a person typed', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'eva', 'write to claude');
+    const sent = feed(page, 'eva').locator('.message-sent');
+    await expect(sent.locator('.envelope-bar')).toContainText('eva → claude');
+    await expect(sent).toContainText('Please rerun the e2e job');
+    await tab(page, 'claude').click();
+    const received = feed(page, 'claude').locator('.message-peer');
+    await expect(received.locator('.envelope-bar')).toContainText('eva → claude');
+    await expect(received).toContainText('Please rerun the e2e job');
+    await expect(feed(page, 'claude')).toContainText('you said: [from eva] Please rerun the e2e job');
+});
+/** The row of the last message of the tab that says `text`, with its Reply and Forward. */
+const messageRow = (page: Page, name: string, text: string, side: 'user' | 'agent' = 'agent') =>
+    feed(page, name).locator(`.message-row-${side}`).filter({ hasText: text }).last();
+test('a reply quotes the message it answers, the agent reads the quote, and the quote leads back to it', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'codex', 'first words');
+    // The answer by its place in the feed: the answer to the reply will say "you said: first words" too.
+    const seq = await messageRow(page, 'codex', 'you said: first words').getAttribute('data-seq');
+    const answer = feed(page, 'codex').locator(`[data-seq="${seq}"]`);
+    await answer.hover();
+    await answer.getByRole('button', { name: 'Reply' }).click();
+    const field = page.getByRole('textbox', { name: 'Reply to codex' });
+    await expect(field).toBeFocused();
+    await field.fill('and more');
+    await field.press('Enter');
+    const reply = messageRow(page, 'codex', 'and more', 'user');
+    const quote = reply.getByRole('button', { name: 'Reply to codex: jump to the message' });
+    await expect(quote).toContainText('> codex');
+    await expect(quote).toContainText('you said: first words');
+    await expect(feed(page, 'codex')).toContainText(/you said: In reply to a message from you:\s*> you said: first words\s*and more/);
+    await expect(page.getByRole('textbox', { name: 'Message to codex' })).toBeVisible();
+    await quote.click();
+    await expect(answer).toHaveClass(/message-found/);
+});
+test('a message forwarded to another agent says who wrote it, in the tab of the receiver', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'codex', 'forward me');
+    const answer = messageRow(page, 'codex', 'you said: forward me');
+    await answer.hover();
+    await answer.getByRole('button', { name: 'Forward' }).click();
+    await answer.getByRole('group', { name: 'Forward to' }).getByRole('button', { name: 'claude' }).click();
+    await expect(answer.getByRole('status')).toHaveText('Forwarded to claude');
+    await tab(page, 'claude').click();
+    const forwarded = messageRow(page, 'claude', 'forwarded · codex', 'user');
+    await expect(forwarded.locator('.fwd')).toContainText('you said: forward me');
+    await expect(feed(page, 'claude')).toContainText(/you said: Forwarded from agent "codex":\s*you said: forward me/);
 });
 test('a broadcast reaches every agent picked, and each answers in its own tab', async ({ page }) => {
     await page.goto(url);
@@ -133,6 +225,56 @@ test('answers a permission request from the tab', async ({ page }) => {
     await expect(tab(page, 'codex').locator('[data-status]')).toHaveAttribute('data-status', 'waiting');
     await feed(page, 'codex').getByRole('button', { name: 'Allow' }).click();
     await expect(feed(page, 'codex')).toContainText('permission: yes');
+});
+/**
+ * A pretend Notification, and a page that is out of sight: the headless
+ * browser neither shows notifications nor loses focus by itself.
+ */
+function pretendNotifications(permission: NotificationPermission): void {
+    type Shown = { title: string; body: string | undefined; closed: boolean };
+    const shown: Shown[] = [];
+    let current = permission;
+    class PretendNotification {
+        static get permission(): NotificationPermission {
+            return current;
+        }
+        static requestPermission(): Promise<NotificationPermission> {
+            current = 'granted';
+            return Promise.resolve(current);
+        }
+        onclick: (() => void) | null = null;
+        private readonly record: Shown;
+        constructor(title: string, options?: NotificationOptions) {
+            this.record = { title, body: options?.body, closed: false };
+            shown.push(this.record);
+        }
+        close(): void {
+            this.record.closed = true;
+        }
+    }
+    Object.assign(window, { Notification: PretendNotification, shownNotifications: shown });
+    document.hasFocus = () => false;
+}
+const notifications = (page: Page) => page.evaluate(() => (window as unknown as { shownNotifications: unknown[] }).shownNotifications);
+test('a waiting agent stands out, counts in the title and notifies while the page is out of sight', async ({ page }) => {
+    await page.addInitScript(pretendNotifications, 'granted');
+    await page.goto(url);
+    await expect(page).toHaveTitle('flotti');
+    await say(page, 'codex', 'permission');
+    await expect(tab(page, 'codex')).toHaveClass(/tab-waiting/);
+    await expect(page).toHaveTitle('(1) flotti');
+    await expect.poll(() => notifications(page)).toEqual([expect.objectContaining({ title: 'codex is waiting for you', closed: false })]);
+    await feed(page, 'codex').getByRole('button', { name: 'Allow' }).click();
+    await expect(feed(page, 'codex')).toContainText('permission: yes');
+    await expect(tab(page, 'codex')).not.toHaveClass(/tab-waiting/);
+    await expect(page).toHaveTitle('flotti');
+    await expect.poll(() => notifications(page)).toEqual([expect.objectContaining({ closed: true })]);
+});
+test('asks for permission to notify only when the person clicks for it', async ({ page }) => {
+    await page.addInitScript(pretendNotifications, 'default');
+    await page.goto(url);
+    await page.getByRole('button', { name: 'Notify me' }).click();
+    await expect(page.getByRole('button', { name: 'Notify me' })).toHaveCount(0);
 });
 test('the restart button restarts a local agent and starts over with a remote one', async ({ page }) => {
     await page.goto(url);

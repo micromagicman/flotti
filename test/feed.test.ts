@@ -1,8 +1,8 @@
 import { deepStrictEqual, strictEqual } from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AgentEvent, AgentEventBody } from '../src/agent-events.js';
-import { applyEvent, emptyFeed, settlePermission } from '../web/src/feed.js';
-import type { AgentFeed } from '../web/src/feed.js';
+import { applyEvent, emptyFeed, forwardOf, quoteOf, quotedMessage, settlePermission } from '../web/src/feed.js';
+import type { AgentFeed, MessageItem } from '../web/src/feed.js';
 function feedOf(...bodies: AgentEventBody[]): AgentFeed {
     return bodies.reduce((feed: AgentFeed, body, index) =>
         applyEvent(feed, { ...body, agentId: 'a', seq: index + 1, time: '' } as AgentEvent), emptyFeed('idle'));
@@ -29,6 +29,28 @@ test('an id used again after the turn ended starts a new message', () => {
         { type: 'message', role: 'agent', messageId: 'm1', text: 'two', append: false }
     );
     deepStrictEqual(feed.items.flatMap((item) => (item.kind === 'message' ? [item.text] : [])), ['one', 'two']);
+});
+test('the progress of the agent is a line of its own, shown as it comes', () => {
+    const feed = feedOf(
+        { type: 'progress', text: 'Running the tests' },
+        { type: 'progress', text: 'Tests are green' }
+    );
+    deepStrictEqual(feed.items, [
+        { kind: 'progress', key: 'e1', text: 'Running the tests' },
+        { kind: 'progress', key: 'e2', text: 'Tests are green' }
+    ]);
+});
+test('a message between agents keeps who sent it and whom it went to', () => {
+    const feed = feedOf(
+        { type: 'message', role: 'user', messageId: 'u', text: 'rerun the tests', append: false, from: 'reviewer' },
+        { type: 'message', role: 'agent', messageId: 'm', text: 'on it', append: false, to: 'reviewer' },
+        { type: 'message', role: 'user', messageId: 'p', text: 'typed by hand', append: false }
+    );
+    deepStrictEqual(feed.items, [
+        { kind: 'message', key: 'm1', seq: 1, role: 'user', messageId: 'u', text: 'rerun the tests', from: 'reviewer' },
+        { kind: 'message', key: 'm2', seq: 2, role: 'agent', messageId: 'm', text: 'on it', to: 'reviewer' },
+        { kind: 'message', key: 'm3', seq: 3, role: 'user', messageId: 'p', text: 'typed by hand' }
+    ]);
 });
 test('updates of a tool call fold into one card', () => {
     const feed = feedOf(
@@ -60,4 +82,31 @@ test('a permission request settles when answered here or when the agent moves on
     deepStrictEqual(settled(asked), [false]);
     deepStrictEqual(settled(settlePermission(asked, 'r1')), [true]);
     deepStrictEqual(settled(applyEvent(asked, { type: 'status', status: 'working', agentId: 'a', seq: 3, time: '' })), [true]);
+});
+test('a reply quotes a message by its seq too: an agent may use one message id turn after turn', () => {
+    const feed = feedOf(
+        { type: 'message', role: 'agent', messageId: 'm1', text: 'one', append: false },
+        { type: 'turn-end', reason: 'end_turn' },
+        { type: 'message', role: 'agent', messageId: 'm1', text: 'two', append: false }
+    );
+    const first = feed.items[0];
+    strictEqual(first?.kind, 'message');
+    const quote = quoteOf(first as MessageItem, 'a');
+    deepStrictEqual(quote, { agentId: 'a', messageId: 'm1', seq: 1, author: 'a', text: 'one' });
+    strictEqual(quotedMessage(feed, quote)?.text, 'one');
+    strictEqual(quotedMessage(feed, { messageId: 'm1' })?.text, 'two', 'with no seq, the last message of that id');
+    strictEqual(quotedMessage(feed, { messageId: 'm1', seq: 99 }), undefined, 'a message gone from the feed');
+});
+test('a reply and a forward keep what they carry; a forward sent on again names who wrote it first', () => {
+    const replyTo = { agentId: 'b', messageId: 'x', author: 'b', text: 'red' };
+    const forwarded = { author: 'c', text: 'green' };
+    const feed = feedOf(
+        { type: 'message', role: 'user', messageId: 'u1', text: 'why?', append: false, replyTo },
+        { type: 'message', role: 'user', messageId: 'u2', text: '', append: false, from: 'b', forwarded }
+    );
+    const [reply, forward] = feed.items as MessageItem[];
+    deepStrictEqual(reply?.replyTo, replyTo);
+    deepStrictEqual(forwardOf(reply as MessageItem, 'a'), { text: 'why?' }, 'a person wrote it');
+    deepStrictEqual(forwardOf(forward as MessageItem, 'a'), forwarded);
+    deepStrictEqual(quoteOf(forward as MessageItem, 'a'), { agentId: 'a', messageId: 'u2', seq: 2, author: 'c', text: 'green' });
 });

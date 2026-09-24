@@ -12,32 +12,62 @@ they fall over) and **talks to remote agents** over A2A (see
 
 Node.js 20.11 or newer.
 
+## Install
+
+```bash
+npm install -g flotti
+```
+
+That puts the `flotti` command on your `PATH`. Without installing, `npx flotti <command>` does the same.
+
 ## Run
 
 ```bash
-npx flotti run      # starts the fleet and the dashboard: http://127.0.0.1:4870/
-npx flotti stop     # stops them, from any terminal
+flotti start    # starts the fleet and the dashboard in the background: http://127.0.0.1:4870/
+flotti status   # lists the agents of the fleet with their status
+flotti stop     # stops them, from any terminal
+flotti run      # what start does, in the foreground: Ctrl+C stops it
 ```
 
 That is the whole command line; everything else is done in the dashboard — agents are added, changed,
 removed, started and stopped there, and the fleet directory is picked there too (see
-[Settings](#settings)). Both commands also take `--fleet <dir>`, for tests and for several fleets on
-one machine (see [Where the fleet comes from](#where-the-fleet-comes-from)); `run` also takes
-`--port <port>` or `FLOTTI_PORT`.
+[Settings](#settings)). Every command also takes `--fleet <dir>`, for tests and for several fleets on
+one machine (see [Where the fleet comes from](#where-the-fleet-comes-from)); `start` and `run` also
+take `--port <port>` or `FLOTTI_PORT`.
 
-- **`flotti run`** reads the fleet, starts every agent, serves the dashboard and stays in the
-  foreground until it is stopped: Ctrl+C, a `SIGTERM`, or `flotti stop`. It stops its agents before
-  it exits. An agent that fails to start does not stop the others: its tab says why, and the restart
-  button tries again. One fleet is run by one flotti: a second `flotti run` of the same fleet refuses.
-- **`flotti stop`** finds the flotti that runs the fleet by `.flotti-run.json` in the fleet directory,
-  asks it to stop, and waits until it has — up to 30 s. It asks over the dashboard rather than with a
-  signal, because on Windows a signal kills at once and would leave the agents running. With nothing
-  running it says so and exits with `0`.
+- **`flotti start`** runs the fleet in the background and gives the terminal back once the dashboard
+  listens, printing its address. What `flotti run` would print goes to `.flotti.log` in the fleet
+  directory, rewritten on every start. If the fleet does not come up — a broken manifest, a taken
+  port — `start` prints why and exits with `1`, leaving nothing running. If the fleet already runs,
+  `start` does not start a second one: it says so, prints the address of its dashboard and exits
+  with `0`.
+- **`flotti run`** does the same in the foreground and stays there until it is stopped: Ctrl+C, a
+  `SIGTERM`, or `flotti stop`. It stops its agents before it exits. An agent that fails to start
+  does not stop the others: its tab says why, and the restart button tries again. One fleet is run
+  by one flotti: a second `flotti run` of the same fleet refuses.
+- **`flotti stop`** stops a fleet started by either of them. It finds the flotti that runs the fleet
+  by `.flotti-run.json` in the fleet directory, asks it to stop, and waits until it has — up to 30 s.
+  It asks over the dashboard rather than with a signal, because on Windows a signal kills at once and
+  would leave the agents running. With nothing running it says so and exits with `0`.
+- **`flotti status`** asks the running flotti for its agents and prints them as a table, one line an
+  agent; the harness is `-` where flotti does not know it (see [A local agent](#a-local-agent)):
+
+  ```text
+  flotti runs /home/me/.flotti/agents (process 4242), dashboard http://127.0.0.1:4870/
+
+  ID      TYPE    HARNESS  STATUS
+  claude  local   claude   idle
+  codex   local   codex    working
+  eva     remote  -        waiting
+  ```
+
+  With nothing running it says so and exits with `1`.
 
 On any problem with the fleet flotti prints one sentence explaining it and exits with a non-zero
 code, see [When something is wrong with it](#when-something-is-wrong-with-it).
 
-From the source: `npm ci`, `npm run build`, then `node build/index.js run`.
+From the source: `npm ci`, `npm run build`, then `node build/index.js start` (or `npm link` for the
+`flotti` command).
 
 ## The dashboard
 
@@ -46,6 +76,9 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
 - **A tab per agent**, local ones first: its name, its status — `starting`, `idle`, `working`, `waiting
   for you`, `error`, `stopped` — and a dot when it has said something since you last looked.
   `waiting for you` — a permission to grant, an answer the agent asked for — stands out the most.
+- **The header of the tab** names the harness that runs the agent — `claude` or `codex`, from the
+  `adapter` of its manifest. A local agent with no `adapter` and a remote agent do not tell which
+  harness runs them, and the header says `harness unknown` rather than guess.
 - **Inside the tab**: the agent's output as it comes — messages, collapsed reasoning, tool calls with
   their progress, permission requests with the options the agent offered, diagnostics, and whatever
   else the protocol said, raw and collapsed. Below it, a field to write to the agent: Enter sends,
@@ -54,6 +87,12 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   restart itself or starts a new conversation (see [Lifecycle](#lifecycle) and
   [Talking to a remote agent](#talking-to-a-remote-agent)); **Stop** stops it until **Start** starts it
   again; **Cancel** drops the message in work.
+- **Reply and Forward** sit on the corner of every message, on hover or focus (always, on a touch
+  screen). **Reply** puts the message above the field as a quote; the agent gets the quoted text above
+  your answer, and in the tab the quote leads back to the message it answers — in this tab or another
+  one — until the message is gone from the history. **Forward** sends the message, as it was, to
+  another agent you pick: its tab shows it under a bar "FORWARDED · AUTHOR" in the colour of whoever
+  wrote it, and the agent gets it as `Forwarded from …:` and the text. Escape drops the reply.
 - **All agents** sends one message to every agent you leave ticked. Each gets it on its own, so an
   agent that is down or busy holds nobody up; the page shows, agent by agent, whether the message was
   delivered, waits in line or failed, and the answers come in each agent's tab.
@@ -64,6 +103,11 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
 The settings page does what would otherwise be done by editing files, and it does it by writing the
 same files: the fleet stays directories a person can read and edit by hand.
 
+- **Connect over SSH.** A remote agent in one step: its `user@host`, and **Connect**. Your public key
+  has to be on the host; flotti asks the host which agents it publishes, adds them and keeps an SSH
+  tunnel to each one up — no `ssh -L`, no port, no token to copy. When it cannot, it says why: the key
+  is not accepted, the host is unknown or unreachable, the host publishes nothing. See
+  [Over SSH](#over-ssh).
 - **Agents.** Each agent of the fleet with its status and **Start**/**Stop**, **Restart**, **Edit**
   and **Delete**. **Add local agent** and **Add remote agent** open a form with every field of
   [the manifest](#the-manifest-agentjson) and, for a local agent, its system prompt. Picking an adapter
@@ -85,8 +129,17 @@ same files: the fleet stays directories a person can read and edit by hand.
 
 The server is the one source of truth and the page only follows it: every event of an agent has a
 number, and a page that connects — or reconnects after losing the connection — says which it has seen
-and gets only the rest. So a reload or a second window shows the same history; flotti keeps the last
-5000 events of each agent while it runs.
+and gets only the rest. So a reload or a second window shows the same history.
+
+The history also survives a restart — of one agent, of flotti, of the machine. flotti writes every
+event of an agent to `.flotti-history.jsonl` in the agent directory, one JSON event per line, and reads
+it back when it starts: the tab shows the conversation, tool calls, permission requests and status
+lines as they were, then a line *flotti was started again; everything above is from before*, and goes
+on. Event numbers go on too, so a page left open over the restart gets only what it has not seen. Each
+agent keeps its last 5000 events: once the file holds twice that many, it is rewritten with the newest
+5000, and the oldest are gone. The file is the agent's, like the rest of its directory: it goes to
+`.trash/` with it, and deleting the file clears the tab from the next start on. A file flotti cannot
+read or write is reported once on standard error; the agent runs on, without the history on disk.
 
 ### What the page talks to
 
@@ -95,12 +148,13 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | Request                                       | What it does                                           |
 |-----------------------------------------------|--------------------------------------------------------|
 | `GET /api/agents`                             | the agents and their statuses                          |
-| `POST /api/agents/<id>/messages` `{text}`     | a message to one agent: `taken`, `queued` or `failed`  |
+| `POST /api/agents/<id>/messages` `{text, replyTo?, forwarded?}` | a message to one agent: `taken`, `queued` or `failed`; `replyTo` quotes a message, `forwarded` sends one on (`text` may then be empty) |
 | `POST /api/broadcast` `{text, agents?}`       | one message to these agents, or to all; a result each  |
 | `POST /api/agents/<id>/restart`               | restarts the agent; answers at once, the status follows |
 | `POST /api/agents/<id>/cancel`                | drops the message in work                              |
 | `POST /api/agents/<id>/start`, `…/stop`       | starts or stops the agent; start answers at once        |
 | `POST /api/agents` `{kind, id, …}`            | a new agent: writes its directory and starts it         |
+| `POST /api/ssh-agents` `{target}`             | adds the agents `user@host` publishes, reached over SSH |
 | `GET /api/agents/<id>`                        | its manifest as the file says it, and its system prompt |
 | `PUT /api/agents/<id>` `{kind, id, …}`        | a changed manifest: writes it and restarts the agent    |
 | `DELETE /api/agents/<id>`                     | stops the agent and moves its directory to `.trash/`    |
@@ -124,10 +178,12 @@ Every agent is a directory, and the directory name is the agent id:
 │       ├── agent.json      the manifest
 │       ├── system-prompt.md  optional
 │       ├── skills/         the agent's own skills
-│       └── memory/         the agent's memory bank: markdown notes linked with [[…]]
+│       ├── memory/         the agent's memory bank: markdown notes linked with [[…]]
+│       └── .flotti-history.jsonl  what its tab shows, kept across restarts
 └── remote/                 agents that run elsewhere, reached over A2A
     └── eva/
-        └── agent.json
+        ├── agent.json
+        └── .flotti-history.jsonl
 ```
 
 - An id is letters, digits, `.`, `_` and `-`, starting with a letter or a digit. Ids are shared by
@@ -138,6 +194,8 @@ Every agent is a directory, and the directory name is the agent id:
 - `skills/` and `memory/` belong to the agent: flotti creates them when they are missing and never
   reads them. It hands them to the agent, as told in [Running a local agent](#running-a-local-agent).
 - `logs/` is where flotti keeps what a running agent said; see the same section.
+- `.flotti-history.jsonl` is the history of the agent's tab, written by flotti; see
+  [The dashboard](#the-dashboard).
 
 ### Where the fleet comes from
 
@@ -183,7 +241,8 @@ The smallest one:
 | `id`                  | no       | non-empty string                | —                              | If given, must equal the directory name; the directory is what counts.            |
 | `adapter`             | no       | `claude-code`, `codex`          | —                              | Which ACP adapter `command` starts, so flotti knows how to hand over the model, the system prompt and the skills. Without it the agent gets plain ACP only. |
 | `model`               | no       | non-empty string                | the adapter's own default      | Model the agent is asked to use.                                                 |
-| `workdir`             | no       | non-empty string                | the agent directory            | Directory the agent is started in; a relative one is taken from the agent directory, `~` is expanded. |
+| `ssh`                 | no       | `user@host`, `user@host:port`   | —                              | Start the agent on that host over SSH instead of here: see [On another host](#on-another-host). |
+| `workdir`             | no       | non-empty string                | the agent directory            | Directory the agent is started in; a relative one is taken from the agent directory, `~` is expanded. With `ssh`, a path on that host, `~` there by default. |
 | `env`                 | no       | object of strings               | `{}`                           | Variables added to the agent environment.                                        |
 | `restart`             | no       | `always`, `on-failure`, `never` | `on-failure`                   | What to do when the agent stops.                                                 |
 | `heartbeatTimeoutSec` | no       | positive number                 | `60`                           | Seconds without a heartbeat before the agent counts as lost.                      |
@@ -223,7 +282,8 @@ A full example:
 
 | Field         | Required | Type             | Default            | Meaning                                         |
 |---------------|----------|------------------|--------------------|-------------------------------------------------|
-| `url`         | yes      | `http:` or `https:` address | —       | Where the agent is.                             |
+| `url`         | yes, or `ssh` | `http:` or `https:` address | —  | Where the agent is.                             |
+| `ssh`         | yes, or `url` | `"user@host"`, or an object, below | — | Reach the agent through an SSH tunnel; see [Over SSH](#over-ssh). |
 | `protocol`    | no       | `a2a`            | `a2a`              | How to talk to it; A2A is the only one for now.  |
 | `auth`        | no       | object, below    | `{"type": "none"}` | How flotti proves itself to the agent.           |
 | `name`        | no       | non-empty string | the id             | Name shown to people.                            |
@@ -240,6 +300,19 @@ A full example:
 The manifest names the environment variable that holds the secret, never the secret itself: manifests
 are plain files, they get copied, shown in the dashboard and edited by it. flotti reads the variable
 when it connects; a value that does not look like a variable name is refused.
+
+An agent reached over SSH has `ssh` in place of `url`:
+
+```json
+{
+    "name": "Eva",
+    "ssh": {"target": "eva@build.example.org", "agent": "eva"}
+}
+```
+
+`"ssh": "eva@build.example.org"` is the same when the host publishes one agent. `target` is
+`user@host` or `user@host:port`; `agent` picks one of the agents the host publishes. `url` and `ssh`
+cannot both be given; `auth` may, for a host that publishes no token.
 
 ## Running a local agent
 
@@ -273,6 +346,68 @@ The extra workspace root is what lets the agent read its skills and keep its mem
 A `CODEX_CONFIG` of your own, in `env` or in the environment, is kept; a `developer_instructions` in it
 wins over `system-prompt.md`. The system prompt is read at every start, so an edit takes effect on a
 restart. A model the agent does not offer stops the start at once: a retry would not change the answer.
+
+### The fleet tools
+
+Every agent flotti starts gets the fleet as tools, with nothing to set up in the agent itself: flotti
+serves an MCP server of its own and names it in `mcpServers` of every `session/new`, `session/resume`
+and `session/load`. A bare Claude Code or Codex sees them as `mcp__flotti__…`:
+
+| Tool           | What it does                                                                          |
+|----------------|---------------------------------------------------------------------------------------|
+| `list_agents`  | the agents of the fleet — id, name, description, harness, status; the caller is marked `you` |
+| `send_message` | sends a message to another agent: `to` — its id, `text`                                |
+| `reply`        | answers the agent whose message came last, quoting it                                  |
+| `forward`      | forwards the last message another agent sent, as it was, to another agent; `comment` goes before it |
+
+A message sent so reaches the other agent like one from a person, but from that agent: its `message`
+event has `from` — the sender's id — and the agent gets it as `[from <id>] <text>`, the way every
+message from an agent reaches it (#23). What it says in its turn goes to its own tab, not back to the
+sender: an answer to an agent is a `send_message` or a `reply` too.
+A `reply` and a `forward` are the reply and the forward of the dashboard: the `message` event carries
+`replyTo` or `forwarded`, and the tab shows the quote or the forwarded message the same way (#30).
+Messages queue as a person's do; a tool call does not wait for the answer.
+
+The server speaks MCP over HTTP (the streamable transport, with plain JSON answers) on a free port of
+`127.0.0.1`, and every agent gets a token of its own in the `Authorization` header: the token tells who
+is sending, and without one of the fleet's tokens the server answers nothing. HTTP is the transport
+both adapters take — claude-agent-acp 0.81.1 declares `mcpCapabilities` `http` and `sse`, codex-acp
+1.13.1 `http` only, and both take `stdio`, which ACP requires of every agent — and the one an SSH
+tunnel carries to an agent on another host. An agent that declares no `http` gets no tools, and a log
+event says so. A remote A2A agent — one with a loop of its own — gets no tools; a message from an agent
+reaches it with a line saying who wrote.
+
+### On another host
+
+With `"ssh": "user@host"` flotti starts the agent on that host rather than here, and runs it like one
+here: start, stop, restart, the restart policy, the heartbeat and the status are the same. It is
+`ssh` that flotti starts, with `command` and `arguments` run on the host; ACP goes through the SSH
+connection, and so do the commands the agent runs and the files it works with — they are the host's.
+
+```json
+{
+    "adapter": "codex",
+    "command": "npx",
+    "arguments": ["-y", "@agentclientprotocol/codex-acp@1.13.1"],
+    "ssh": "dev@build.example.org",
+    "workdir": "~/projects/app"
+}
+```
+
+- **Access** is your SSH key, as for [remote agents over SSH](#over-ssh): the `ssh` of this machine
+  with your `~/.ssh/config` and agent, never asking anything. Nothing else is set up on the host but
+  what the agent needs to run: `npx` in the `PATH` of a non-interactive SSH session, and a login to
+  Claude Code or Codex there.
+- **`workdir`** is a path on the host — absolute, relative to the home directory there, or starting
+  with `~` — and the home directory when the manifest names none. The host says what it is before the
+  command starts, because ACP wants an absolute path.
+- **`env`** is all the agent gets of an environment besides the host's own: nothing of this machine
+  goes along.
+- **The fleet tools** go through a reverse tunnel of the same SSH connection: a port the host picks,
+  on its loopback, leads to the tools here.
+- **What stays here**: the agent directory — the manifest, `logs/`, the history of its tab. The system
+  prompt goes along as text; `skills/` and `memory/` do not, and a log event says so.
+- **Stop** ends `ssh`; the agent on the host gets the end of its input and goes.
 
 ### Lifecycle
 
@@ -343,6 +478,33 @@ agent: the dashboard gets the same events and drives it the same way.
 - **Restart.** An agent that declares the [restart extension](docs/a2a-restart.md) is asked to restart
   itself, and flotti reconnects once it is back. Any other agent cannot be restarted from here, so
   for it restart means a new conversation.
+- **What the agent says of its own.** An agent that declares the [inbox extension](docs/a2a-inbox.md)
+  gets a stream that flotti opens once and keeps open: through it the agent sends messages nobody asked
+  for — "the merge request is ready" — and lines about what it is busy with, and they show in its tab
+  like any other. A broken inbox is reconnected to for as long as the agent is connected. Without the
+  extension an A2A agent has no way to speak first: its tab shows only its answers.
+
+### Over SSH
+
+A remote agent often listens on the loopback of its own machine, reached with SSH. For it the manifest
+says `"ssh": "user@host"`, and flotti does the rest with nothing but the user's key:
+
+- **Asks the host** over SSH where the agent listens and which token it expects: the agent's A2A
+  adapter publishes both in `~/.flotti/a2a/<id>.json` on its host — the contract is in
+  [docs/a2a-ssh.md](docs/a2a-ssh.md). The token stays in memory: it is never written to the manifest,
+  a log or the dashboard.
+- **Opens the tunnel**: `ssh -N -L` from a free port on `127.0.0.1` to the published address, and sends
+  every request to that address — the one the card names too — down the tunnel.
+- **Keeps it up.** When the tunnel drops, the agent shows `starting` with the reason while flotti
+  tries again and `error` with "trying again in N s" between attempts, with pauses from 1 s to 30 s,
+  until it is back or the agent is stopped. A host that is away when flotti starts is tried the same way.
+- **Says why it could not**: the key is not accepted (and where the public key goes), the host is not
+  known, cannot be reached, or its key changed; the host publishes nothing, or several agents and the
+  manifest does not say which.
+
+SSH runs non-interactively (`BatchMode=yes`) through the `ssh` of this machine, so `~/.ssh/config`,
+the SSH agent and the known hosts are the user's own; a host seen for the first time is remembered
+(`StrictHostKeyChecking=accept-new`), one whose key changed is refused.
 
 Not done, on purpose:
 
@@ -365,13 +527,18 @@ for everything after N — and its time:
 | Event        | What it says                                                                                   |
 |--------------|------------------------------------------------------------------------------------------------|
 | `status`     | `starting`, `idle`, `working`, `waiting`, `error` or `stopped`, and why                        |
-| `message`    | a piece of a message: pieces with one `messageId` make one message, `append` adds to its end   |
+| `message`    | a piece of a message: pieces with one `messageId` make one message, `append` adds to its end; `from` — the agent that sent it, when not a person |
 | `thought`    | a piece of the agent's reasoning                                                               |
+| `progress`   | a line about what the agent is doing, shown in the open                                        |
 | `tool-call`  | a tool call started or changed                                                                 |
 | `permission` | the agent waits until a person picks an option                                                 |
 | `turn-end`   | the agent is done with a message: `end_turn`, `cancelled`, `error`, `input_required`, …        |
 | `log`        | a line of diagnostics                                                                          |
 | `raw`        | whatever else the protocol said, untouched                                                     |
+
+Events do not have to answer a message: what an agent says or does on its own, between the messages of a
+person, comes the same way. A local agent does so with any ACP `session/update` it sends outside a
+prompt; a remote one through the [inbox extension](docs/a2a-inbox.md).
 
 A kind of event one protocol has not got simply does not come from it: A2A has no thoughts, tool calls
 or permission requests — an A2A agent asks a person by pausing its task, and the next message answers.

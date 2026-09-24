@@ -7,14 +7,21 @@
  * every action has an answer of its own — a broadcast answers agent by agent —
  * while the socket only carries what the agents do.
  */
-import type { AgentEvent, AgentStatus } from './agent-events.js';
-import type { FleetSource, LocalAgentAdapter, RemoteAuth, RestartPolicy } from './types.js';
+import type { AgentEvent, AgentStatus, Forwarded, Quote } from './agent-events.js';
+import type { FleetSource, LocalAgentAdapter, RemoteAuth, RemoteSsh, RestartPolicy } from './types.js';
+/**
+ * The program that runs the agent. Known only where the manifest says it: the
+ * `adapter` of a local agent. A plain ACP agent and a remote one do not tell.
+ */
+type Harness = 'claude' | 'codex';
 /** An agent of the fleet as the page lists it. */
 type AgentSummary = {
     readonly id: string;
     readonly name: string;
     readonly kind: 'local' | 'remote';
     readonly description?: string;
+    /** Absent when flotti does not know it; never guessed. */
+    readonly harness?: Harness;
     readonly status: AgentStatus;
 };
 /**
@@ -38,9 +45,14 @@ type ServerMessage =
     | { readonly type: 'shutdown' };
 /** Body of `POST /api/agents/<id>/messages` and of `POST /api/broadcast`. */
 type SendRequest = {
+    /** May be empty only when a message is forwarded: nothing written above it. */
     readonly text: string;
     /** Broadcast only: which agents get it; every agent of the fleet when absent. */
     readonly agents?: readonly string[];
+    /** One agent only: the message this one answers. */
+    readonly replyTo?: Quote;
+    /** One agent only: a message of this or another tab, sent on as it was. */
+    readonly forwarded?: Forwarded;
 };
 /** Body of `POST /api/agents/<id>/permissions/<requestId>`; no option refuses the request. */
 type PermissionAnswer = {
@@ -96,6 +108,8 @@ type LocalAgentConfig = {
     readonly model?: string;
     readonly command: string;
     readonly arguments?: readonly string[];
+    /** `user@host`: flotti starts the agent on that host over SSH. */
+    readonly ssh?: string;
     readonly workdir?: string;
     readonly env?: Readonly<Record<string, string>>;
     readonly restart?: RestartPolicy;
@@ -103,14 +117,29 @@ type LocalAgentConfig = {
     /** Text of `system-prompt.md`; empty or absent means no such file. */
     readonly systemPrompt?: string;
 };
-/** The manifest of a remote agent as the settings page edits it. */
+/**
+ * The manifest of a remote agent as the settings page edits it: reached at
+ * `url`, or through an SSH tunnel to the host `ssh` names.
+ */
 type RemoteAgentConfig = {
     readonly kind: 'remote';
     readonly id: string;
     readonly name?: string;
     readonly description?: string;
-    readonly url: string;
+    readonly url?: string;
+    readonly ssh?: RemoteSsh;
     readonly auth?: RemoteAuth;
+};
+/** Body of `POST /api/ssh-agents`: the one thing a person gives to add the agents of a host. */
+type SshAgentsRequest = {
+    /** `user@host`, or `user@host:port`; the user's public key is already on the host. */
+    readonly target: string;
+};
+/** Answer to `POST /api/ssh-agents`: the agents the host publishes that joined the fleet. */
+type SshAgentsResponse = {
+    readonly added: readonly AgentSummary[];
+    /** Ids of the agents of the fleet the host's agents already were. */
+    readonly present?: readonly string[];
 };
 /**
  * Body of `POST /api/agents` (a new agent) and of `PUT /api/agents/<id>`
@@ -130,9 +159,12 @@ export type {
     ErrorResponse,
     FleetInfo,
     FleetSwitch,
+    Harness,
     LocalAgentConfig,
     PermissionAnswer,
     RemoteAgentConfig,
     SendRequest,
-    ServerMessage
+    ServerMessage,
+    SshAgentsRequest,
+    SshAgentsResponse
 };
