@@ -12,7 +12,7 @@ import {
     withA2AExtensions
 } from '@a2a-js/sdk/client';
 import type { Client } from '@a2a-js/sdk/client';
-import { AgentEvents, composeText, messageFields } from './agent-events.js';
+import { AgentEvents, WITHDRAWN, composeText, messageFields } from './agent-events.js';
 import type { AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
 import type { Environment } from './manifest.js';
 import { HealthTracker } from './connection-health.js';
@@ -135,6 +135,16 @@ const INTERRUPTED_STATES: readonly TaskState[] = [
     TaskState.TASK_STATE_INPUT_REQUIRED,
     TaskState.TASK_STATE_AUTH_REQUIRED
 ];
+/** A promise with the way to settle it from outside: the `send` of a message that waits its turn. */
+function settleable(): { delivery: Promise<void>; accepted: () => void; refused: (error: unknown) => void } {
+    let accepted!: () => void;
+    let refused!: (error: unknown) => void;
+    const delivery = new Promise<void>((resolve, reject) => {
+        accepted = resolve;
+        refused = reject;
+    });
+    return { delivery, accepted, refused };
+}
 /**
  * A remote agent of the fleet, spoken to over A2A with the official SDK: the
  * card is read from the agent address, the SDK picks the transport the card
@@ -177,6 +187,10 @@ class A2AAgent implements FleetAgent {
     private session = new AbortController();
     /** Messages wait here while the agent is busy with the previous one. */
     private queue: Promise<void> = Promise.resolve();
+    /** Turns of this session not over yet, the one in work included: a message sent now waits behind them. */
+    private turns = 0;
+    /** The messages that wait in line, by id: how each is refused when it leaves the line unsent. */
+    private readonly waiting = new Map<string, (error: Error) => void>();
     private contextId: string | undefined;
     private task: CurrentTask | undefined;
     /** The paused task the message of the current turn answers, as it was when the message went. */
@@ -267,15 +281,44 @@ class A2AAgent implements FleetAgent {
             return Promise.reject(new Error(`Agent ${this.agentId} is not connected; start it first.`));
         }
         const signal = this.session.signal;
-        let accepted!: () => void;
-        let refused!: (error: unknown) => void;
-        const delivery = new Promise<void>((resolve, reject) => {
-            accepted = resolve;
-            refused = reject;
-        });
-        const turn = this.queue.then(() => this.runTurn(client, text, options, signal, accepted, refused));
+        const sent = { ...options, messageId: options.messageId ?? randomUUID() };
+        const { delivery, accepted, refused } = settleable();
+        const queued = this.enqueue(text, sent, refused);
+        const turn = this.queue.then(async () => {
+            // Out of the line before its turn came: it was refused then.
+            if (!queued || this.waiting.delete(sent.messageId)) {
+                await this.runTurn(client, text, sent, signal, accepted, refused);
+            }
+        }).finally(() => this.turnOver(signal));
         this.queue = turn.catch(() => undefined);
         return delivery;
+    }
+    /** A turn of the session is over; one of an ended session was forgotten with it. */
+    private turnOver(signal: AbortSignal): void {
+        if (this.session.signal === signal) {
+            this.turns -= 1;
+        }
+    }
+    /** Counts the turn in; one that waits behind another says so. Returns whether it waits. */
+    private enqueue(text: string, sent: SendOptions & { messageId: string }, refused: (error: Error) => void): boolean {
+        const queued = this.turns > 0;
+        this.turns += 1;
+        if (queued) {
+            this.waiting.set(sent.messageId, refused);
+            this.events.emit({ type: 'queued', messageId: sent.messageId, text, ...messageFields(sent) });
+        }
+        return queued;
+    }
+    /** Takes a message that waits in line back out of it; its `send` rejects. */
+    withdraw(messageId: string): boolean {
+        const refused = this.waiting.get(messageId);
+        if (refused === undefined) {
+            return false;
+        }
+        this.waiting.delete(messageId);
+        this.events.emit({ type: 'unqueued', messageId, outcome: 'withdrawn' });
+        refused(new Error(WITHDRAWN));
+        return true;
     }
     async cancel(): Promise<void> {
         const task = this.task;
@@ -1062,6 +1105,13 @@ class A2AAgent implements FleetAgent {
         this.session.abort();
         this.session = new AbortController();
         this.queue = Promise.resolve();
+        this.turns = 0;
+        const reason = `Agent ${this.agentId} was stopped before the message was sent.`;
+        for (const [messageId, refused] of [...this.waiting]) {
+            this.waiting.delete(messageId);
+            this.events.emit({ type: 'unqueued', messageId, outcome: 'dropped', reason });
+            refused(new Error(reason));
+        }
     }
     private forgetConversation(): void {
         this.contextId = undefined;

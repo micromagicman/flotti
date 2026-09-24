@@ -305,6 +305,71 @@ test('a broadcast reaches every agent picked, and each answers in its own tab', 
     await tab(page, 'codex').click();
     await expect(feed(page, 'codex')).not.toContainText('ping');
 });
+/** Sends a message the agent is too busy to take: the field clears once the dashboard says it waits in line. */
+async function sayInLine(page: Page, name: string, text: string): Promise<void> {
+    await say(page, name, text);
+    await expect(page.getByRole('textbox', { name: `Message to ${name}` })).toHaveValue('');
+}
+/** The block of messages waiting in line at the end of the feed of `name`. */
+const nextUp = (page: Page, name: string) => feed(page, name).getByRole('group', { name: 'Next up' });
+test('a message to a busy agent waits in line in the feed, can be taken back, and joins the feed once taken', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'claude', 'wait');
+    await expect(tab(page, 'claude').locator('[data-status]')).toHaveAttribute('data-status', 'working');
+    await sayInLine(page, 'claude', 'second in line');
+    await sayInLine(page, 'claude', 'third in line');
+    const line = nextUp(page, 'claude');
+    await expect(line).toContainText('Next up · 2 in line');
+    await expect(line.locator('.message-queued .envelope-bar')).toHaveText([/In line · 1st/, /In line · 2nd/]);
+    await expect(line.locator('.message-queued')).toHaveText([/second in line/, /third in line/]);
+    await expect(tab(page, 'claude')).toContainText(/working\s*· 2 in line/);
+    await line.getByRole('button', { name: 'Cancel queued message 2' }).click();
+    await expect(line.locator('.message-queued')).toHaveText([/second in line/]);
+    await expect(tab(page, 'claude')).toContainText('1 in line');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(feed(page, 'claude')).toContainText('you said: second in line');
+    await expect(line).toHaveCount(0);
+    await expect(feed(page, 'claude').locator('.message-user').filter({ hasText: 'second in line' })).toHaveCount(1);
+    await expect(feed(page, 'claude')).not.toContainText('third in line');
+    await expect(tab(page, 'claude')).not.toContainText('in line');
+});
+test('a broadcast to busy agents waits in line in the tab of each', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'claude', 'wait');
+    await say(page, 'codex', 'wait');
+    await expect(tab(page, 'codex').locator('[data-status]')).toHaveAttribute('data-status', 'working');
+    await tab(page, 'All agents').click();
+    await page.getByRole('checkbox', { name: 'relay' }).uncheck();
+    await page.getByRole('textbox', { name: 'Message to all agents' }).fill('when you can');
+    await page.getByRole('button', { name: 'Send to 2 agents' }).click();
+    for (const name of ['claude', 'codex']) {
+        await expect(tab(page, name)).toContainText('1 in line');
+        await tab(page, name).click();
+        await expect(nextUp(page, name)).toContainText('when you can');
+        await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+        await expect(feed(page, name)).toContainText('you said: when you can');
+        await expect(nextUp(page, name)).toHaveCount(0);
+    }
+});
+test('a stop drops what waits in line: the message says it was not delivered, and goes again with one click', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'codex', 'wait');
+    await expect(tab(page, 'codex').locator('[data-status]')).toHaveAttribute('data-status', 'working');
+    await sayInLine(page, 'codex', 'do not lose me');
+    await expect(nextUp(page, 'codex')).toContainText('do not lose me');
+    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    const dropped = feed(page, 'codex').locator('.message-dropped').filter({ hasText: 'do not lose me' });
+    await expect(dropped).toHaveCount(1);
+    await expect(nextUp(page, 'codex')).toHaveCount(0);
+    const row = feed(page, 'codex').locator('[data-undelivered]').last();
+    await expect(row.locator('.dropped-line')).toContainText('Not delivered: ');
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await expect(tab(page, 'codex').locator('[data-status]')).toHaveAttribute('data-status', 'idle');
+    await row.getByRole('button', { name: 'Send again' }).click();
+    await expect(feed(page, 'codex')).toContainText('you said: do not lose me');
+    await expect(row.locator('.dropped-line')).toContainText('sent again');
+    await expect(row.getByRole('button', { name: 'Send again' })).toHaveCount(0);
+});
 test('answers a permission request from the tab', async ({ page }) => {
     await page.goto(url);
     await say(page, 'codex', 'permission');

@@ -178,6 +178,16 @@ const ROUTES: readonly Route[] = [
         }
     },
     {
+        method: 'DELETE',
+        pattern: /^\/api\/agents\/([^/]+)\/queue\/([^/]+)$/,
+        handle: async ({ supervisor }, [id, messageId]) => {
+            if (!supervisor.withdraw(id ?? '', messageId ?? '')) {
+                throw new HttpError(404, 'No such message waits in line: the agent may have taken it already.');
+            }
+            return [200, {}];
+        }
+    },
+    {
         method: 'POST',
         pattern: /^\/api\/agents\/([^/]+)\/permissions\/([^/]+)$/,
         handle: async ({ supervisor }, [id, requestId], body) => {
@@ -233,7 +243,12 @@ function messageOptions(body: unknown): SendOptions {
     const request = (body ?? {}) as Partial<SendRequest>;
     const replyTo = quoteOf(request.replyTo);
     const forwarded = forwardedOf(request.forwarded);
-    return { ...(replyTo === undefined ? {} : { replyTo }), ...(forwarded === undefined ? {} : { forwarded }) };
+    const retryOf = optionalString(request.retryOf, 'retryOf');
+    return {
+        ...(replyTo === undefined ? {} : { replyTo }),
+        ...(forwarded === undefined ? {} : { forwarded }),
+        ...(retryOf === undefined ? {} : { retryOf })
+    };
 }
 function broadcastTargets(body: unknown): string[] | undefined {
     const { agents } = (body ?? {}) as Partial<SendRequest>;

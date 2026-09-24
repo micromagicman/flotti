@@ -316,3 +316,36 @@ test('stops listening to the health of an agent that is removed', async () => {
     await supervisor.remove('relay');
     strictEqual(listeners.size, 0);
 });
+test('a broadcast to busy agents puts the message in line in the tab of each', async () => {
+    const { supervisor, fakes } = supervised('a', 'b');
+    await supervisor.start();
+    fake(fakes.get('a')).busy = true;
+    fake(fakes.get('b')).busy = true;
+    await supervisor.broadcast('hello');
+    for (const id of ['a', 'b']) {
+        const queued = supervisor.history(id).flatMap((event) => (event.type === 'queued' ? [event.text] : []));
+        deepStrictEqual(queued, ['hello'], `in line for ${id}`);
+    }
+});
+test('a message is taken back out of the line: the tab says so, and the late delivery says it failed', async () => {
+    const { supervisor, fakes, notices } = supervised('a');
+    await supervisor.start();
+    fake(fakes.get('a')).busy = true;
+    deepStrictEqual(await supervisor.send('a', 'wait for me', { messageId: 'q-1' }), { agentId: 'a', result: 'queued' });
+    strictEqual(supervisor.withdraw('a', 'q-1'), true);
+    strictEqual(supervisor.withdraw('a', 'q-1'), false, 'it is not in line any more');
+    throws(() => supervisor.withdraw('nobody', 'q-1'), UnknownAgentError);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(supervisor.history('a').flatMap((event) => (event.type === 'unqueued' ? [event.outcome] : [])), ['withdrawn']);
+    deepStrictEqual(notices.filter((notice) => notice.type === 'delivery'), [
+        { type: 'delivery', delivery: { agentId: 'a', result: 'failed', error: 'the message was taken out of the line' } }
+    ]);
+});
+test('a message sent again names the one it replaces, in its events', async () => {
+    const { supervisor, fakes } = supervised('a');
+    await supervisor.start();
+    await supervisor.send('a', 'once more', { retryOf: 'lost-1' });
+    deepStrictEqual(fake(fakes.get('a')).options.map((options) => options.retryOf), ['lost-1']);
+    const message = supervisor.history('a').find((event) => event.type === 'message' && event.role === 'user');
+    strictEqual(message?.type === 'message' ? message.retryOf : undefined, 'lost-1');
+});

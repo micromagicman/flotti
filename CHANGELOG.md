@@ -6,6 +6,12 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Added
 
+- **Messages in line show in the chat.** A message sent to a busy agent shows at once at the end of its
+  tab, in a "NEXT UP" block under a dashed amber line, with its place in line and **✕ cancel** to take
+  it back; the sidebar says "working · 2 in line". Once the agent takes it, it joins the feed where its
+  turn starts. A broadcast to busy agents shows in the tab of each. A message the line lost — Stop or
+  Restart of the agent, or a restart of flotti — says "Not delivered" and why, with **Send again**
+  (#46).
 - **Conversations of agents.** Every two agents that wrote to each other get a tab under
   "Conversations": one read-only lane of all they sent each other, in order, with quotes and forwards,
   and **Write to …** for either agent. The sidebar names the four newest pairs; the rest, and all of

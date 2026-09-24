@@ -69,6 +69,35 @@ type AgentEventBody =
          * one who forwarded it wrote above it, and may be empty.
          */
         readonly forwarded?: Forwarded;
+        /** The `messageId` of an undelivered message this one sends again (`role: 'user'`). */
+        readonly retryOf?: string;
+    }
+    /**
+     * A message that has to wait in line: the agent is busy with another one,
+     * or not ready yet. Once the agent takes it, a `message` event with the same
+     * `messageId` follows; a message that never gets there ends with `unqueued`.
+     */
+    | {
+        readonly type: 'queued';
+        readonly messageId: string;
+        readonly text: string;
+        /** As in a `message` event: the agent of the fleet that sent it, and what it answers, sends on or sends again. */
+        readonly from?: string;
+        readonly replyTo?: Quote;
+        readonly forwarded?: Forwarded;
+        readonly retryOf?: string;
+    }
+    /**
+     * A queued message left the line without reaching the agent:
+     * - `withdrawn` — a person took it back;
+     * - `dropped`   — the agent stopped or restarted, or flotti did, before its turn;
+     *                 `reason` says which.
+     */
+    | {
+        readonly type: 'unqueued';
+        readonly messageId: string;
+        readonly outcome: 'withdrawn' | 'dropped';
+        readonly reason?: string;
     }
     /** A piece of the agent's reasoning, shown apart from its answer. */
     | { readonly type: 'thought'; readonly text: string }
@@ -154,14 +183,34 @@ type SendOptions = {
     readonly messageId?: string;
     readonly replyTo?: Quote;
     readonly forwarded?: Forwarded;
+    /** The `messageId` of an undelivered message this one sends again. */
+    readonly retryOf?: string;
 };
-/** The fields of a `message` event a sent message carries on, beyond its text. */
-function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message' }, 'from' | 'replyTo' | 'forwarded'> {
+/** The fields of a `message` or `queued` event a sent message carries on, beyond its text. */
+function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message' }, 'from' | 'replyTo' | 'forwarded' | 'retryOf'> {
     return {
         ...(options.from === undefined ? {} : { from: options.from }),
         ...(options.replyTo === undefined ? {} : { replyTo: options.replyTo }),
-        ...(options.forwarded === undefined ? {} : { forwarded: options.forwarded })
+        ...(options.forwarded === undefined ? {} : { forwarded: options.forwarded }),
+        ...(options.retryOf === undefined ? {} : { retryOf: options.retryOf })
     };
+}
+/** Why a message taken back out of the line never reached the agent: its `send` rejects with it. */
+const WITHDRAWN = 'the message was taken out of the line';
+/**
+ * The messages still in line after these events of one agent, oldest first:
+ * queued, and neither taken — its `message` event came — nor out of the line.
+ */
+function waitingInLine(events: readonly AgentEvent[]): (AgentEvent & { type: 'queued' })[] {
+    const waiting = new Map<string, AgentEvent & { type: 'queued' }>();
+    for (const event of events) {
+        if (event.type === 'queued') {
+            waiting.set(event.messageId, event);
+        } else if (event.type === 'unqueued' || (event.type === 'message' && event.role === 'user')) {
+            waiting.delete(event.messageId);
+        }
+    }
+    return [...waiting.values()];
 }
 /** Whose message it was, as the agent that reads it is told. */
 function whose(author: string | undefined, reader: string): string {
@@ -214,8 +263,18 @@ interface FleetAgent {
      *
      * A message another agent sends goes the same way, with `from` naming the
      * sender: the agent is told who it is from, and its `message` event says so.
+     *
+     * A message that has to wait says so at once with a `queued` event, under
+     * the `messageId` of the options — or one of its own when they give none.
      */
     send(text: string, options?: SendOptions): Promise<void>;
+    /**
+     * Takes a message that waits in line back out of it, before the agent got
+     * it: an `unqueued` event says so, and its `send` rejects.
+     *
+     * @returns Whether the message was still waiting.
+     */
+    withdraw(messageId: string): boolean;
     /** Asks the agent to drop what it is working on; does nothing when it is not busy. */
     cancel(): Promise<void>;
     /**
@@ -270,7 +329,7 @@ class AgentEvents {
         this.listeners.clear();
     }
 }
-export { AgentEvents, composeText, messageFields };
+export { AgentEvents, WITHDRAWN, composeText, messageFields, waitingInLine };
 export type {
     AgentEvent,
     AgentEventBody,

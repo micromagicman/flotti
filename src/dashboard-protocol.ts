@@ -60,6 +60,8 @@ type SendRequest = {
     readonly replyTo?: Quote;
     /** One agent only: a message of this or another tab, sent on as it was. */
     readonly forwarded?: Forwarded;
+    /** One agent only: the `messageId` of a message that was not delivered, sent again with this one. */
+    readonly retryOf?: string;
 };
 /** Body of `POST /api/agents/<id>/permissions/<requestId>`; no option refuses the request. */
 type PermissionAnswer = {
@@ -71,7 +73,9 @@ type Delivery = {
     /**
      * - `taken`  — the agent has it;
      * - `queued` — the agent is busy and the message waits in line; a `delivery`
-     *              message on the socket says later how it ended;
+     *              message on the socket says later how it ended. The tab of the
+     *              agent learns it from the `queued` event, and a person may take
+     *              the message back: `DELETE /api/agents/<id>/queue/<messageId>`;
      * - `failed` — it never got there.
      */
     readonly result: 'taken' | 'queued' | 'failed';

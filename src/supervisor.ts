@@ -1,6 +1,7 @@
 import { A2AAgent } from './a2a-agent.js';
 import { AgentAnswers } from './agent-answers.js';
-import type { AgentEvent, FleetAgent, Quote, SendOptions } from './agent-events.js';
+import { waitingInLine } from './agent-events.js';
+import type { AgentEvent, AgentEventBody, FleetAgent, Quote, SendOptions } from './agent-events.js';
 import { HistoryFile } from './agent-history.js';
 import type { ConnectionHealth } from './connection-health.js';
 import type { AgentSummary, Delivery, Harness } from './dashboard-protocol.js';
@@ -257,6 +258,15 @@ class Supervisor {
             : [...new Set(agentIds)].map((id) => this.member(id));
         return Promise.all(members.map((member) => this.deliver(member, text)));
     }
+    /**
+     * Takes a message that waits in line for the agent back out of it.
+     *
+     * @returns Whether it was still waiting: one the agent took already stays.
+     * @throws UnknownAgentError when the agent is not in the fleet.
+     */
+    withdraw(agentId: string, messageId: string): boolean {
+        return this.member(agentId).running.withdraw(messageId);
+    }
     cancel(agentId: string): Promise<void> {
         return this.member(agentId).running.cancel();
     }
@@ -353,16 +363,21 @@ class Supervisor {
         }
         return { offset, historyFile, restoredAny };
     }
-    /** The line that says where the restored history ends. */
+    /**
+     * The line that says where the restored history ends. The line of messages
+     * lived in memory and is gone: what waited in it is said to be dropped, so
+     * the tab does not show it waiting for ever.
+     */
     private markRestored(member: Member): void {
-        this.keep(member, {
-            type: 'log',
-            source: 'flotti',
-            text: 'flotti was started again; everything above is from before.',
-            agentId: member.agent.id,
-            seq: 1,
-            time: new Date().toISOString()
-        });
+        const lost = waitingInLine(member.history);
+        this.afterRestore(member, { type: 'log', source: 'flotti', text: 'flotti was started again; everything above is from before.' });
+        for (const { messageId } of lost) {
+            this.afterRestore(member, { type: 'unqueued', messageId, outcome: 'dropped', reason: 'flotti restarted' });
+        }
+    }
+    /** An event of flotti's own after the restored history, before anything the agent says. */
+    private afterRestore(member: Member, body: AgentEventBody): void {
+        this.keep(member, { ...body, agentId: member.agent.id, seq: 1, time: new Date().toISOString() } as AgentEvent);
         member.offset += 1;
     }
     /**

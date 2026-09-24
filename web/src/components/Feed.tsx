@@ -1,8 +1,11 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { RefObject, UIEvent } from 'react';
+import type { AgentStatus } from '../../../src/agent-events.js';
 import type { AgentSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
-import type { FeedItem } from '../feed.js';
+import type { FeedItem, QueuedMessage } from '../feed.js';
+import { NextUp, Undelivered } from './InLine.js';
+import type { LineActions } from './InLine.js';
 import { Message } from './Message.js';
 import type { MessageActions } from './Message.js';
 /** A message to bring into view: the one a quote points at. `n` tells one ask from the next. */
@@ -16,7 +19,13 @@ type FeedProps = {
     readonly colors: AgentColors;
     readonly onAnswer: (requestId: string, optionId?: string) => void;
     readonly actions: MessageActions;
+    readonly line: LineActions;
     readonly jump?: Jump | undefined;
+};
+type FeedViewProps = FeedProps & {
+    /** Messages waiting for the agent, shown after everything else. */
+    readonly queue: readonly QueuedMessage[];
+    readonly status: AgentStatus;
 };
 function PermissionOptions({ item, onAnswer }: { readonly item: FeedItem & { kind: 'permission' }; readonly onAnswer: FeedProps['onAnswer'] }) {
     return (
@@ -54,7 +63,7 @@ function ToolEntry({ item }: { readonly item: FeedItem & { kind: 'tool' } }) {
     );
 }
 /** Everything in the feed but messages and permission requests. */
-function NoteEntry({ item }: { readonly item: Exclude<FeedItem, { kind: 'message' | 'permission' }> }) {
+function NoteEntry({ item }: { readonly item: Exclude<FeedItem, { kind: 'message' | 'permission' | 'undelivered' }> }) {
     switch (item.kind) {
         case 'thought':
             return <details className="item thought"><summary>Thinking</summary><div className="text">{item.text}</div></details>;
@@ -72,10 +81,12 @@ function NoteEntry({ item }: { readonly item: Exclude<FeedItem, { kind: 'message
             return <details className="item raw"><summary>{item.protocol.toUpperCase()} message</summary><pre>{JSON.stringify(item.payload, null, 2)}</pre></details>;
     }
 }
-function FeedEntry({ item, onAnswer, ...fleet }: { readonly item: FeedItem } & Omit<FeedProps, 'items' | 'jump'>) {
+function FeedEntry({ item, onAnswer, line, ...fleet }: { readonly item: FeedItem } & Omit<FeedProps, 'items' | 'jump'>) {
     switch (item.kind) {
         case 'message':
             return <Message item={item} {...fleet} />;
+        case 'undelivered':
+            return <Undelivered item={item} onSendAgain={line.onSendAgain} {...fleet} />;
         case 'permission':
             return <Permission item={item} onAnswer={onAnswer} />;
         default:
@@ -83,7 +94,9 @@ function FeedEntry({ item, onAnswer, ...fleet }: { readonly item: FeedItem } & O
     }
 }
 /** Keeps the newest output in view, unless the reader scrolled up from the bottom. */
-function usePinnedScroll(items: readonly unknown[]) {
+/** No line of messages: the same one each time, so the scroll does not run again for nothing. */
+const NO_QUEUE: readonly QueuedMessage[] = [];
+function usePinnedScroll(items: readonly unknown[], queue: readonly QueuedMessage[] = NO_QUEUE) {
     const list = useRef<HTMLDivElement>(null);
     const pinned = useRef(true);
     useLayoutEffect(() => {
@@ -91,7 +104,7 @@ function usePinnedScroll(items: readonly unknown[]) {
         if (element !== null && pinned.current) {
             element.scrollTop = element.scrollHeight;
         }
-    }, [items]);
+    }, [items, queue]);
     const onScroll = (event: UIEvent<HTMLDivElement>): void => {
         const element = event.currentTarget;
         pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
@@ -112,10 +125,10 @@ function useJump(list: RefObject<HTMLDivElement | null>, agentId: string, jump: 
         target.classList.add('message-found');
     }, [list, agentId, jump]);
 }
-/** The agent's output, newest at the bottom; follows new output unless the reader scrolled up. */
-function Feed({ items, onAnswer, jump, ...fleet }: FeedProps) {
+/** The agent's output, newest at the bottom, and what waits for it; follows new output unless the reader scrolled up. */
+function Feed({ items, queue, status, onAnswer, jump, ...fleet }: FeedViewProps) {
     const { agentName, agentId } = fleet;
-    const { list, onScroll } = usePinnedScroll(items);
+    const { list, onScroll } = usePinnedScroll(items, queue);
     useJump(list, agentId, jump);
     return (
         <div
@@ -125,8 +138,9 @@ function Feed({ items, onAnswer, jump, ...fleet }: FeedProps) {
             ref={list}
             onScroll={onScroll}
         >
-            {items.length === 0 ? <p className="muted empty">Nothing yet. Say something to {agentName}.</p> : null}
+            {items.length === 0 && queue.length === 0 ? <p className="muted empty">Nothing yet. Say something to {agentName}.</p> : null}
             {items.map((item) => <FeedEntry key={item.key} item={item} onAnswer={onAnswer} {...fleet} />)}
+            <NextUp queue={queue} status={status} onWithdraw={fleet.line.onWithdraw} {...fleet} />
         </div>
     );
 }

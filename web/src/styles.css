@@ -383,3 +383,20 @@ button.danger { color: var(--bad); border-color: var(--bad); }
 .settings textarea { resize: vertical; font-family: var(--mono); font-size: 12px; }
 .settings input:focus, .settings select:focus, .settings textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .settings input[readonly] { color: var(--muted); }
+/*
+ * Messages waiting in line for the agent (#46): after the feed, cut off by a
+ * dashed amber line, each an envelope with an amber bar and its place in line.
+ */
+.next-up { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; border-top: 2px dashed var(--wait); padding-top: 8px; margin-top: 4px; flex-shrink: 0; max-width: 900px; width: 100%; }
+.next-up-head { align-self: stretch; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-family: var(--mono); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: color-mix(in srgb, var(--wait) 75%, var(--text)); }
+.message-queued { padding: 0; overflow: hidden; flex-shrink: 0; border: 1px solid var(--wait); background: color-mix(in srgb, var(--wait) 6%, var(--panel)); }
+.message-queued .envelope-bar { display: flex; justify-content: space-between; gap: 8px; align-items: center; background: color-mix(in srgb, var(--wait) 22%, var(--panel)); color: color-mix(in srgb, var(--wait) 45%, var(--text)); }
+.queue-cancel { background: transparent; border: 0; border-radius: 4px; padding: 0 6px; font-family: var(--mono); font-size: 11px; color: inherit; text-transform: inherit; letter-spacing: inherit; }
+.queue-cancel:hover:not(:disabled) { background: color-mix(in srgb, var(--muted) 14%, transparent); }
+.queue-cancel:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* A message dropped from the line: its words stay, with the way to send it again. */
+.message-dropped { background: transparent; border: 1px dashed var(--bad); }
+.dropped-line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; font-size: 12px; color: var(--bad); }
+.dropped-line button { font-size: 12px; padding: 0 8px; }
+.tab-status { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.tab-in-line { font-size: 12px; color: color-mix(in srgb, var(--wait) 75%, var(--text)); }
