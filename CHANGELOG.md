@@ -2,7 +2,10 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0]
+
+A fleet that lives on: agents that talk to each other and speak first, remote hosts over SSH, a chat
+history that survives restarts, and a global install with `flotti start`.
 
 ### Added
 
@@ -40,6 +43,16 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   stands on the person's side as an envelope with a bar "SENDER → RECEIVER" in the sender's colour;
   the sender's tab shows the same envelope, and a line when it could not be delivered. Each agent gets
   a colour of its own, picked at random and kept (#23).
+- **Waiting agents get attention.** A tab whose agent waits for an answer is highlighted, the page
+  title counts the waiting agents, and a browser notification tells when one starts to wait (#27).
+- **The harness in the header.** The header of an agent's chat names its harness — `claude`, `codex`
+  — or says it is unknown (#24).
+- **CI.** Checks run on pull requests and on pushes to `main` and `develop`; a `v*` tag publishes the
+  package to npm (#25).
+
+### Changed
+
+- The linter limits functions in `src` and `web` to 20 lines; tests are exempt (#39).
 
 ## [0.1.0] — MVP
 
@@ -77,4 +90,5 @@ The first release: a fleet of AI agents and one dashboard to work with them.
   ([micromagicman/eva#266](https://github.com/micromagicman/eva/issues/266)).
 - The A2A adapter of Cutie, on the same contract as Eva's (owners/quanthread-ai-hub#218, !194).
 
+[0.2.0]: https://github.com/micromagicman/flotti/releases/tag/v0.2.0
 [0.1.0]: https://github.com/micromagicman/flotti/releases/tag/v0.1.0
