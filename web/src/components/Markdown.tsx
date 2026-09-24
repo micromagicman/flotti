@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Block, Inline, ListItem } from '../markdown.js';
+import { useT } from '../i18n/I18n.js';
 /** What a `[[link]]` leads to: the path of a note of the bank, or nothing when there is no such note. */
 type WikiLinks = {
     readonly resolve: (target: string) => string | undefined;
@@ -7,8 +8,9 @@ type WikiLinks = {
 };
 function WikiLink({ piece, links }: { readonly piece: Extract<Inline, { kind: 'wikilink' }>; readonly links: WikiLinks }) {
     const path = links.resolve(piece.target);
+    const t = useT();
     if (path === undefined) {
-        return <span className="wikilink wikilink-broken" tabIndex={0} title={`No note named “${piece.target}” yet`}>{piece.text}</span>;
+        return <span className="wikilink wikilink-broken" tabIndex={0} title={t.memory.missing(piece.target)}>{piece.text}</span>;
     }
     return <button type="button" className="wikilink" onClick={() => links.onOpen(path)}>{piece.text}</button>;
 }
@@ -36,12 +38,13 @@ function Inlines({ pieces, links }: { readonly pieces: readonly Inline[]; readon
 function Item({ item, links }: { readonly item: ListItem; readonly links: WikiLinks }) {
     const content = <Inlines pieces={item.content} links={links} />;
     const depth = item.depth === 0 ? '' : ` md-depth-${item.depth}`;
+    const t = useT();
     if (item.checked === undefined) {
         return <li className={depth.trim() || undefined}>{content}</li>;
     }
     return (
         <li className={`task${depth}`}>
-            <input type="checkbox" disabled checked={item.checked} aria-label={item.checked ? 'done' : 'not done'} />
+            <input type="checkbox" disabled checked={item.checked} aria-label={item.checked ? t.memory.done : t.memory.notDone} />
             <span>{content}</span>
         </li>
     );

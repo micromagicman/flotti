@@ -6,6 +6,13 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Added
 
+- **The dashboard in English or Russian.** **Language** in the settings switches every word of the page
+  at once, with no reload, and the choice stays in the browser; until one is picked, the dashboard opens
+  in the language of the browser when it speaks it, else in English. Numbers, counts and dates follow the
+  language. Messages of agents and people are shown as they were written, and what the server says —
+  an error it gives, a reason of an agent — stays in English for now. A new language is a file of
+  strings in `web/src/i18n` and a line in `languages.ts`; a lint rule catches words written into a
+  component past them (#86).
 - **The memory bank of an agent in the dashboard.** The header of a local agent's tab switches between
   Chat and Memory: the folders and notes of its `memory/` on the left, a note on the right as rendered
   markdown, with `[[links]]` that open the notes they name and the notes that link back. Read-only:

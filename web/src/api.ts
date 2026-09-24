@@ -14,6 +14,7 @@ import type {
     SendRequest,
     SshAgentsResponse
 } from '../../src/dashboard-protocol.js';
+import { StatusError } from './i18n/errors.js';
 async function call<T>(method: string, path: string, body?: object): Promise<T> {
     const response = await fetch(path, {
         method,
@@ -22,7 +23,7 @@ async function call<T>(method: string, path: string, body?: object): Promise<T> 
     const answer = (await response.json().catch(() => ({}))) as T | ErrorResponse;
     if (!response.ok) {
         const message = (answer as Partial<ErrorResponse>).error;
-        throw new Error(message ?? `The dashboard answered ${response.status}.`);
+        throw message === undefined ? new StatusError(response.status) : new Error(message);
     }
     return answer as T;
 }

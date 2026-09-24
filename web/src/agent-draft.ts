@@ -4,6 +4,7 @@
  */
 import type { AgentConfig, LocalAgentConfig, RemoteAgentConfig } from '../../src/dashboard-protocol.js';
 import type { LocalAgentAdapter, RemoteAuth, RestartPolicy } from '../../src/types.js';
+import type { Messages } from './i18n/en.js';
 type Draft = {
     readonly kind: 'local' | 'remote';
     readonly id: string;
@@ -148,28 +149,28 @@ function toRemoteConfig(draft: Draft, common: CommonConfig): RemoteAgentConfig {
     return remote;
 }
 /** @throws Error when a line has no `=`. */
-function parseEnv(text: string): Record<string, string> {
+function parseEnv(text: string, t: Messages): Record<string, string> {
     const env: Record<string, string> = {};
     for (const line of lines(text)) {
         const at = line.indexOf('=');
         if (at <= 0) {
-            throw new Error(`Environment: "${line}" is not NAME=value.`);
+            throw new Error(t.errors.envLine(line));
         }
         env[line.slice(0, at).trim()] = line.slice(at + 1);
     }
     return env;
 }
 /** @throws Error when the timeout is not a positive number. */
-function parseTimeout(draft: Draft): string {
+function parseTimeout(draft: Draft, t: Messages): string {
     const timeout = draft.heartbeatTimeoutSec.trim();
     if (timeout !== '' && !(Number(timeout) > 0)) {
-        throw new Error(`Heartbeat timeout: "${timeout}" is not a positive number of seconds.`);
+        throw new Error(t.errors.timeout(timeout));
     }
     return timeout;
 }
-function toLocalConfig(draft: Draft, common: CommonConfig): LocalAgentConfig {
-    const env = parseEnv(draft.env);
-    const timeout = parseTimeout(draft);
+function toLocalConfig(draft: Draft, common: CommonConfig, t: Messages): LocalAgentConfig {
+    const env = parseEnv(draft.env, t);
+    const timeout = parseTimeout(draft, t);
     const local: LocalAgentConfig = {
         kind: 'local',
         ...common,
@@ -190,14 +191,14 @@ function toLocalConfig(draft: Draft, common: CommonConfig): LocalAgentConfig {
  * The manifest the draft says. The server checks it the way `flotti run`
  * does; here only what text fields cannot say on their own is checked.
  *
- * @throws Error when a line of the environment has no `=`, or the timeout is not a number.
+ * @throws Error, in the words of the page, when a line of the environment has no `=`, or the timeout is not a number.
  */
-function toConfig(draft: Draft): AgentConfig {
+function toConfig(draft: Draft, t: Messages): AgentConfig {
     const common = commonConfig(draft);
     if (draft.kind === 'remote') {
         return toRemoteConfig(draft, common);
     }
-    return toLocalConfig(draft, common);
+    return toLocalConfig(draft, common, t);
 }
 export { PRESETS, fromConfig, newDraft, toConfig, withAdapter };
 export type { Draft };

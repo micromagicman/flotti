@@ -7,6 +7,8 @@ import type { Block } from '../markdown.js';
 import { changedAgo } from '../memory.js';
 import { Markdown } from './Markdown.js';
 import type { WikiLinks } from './Markdown.js';
+import { useT } from '../i18n/I18n.js';
+import { errorText } from '../i18n/errors.js';
 type Loaded = { readonly path: string; readonly note?: MemoryNote; readonly error?: string };
 type NoteViewProps = {
     readonly agentId: string;
@@ -18,22 +20,20 @@ type NoteViewProps = {
     /** Back to the list, on a narrow screen. */
     readonly onBack: () => void;
 };
-function messageOf(reason: unknown): string {
-    return reason instanceof Error ? reason.message : String(reason);
-}
 /** The note at `path` as the server gives it; undefined while it is read. */
 function useNote(agentId: string, path: string, stamp: number): Loaded | undefined {
     const [loaded, setLoaded] = useState<Loaded>();
+    const t = useT();
     useEffect(() => {
         let live = true;
         api.memoryNote(agentId, path).then(
             (note) => live && setLoaded({ path, note }),
-            (reason: unknown) => live && setLoaded({ path, error: messageOf(reason) })
+            (reason: unknown) => live && setLoaded({ path, error: errorText(reason, t) })
         );
         return () => {
             live = false;
         };
-    }, [agentId, path, stamp]);
+    }, [agentId, path, stamp, t]);
     return loaded?.path === path ? loaded : undefined;
 }
 /** The blocks of the note, without a first `# heading` — after its properties, if any — that only repeats its title. */
@@ -47,28 +47,31 @@ function bodyOf(text: string, title: string): Block[] {
 /** Copies the absolute path of the note, and says so for a moment. */
 function CopyPath({ file }: { readonly file: string }) {
     const [copied, setCopied] = useState<boolean>();
+    const t = useT();
     const copy = (): void => {
         navigator.clipboard.writeText(file).then(() => setCopied(true), () => setCopied(false));
         setTimeout(() => setCopied(undefined), 1500);
     };
-    const label = copied === undefined ? 'Copy path' : copied ? 'Copied' : 'Could not copy';
+    const label = copied === undefined ? t.memory.copyPath : copied ? t.memory.copied : t.memory.notCopied;
     return <button type="button" className="btn btn-ghost btn-xs" onClick={copy} title={file}>{label}</button>;
 }
 function NoteHead({ path, summary, note }: { readonly path: string; readonly summary: MemoryNoteSummary | undefined; readonly note: MemoryNote | undefined }) {
     const modifiedAt = note?.modifiedAt ?? summary?.modifiedAt;
+    const t = useT();
     return (
         <div className="note-head">
             <div className="note-path">
                 <span>memory/{path}</span>
-                {modifiedAt === undefined ? null : <span>edited {changedAgo(modifiedAt, Date.now())}</span>}
+                {modifiedAt === undefined ? null : <span>{t.memory.edited(changedAgo(modifiedAt, Date.now(), t))}</span>}
             </div>
             {note === undefined ? null : <div className="note-tools"><CopyPath file={note.file} /></div>}
         </div>
     );
 }
 function NoteBody({ loaded, title, links }: { readonly loaded: Loaded | undefined; readonly title: string; readonly links: WikiLinks }) {
+    const t = useT();
     if (loaded === undefined) {
-        return <p className="note-empty">Reading the note…</p>;
+        return <p className="note-empty">{t.memory.readingNote}</p>;
     }
     if (loaded.note === undefined) {
         return <p className="error" role="alert">{loaded.error}</p>;
@@ -77,11 +80,12 @@ function NoteBody({ loaded, title, links }: { readonly loaded: Loaded | undefine
 }
 function Backlinks({ notes, path, onOpen }: Pick<NoteViewProps, 'notes' | 'path' | 'onOpen'>) {
     const from = useMemo(() => linkedFrom(notes, path), [notes, path]);
+    const t = useT();
     return (
         <div className="backlinks">
-            Linked from
+            {t.memory.linkedFrom}
             {from.length === 0
-                ? <span>nothing yet</span>
+                ? <span>{t.memory.nothingYet}</span>
                 : from.map((note) => <button key={note.path} type="button" className="btn btn-xs" onClick={() => onOpen(note.path)}>{note.title}</button>)}
         </div>
     );
@@ -93,9 +97,10 @@ function NoteView({ agentId, notes, path, stamp, onOpen, onBack }: NoteViewProps
     const summary = notes.find((note) => note.path === path);
     const title = summary?.title ?? baseName(path);
     const links: WikiLinks = { resolve: (target) => resolve(target)?.path, onOpen };
+    const t = useT();
     return (
         <article className="note-card" aria-label={title}>
-            <button type="button" className="btn btn-ghost btn-sm back-btn" onClick={onBack}>← All notes</button>
+            <button type="button" className="btn btn-ghost btn-sm back-btn" onClick={onBack}>{t.memory.allNotes}</button>
             <NoteHead path={path} summary={summary} note={loaded?.note} />
             <h2>{title}</h2>
             <NoteBody loaded={loaded} title={title} links={links} />

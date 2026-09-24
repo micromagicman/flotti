@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ConnectionHealth } from '../../../src/connection-health.js';
 import { healthFacts, poorText } from '../health.js';
+import { useT } from '../i18n/I18n.js';
 /** The time now, moved on every second: the uptime and the "ago" of the health go on by themselves. */
 function useNow(): number {
     const [now, setNow] = useState(Date.now);
@@ -16,12 +17,13 @@ function useNow(): number {
  */
 function ConnectionHealthView({ health }: { readonly health: ConnectionHealth }) {
     const now = useNow();
-    const poor = poorText(health);
+    const t = useT();
+    const poor = poorText(health, t);
     return (
-        <div className={poor === undefined ? 'health' : 'health health-poor'} role="group" aria-label="SSH connection" data-poor={poor !== undefined}>
+        <div className={poor === undefined ? 'health' : 'health health-poor'} role="group" aria-label={t.health.label} data-poor={poor !== undefined}>
             <span className="health-title">SSH</span>
-            {healthFacts(health, now).map((fact) => (
-                <span key={fact.label} className="health-fact" data-fact={fact.label}>
+            {healthFacts(health, now, t).map((fact) => (
+                <span key={fact.key} className="health-fact" data-fact={fact.key}>
                     <span className="health-label">{fact.label}</span> {fact.value}
                 </span>
             ))}
@@ -31,7 +33,8 @@ function ConnectionHealthView({ health }: { readonly health: ConnectionHealth })
 }
 /** The mark of a poor connection on the tab of the agent, seen from any tab. */
 function PoorConnectionMark({ health }: { readonly health: ConnectionHealth | undefined }) {
-    const poor = health === undefined ? undefined : poorText(health);
-    return poor === undefined ? null : <span className="tab-poor" title={poor}>poor connection</span>;
+    const t = useT();
+    const poor = health === undefined ? undefined : poorText(health, t);
+    return poor === undefined ? null : <span className="tab-poor" title={poor}>{t.health.poorMark}</span>;
 }
 export { ConnectionHealthView, PoorConnectionMark };

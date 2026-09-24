@@ -14,6 +14,7 @@ import type {
     Quote,
     ToolCallStatus
 } from '../../src/agent-events.js';
+import type { Messages } from './i18n/en.js';
 type FeedItem =
     | {
         readonly kind: 'message';
@@ -345,29 +346,10 @@ function awaitsAllowance(feed: AgentFeed | undefined, agentId: string): boolean 
     return (feed?.items ?? []).some((item) => item.kind === 'admin-action' && item.admin === agentId && item.state === 'pending' && !item.settled);
 }
 type AdminActionItem = FeedItem & { kind: 'admin-action' };
-/** What the action does, in words, with the names of the agents. */
-function adminDoing(item: AdminActionItem, name: (agentId: string) => string): string {
-    if (item.admin === item.target) {
-        return item.action === 'restart' ? 'restart itself' : 'clear its own context';
-    }
-    return item.action === 'restart' ? `restart ${name(item.target)}` : `clear the context of ${name(item.target)}`;
-}
-/** The line a tab shows for an action of an administrator, in its latest state. */
-function adminActionText(item: AdminActionItem, name: (agentId: string) => string): string {
-    const admin = name(item.admin);
-    const doing = adminDoing(item, name);
-    switch (item.state) {
-        case 'pending':
-            return `${admin} asks to ${doing}`;
-        case 'scheduled':
-            return `${admin} will ${doing} once its turn is over`;
-        case 'done':
-            return `${admin} ${doing.replace(/^restart/, 'restarted').replace(/^clear/, 'cleared')}`;
-        case 'refused':
-            return `${admin} may not ${doing}: ${item.reason ?? 'refused'}`;
-        case 'failed':
-            return `${admin} could not ${doing}: ${item.reason ?? 'no reason given'}`;
-    }
+/** The line a tab shows for an action of an administrator, in its latest state, in the words of the page. */
+function adminActionText(item: AdminActionItem, name: (agentId: string) => string, t: Messages): string {
+    const target = item.admin === item.target ? undefined : name(item.target);
+    return t.feed.adminAction(item.state, name(item.admin), item.action, target, item.reason);
 }
 type MessageItem = FeedItem & { kind: 'message' };
 /** Who wrote a message of the tab of `agentId`: that agent, another one, or a person (`undefined`). */

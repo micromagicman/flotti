@@ -7,6 +7,7 @@ import type { AgentFeed } from '../feed.js';
 import { AgentMark, PairMarks, nameOf } from './AgentMark.js';
 import { PoorConnectionMark } from './ConnectionHealth.js';
 import { StatusBadge } from './StatusBadge.js';
+import { useT } from '../i18n/I18n.js';
 /** How many conversations the sidebar lists by name; the rest are in the list of them all. */
 const CONVERSATIONS_SHOWN = 4;
 type SidebarProps = {
@@ -54,28 +55,23 @@ type AgentTabProps = {
 };
 /** The status of the agent, and how many messages wait for it when any do. */
 function TabStatus({ status, inLine }: { readonly status: AgentStatus; readonly inLine: number }) {
+    const t = useT();
     return (
         <span className="tab-status">
             <StatusBadge status={status} />
-            {inLine > 0 ? <span className="tab-in-line">· {inLine} in line</span> : null}
+            {inLine > 0 ? <span className="tab-in-line">· {t.common.inLine(inLine)}</span> : null}
         </span>
     );
 }
 function AgentTab({ agent, feed, color, unread, selected, onSelect }: AgentTabProps) {
     const status = feed?.status ?? agent.status;
+    const t = useT();
     return (
-        <button
-            type="button"
-            role="tab"
-            className={`tab tab-${status}`}
-            aria-selected={selected}
-            data-agent={agent.id}
-            onClick={() => onSelect(agent.id)}
-        >
+        <button type="button" role="tab" className={`tab tab-${status}`} aria-selected={selected} data-agent={agent.id} onClick={() => onSelect(agent.id)}>
             <span className="tab-name">
                 <AgentMark color={color} />
                 <span className="tab-label">{agent.name}</span>
-                {unread ? <span className="unread" aria-label="new output" /> : null}
+                {unread ? <span className="unread" aria-label={t.sidebar.newOutput} /> : null}
             </span>
             <TabStatus status={status} inLine={feed?.queue.length ?? 0} /><PoorConnectionMark health={agent.health} />
         </button>
@@ -93,15 +89,16 @@ type PairTabProps = {
 function PairTab({ conversation, agents, colors, unread, selected, onSelect }: PairTabProps) {
     const { id, first, second, messages } = conversation;
     const title = `${nameOf(agents, first)} ↔ ${nameOf(agents, second)}`;
+    const t = useT();
     return (
         <button type="button" role="tab" className="tab tab-pair" aria-selected={selected} data-pair={id} title={title}
-            aria-label={`Conversation of ${nameOf(agents, first)} and ${nameOf(agents, second)}, ${messages.length} message${messages.length === 1 ? '' : 's'}`} onClick={() => onSelect(id)}>
+            aria-label={t.sidebar.conversationOf(t.common.and(nameOf(agents, first), nameOf(agents, second)), messages.length)} onClick={() => onSelect(id)}>
             <span className="tab-name">
                 <PairMarks first={colors[first]} second={colors[second]} />
                 <span className="tab-label">{title}</span>
-                {unread ? <span className="unread" aria-label="new messages" /> : null}
+                {unread ? <span className="unread" aria-label={t.sidebar.newMessages} /> : null}
             </span>
-            <span className="tab-hint">{messages.length} message{messages.length === 1 ? '' : 's'}</span>
+            <span className="tab-hint">{t.common.messages(messages.length)}</span>
         </button>
     );
 }
@@ -114,22 +111,24 @@ function ConversationTabs({ agents, colors, conversations, seenSeq, selected, co
     const shown = shownInSidebar(conversations, CONVERSATIONS_SHOWN, selected);
     const rest = conversations.length - shown.length;
     const holdsOpen = selected === conversationsId || conversations.some((conversation) => conversation.id === selected);
+    const t = useT();
     return (
         <>
-            <div className="side-head" aria-hidden="true">Conversations</div>
+            <div className="side-head" aria-hidden="true">{t.sidebar.conversations}</div>
             {shown.map((conversation) => (
                 <PairTab key={conversation.id} conversation={conversation} agents={agents} colors={colors} selected={conversation.id === selected}
                     unread={conversation.id !== selected && conversation.messages.length > (seenSeq[conversation.id] ?? 0)} onSelect={onSelect} />
             ))}
             <SideTab className={`tab tab-conversations${rest > 0 ? '' : ' tab-narrow-only'}${holdsOpen ? ' tab-holds-open' : ''}`} selected={selected === conversationsId}
-                onClick={() => onSelect(conversationsId)} name={rest > 0 ? 'All conversations' : 'Conversations'} hint={`${conversations.length} pair${conversations.length === 1 ? '' : 's'} of agents`} />
+                onClick={() => onSelect(conversationsId)} name={rest > 0 ? t.sidebar.allConversations : t.sidebar.conversations} hint={t.sidebar.pairs(conversations.length)} />
         </>
     );
 }
 function Sidebar({ agents, feeds, colors, conversations, seenSeq, selected, broadcastId, settingsId, conversationsId, onSelect }: SidebarProps) {
+    const t = useT();
     return (
-        <nav className="sidebar" role="tablist" aria-label="Agents" aria-orientation="vertical">
-            <SideTab className="tab tab-broadcast" selected={selected === broadcastId} onClick={() => onSelect(broadcastId)} name="All agents" hint="Broadcast" />
+        <nav className="sidebar" role="tablist" aria-label={t.sidebar.label} aria-orientation="vertical">
+            <SideTab className="tab tab-broadcast" selected={selected === broadcastId} onClick={() => onSelect(broadcastId)} name={t.sidebar.allAgents} hint={t.sidebar.broadcast} />
             {agents.map((agent) => (
                 <AgentTab key={agent.id} agent={agent} feed={feeds[agent.id]} color={colors[agent.id]} selected={agent.id === selected} onSelect={onSelect}
                     unread={agent.id !== selected && (feeds[agent.id]?.lastSeq ?? 0) > (seenSeq[agent.id] ?? 0)} />
@@ -137,7 +136,7 @@ function Sidebar({ agents, feeds, colors, conversations, seenSeq, selected, broa
             {conversations.length === 0
                 ? null
                 : <ConversationTabs agents={agents} colors={colors} conversations={conversations} seenSeq={seenSeq} selected={selected} conversationsId={conversationsId} onSelect={onSelect} />}
-            <SideTab className="tab tab-settings" selected={selected === settingsId} onClick={() => onSelect(settingsId)} name="Settings" hint="Fleet and agents" />
+            <SideTab className="tab tab-settings" selected={selected === settingsId} onClick={() => onSelect(settingsId)} name={t.sidebar.settings} hint={t.sidebar.settingsHint} />
         </nav>
     );
 }

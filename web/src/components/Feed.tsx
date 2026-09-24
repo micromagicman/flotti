@@ -10,6 +10,7 @@ import { NextUp, Undelivered } from './InLine.js';
 import type { LineActions } from './InLine.js';
 import { Message } from './Message.js';
 import type { MessageActions } from './Message.js';
+import { useT } from '../i18n/I18n.js';
 /** A message to bring into view: the one a quote points at. `n` tells one ask from the next. */
 type Jump = { readonly agentId: string; readonly seq: number; readonly n: number };
 type FeedProps = {
@@ -48,12 +49,13 @@ function PermissionOptions({ item, onAnswer }: { readonly item: FeedItem & { kin
     );
 }
 function Permission({ item, onAnswer }: { readonly item: FeedItem & { kind: 'permission' }; readonly onAnswer: FeedProps['onAnswer'] }) {
+    const t = useT();
     return (
         <div className="item permission">
-            <div className="item-label">Permission requested</div>
+            <div className="item-label">{t.feed.permission}</div>
             <div>{item.title}</div>
             {item.settled
-                ? <div className="muted">answered</div>
+                ? <div className="muted">{t.common.answered}</div>
                 : <PermissionOptions item={item} onAnswer={onAnswer} />}
         </div>
     );
@@ -66,13 +68,14 @@ type AdminEntryProps = {
 };
 /** Allow or Refuse, while the action waits for a person. */
 function AdminAllowance({ item, onAdminAnswer }: Pick<AdminEntryProps, 'item' | 'onAdminAnswer'>) {
+    const t = useT();
     if (item.settled) {
-        return <div className="muted">answered</div>;
+        return <div className="muted">{t.common.answered}</div>;
     }
     return (
         <div className="options">
-            <button type="button" className="btn btn-sm btn-primary" onClick={() => onAdminAnswer(item.actionId, true)}>Allow</button>
-            <button type="button" className="btn btn-sm" onClick={() => onAdminAnswer(item.actionId, false)}>Refuse</button>
+            <button type="button" className="btn btn-sm btn-primary" onClick={() => onAdminAnswer(item.actionId, true)}>{t.feed.allow}</button>
+            <button type="button" className="btn btn-sm" onClick={() => onAdminAnswer(item.actionId, false)}>{t.feed.refuse}</button>
         </div>
     );
 }
@@ -83,46 +86,49 @@ function AdminAllowance({ item, onAdminAnswer }: Pick<AdminEntryProps, 'item' | 
  */
 function AdminActionEntry({ item, agentId, agents, onAdminAnswer }: AdminEntryProps) {
     const name = (id: string): string => agents.find((agent) => agent.id === id)?.name ?? id;
-    const text = adminActionText(item, name);
+    const t = useT();
+    const text = adminActionText(item, name, t);
     if (item.state === 'done' && item.action === 'clear-context' && item.target === agentId) {
-        return <div className="item context-cleared" role="separator" aria-label={`Context cleared: ${text}`}><span>context cleared · {text}</span></div>;
+        return <div className="item context-cleared" role="separator" aria-label={t.feed.contextClearedLabel(text)}><span>{t.feed.contextCleared} · {text}</span></div>;
     }
     if (item.state !== 'pending') {
         return <div className={`item admin-action admin-action-${item.state}`}>{text}</div>;
     }
     return (
         <div className="item permission admin-request">
-            <div className="item-label">Administrator action</div>
+            <div className="item-label">{t.feed.adminRequest}</div>
             <div>{text}</div>
             <AdminAllowance item={item} onAdminAnswer={onAdminAnswer} />
         </div>
     );
 }
 function ToolEntry({ item }: { readonly item: FeedItem & { kind: 'tool' } }) {
+    const t = useT();
     return (
         <div className={`item tool tool-${item.status ?? 'pending'}`}>
             <span className="tool-title">{item.title}</span>
-            <span className="tool-status">{item.status ?? 'pending'}</span>
+            <span className="tool-status">{t.feed.toolStatus[item.status ?? 'pending']}</span>
         </div>
     );
 }
 /** Everything in the feed but messages, tasks, permission requests and actions of administrators. */
 function NoteEntry({ item }: { readonly item: Exclude<FeedItem, { kind: 'message' | 'permission' | 'undelivered' | 'delegation' | 'admin-action' }> }) {
+    const t = useT();
     switch (item.kind) {
         case 'thought':
-            return <details className="item thought"><summary>Thinking</summary><div className="text">{item.text}</div></details>;
+            return <details className="item thought"><summary>{t.feed.thinking}</summary><div className="text">{item.text}</div></details>;
         case 'progress':
             return <div className="item progress">{item.text}</div>;
         case 'tool':
             return <ToolEntry item={item} />;
         case 'turn-end':
-            return item.reason === 'end_turn' ? <hr className="turn-end" /> : <div className="item turn-end-note">Turn ended: {item.reason}</div>;
+            return item.reason === 'end_turn' ? <hr className="turn-end" /> : <div className="item turn-end-note">{t.feed.turnEnded(item.reason)}</div>;
         case 'status':
-            return <div className={`item status-line status-line-${item.status}`}>{item.status}{item.reason === undefined || item.reason === item.status ? '' : `: ${item.reason}`}</div>;
+            return <div className={`item status-line status-line-${item.status}`}>{t.status[item.status]}{item.reason === undefined || item.reason === item.status ? '' : `: ${item.reason}`}</div>;
         case 'log':
             return <div className="item log">{item.source === 'flotti' ? 'flotti: ' : ''}{item.text}</div>;
         case 'raw':
-            return <details className="item raw"><summary>{item.protocol.toUpperCase()} message</summary><pre>{JSON.stringify(item.payload, null, 2)}</pre></details>;
+            return <details className="item raw"><summary>{t.feed.rawMessage(item.protocol.toUpperCase())}</summary><pre>{JSON.stringify(item.payload, null, 2)}</pre></details>;
     }
 }
 function FeedEntry({ item, onAnswer, onAdminAnswer, line, ...fleet }: { readonly item: FeedItem } & Omit<FeedProps, 'items' | 'jump'>) {
@@ -177,16 +183,17 @@ function useJump(list: RefObject<HTMLDivElement | null>, agentId: string, jump: 
 function Feed({ items, queue, status, onAnswer, onAdminAnswer, jump, ...fleet }: FeedViewProps) {
     const { agentName, agentId } = fleet;
     const { list, onScroll } = usePinnedScroll(items, queue);
+    const t = useT();
     useJump(list, agentId, jump);
     return (
         <div
             className="feed"
             role="log"
-            aria-label={`Output of ${agentName}`}
+            aria-label={t.feed.output(agentName)}
             ref={list}
             onScroll={onScroll}
         >
-            {items.length === 0 && queue.length === 0 ? <p className="muted empty">Nothing yet. Say something to {agentName}.</p> : null}
+            {items.length === 0 && queue.length === 0 ? <p className="muted empty">{t.feed.empty(agentName)}</p> : null}
             {items.map((item) => <FeedEntry key={item.key} item={item} onAnswer={onAnswer} onAdminAnswer={onAdminAnswer} {...fleet} />)}
             <NextUp queue={queue} status={status} onWithdraw={fleet.line.onWithdraw} {...fleet} />
         </div>

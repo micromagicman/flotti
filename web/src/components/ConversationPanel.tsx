@@ -10,6 +10,7 @@ import { AgentMark, PairMarks, nameOf } from './AgentMark.js';
 import { usePinnedScroll } from './Feed.js';
 import { MessageBody } from './Message.js';
 import type { QuoteActions } from './Message.js';
+import { useT } from '../i18n/I18n.js';
 type Fleet = {
     readonly agents: readonly AgentSummary[];
     readonly colors: AgentColors;
@@ -27,9 +28,6 @@ type ConversationPanelProps = Fleet & {
 };
 /** A message to bring into view in the lane; `n` tells one ask from the next. */
 type Found = { readonly key: string; readonly n: number };
-function messagesText(count: number): string {
-    return `${count} message${count === 1 ? '' : 's'}`;
-}
 /** A quote leads to its message in the lane when the lane has it, else to the tab it is in. */
 function useLaneQuotes(conversation: Conversation | undefined, feeds: ConversationPanelProps['feeds'], quotes: QuoteActions) {
     const [found, setFound] = useState<Found>();
@@ -66,12 +64,13 @@ type LaneRowProps = Fleet & { readonly message: LaneMessage; readonly side: 'fir
 function LaneRow({ message, side, actions, agents, colors }: LaneRowProps) {
     const from = nameOf(agents, message.from);
     const to = nameOf(agents, message.to);
+    const t = useT();
     return (
         <div className={`message-row lane-row lane-${side}`} data-key={message.key}>
             <div className={`item message message-sent agent-color-${colors[message.from] ?? 0}`}>
                 <div className="envelope-bar">
                     <span aria-hidden="true">{from} → {to}</span>
-                    <span className="visually-hidden">From {from} to {to}</span>
+                    <span className="visually-hidden">{t.common.fromTo(from, to)}</span>
                 </div>
                 <div className="envelope-body"><MessageBody item={message.item} agents={agents} colors={colors} actions={actions} /></div>
             </div>
@@ -83,38 +82,41 @@ function Lane({ pair, conversation, actions, found, ...fleet }: Fleet & Pick<Con
     const { list, onScroll } = usePinnedScroll(messages);
     useFound(list, found);
     const [first, second] = pair;
-    const names = `${nameOf(fleet.agents, first)} and ${nameOf(fleet.agents, second)}`;
+    const t = useT();
+    const names = t.common.and(nameOf(fleet.agents, first), nameOf(fleet.agents, second));
     return (
-        <div className="feed lane" role="log" aria-label={`Conversation of ${names}`} ref={list} onScroll={onScroll}>
-            {messages.length === 0 ? <p className="muted empty">{names} have not written to each other yet.</p> : null}
+        <div className="feed lane" role="log" aria-label={t.conversation.of(names)} ref={list} onScroll={onScroll}>
+            {messages.length === 0 ? <p className="muted empty">{t.conversation.notYet(names)}</p> : null}
             {messages.map((message) => <LaneRow key={message.key} message={message} side={message.from === first ? 'first' : 'second'} actions={actions} {...fleet} />)}
         </div>
     );
 }
 function LaneHeader({ pair, conversation, conversationsId, onOpen, agents, colors }: Omit<ConversationPanelProps, 'feeds' | 'quotes'>) {
+    const t = useT();
     return (
         <header className="agent-header lane-header">
             <h1 className="lane-title">
                 {pair.map((id, index) => (
                     <span key={id} className="lane-agent">
-                        {index === 0 ? null : <span className="lane-arrow" aria-label="and">↔</span>}
+                        {index === 0 ? null : <span className="lane-arrow" aria-label={t.common.andWord}>↔</span>}
                         <AgentMark color={colors[id]} />
                         {nameOf(agents, id)}
                     </span>
                 ))}
             </h1>
-            <span className="muted">{messagesText(conversation?.messages.length ?? 0)}</span>
-            <button type="button" className="btn btn-sm lane-all" onClick={() => onOpen(conversationsId)}>All conversations</button>
+            <span className="muted">{t.common.messages(conversation?.messages.length ?? 0)}</span>
+            <button type="button" className="btn btn-sm lane-all" onClick={() => onOpen(conversationsId)}>{t.conversation.all}</button>
         </header>
     );
 }
 /** The person reads the lane and writes to either agent in its own tab. */
 function LaneFoot({ pair, agents, colors, onOpen }: Fleet & Pick<ConversationPanelProps, 'pair' | 'onOpen'>) {
+    const t = useT();
     return (
         <div className="lane-foot">
-            <span>Only the two agents write here.</span>
+            <span>{t.conversation.onlyTwo}</span>
             {pair.map((id) => (
-                <button key={id} type="button" className={`btn btn-sm lane-write agent-color-${colors[id] ?? 0}`} onClick={() => onOpen(id)}>Write to {nameOf(agents, id)}</button>
+                <button key={id} type="button" className={`btn btn-sm lane-write agent-color-${colors[id] ?? 0}`} onClick={() => onOpen(id)}>{t.conversation.writeTo(nameOf(agents, id))}</button>
             ))}
         </div>
     );
@@ -123,9 +125,10 @@ function LaneFoot({ pair, agents, colors, onOpen }: Fleet & Pick<ConversationPan
 function ConversationPanel(props: ConversationPanelProps) {
     const { pair, conversation, feeds, quotes, agents, colors, onOpen } = props;
     const { actions, found } = useLaneQuotes(conversation, feeds, quotes);
-    const names = `${nameOf(agents, pair[0])} and ${nameOf(agents, pair[1])}`;
+    const t = useT();
+    const names = t.common.and(nameOf(agents, pair[0]), nameOf(agents, pair[1]));
     return (
-        <section className="agent-panel conversation-panel" aria-label={`Conversation of ${names}`}>
+        <section className="agent-panel conversation-panel" aria-label={t.conversation.of(names)}>
             <LaneHeader {...props} />
             <Lane pair={pair} conversation={conversation} actions={actions} found={found} agents={agents} colors={colors} />
             <LaneFoot pair={pair} agents={agents} colors={colors} onOpen={onOpen} />
@@ -139,13 +142,14 @@ type ConversationsPanelProps = Fleet & {
 function ConversationCard({ conversation, agents, colors, onOpen }: Fleet & { readonly conversation: Conversation; readonly onOpen: (tab: string) => void }) {
     const { id, first, second, messages } = conversation;
     const last = messages.at(-1);
+    const t = useT();
     return (
         <li>
             <button type="button" className="conversation-card" data-pair={id} onClick={() => onOpen(id)}>
                 <span className="conversation-card-top">
                     <PairMarks first={colors[first]} second={colors[second]} />
                     <span className="conversation-card-names">{nameOf(agents, first)} ↔ {nameOf(agents, second)}</span>
-                    <span className="muted">{messagesText(messages.length)}</span>
+                    <span className="muted">{t.common.messages(messages.length)}</span>
                 </span>
                 {last === undefined ? null : <span className="conversation-card-last">{nameOf(agents, last.from)}: {last.item.text || last.item.forwarded?.text}</span>}
             </button>
@@ -154,11 +158,12 @@ function ConversationCard({ conversation, agents, colors, onOpen }: Fleet & { re
 }
 /** Every conversation of the fleet, the newest first: the way to those the sidebar has no room for. */
 function ConversationsPanel({ conversations, onOpen, ...fleet }: ConversationsPanelProps) {
+    const t = useT();
     return (
-        <section className="conversations" aria-label="Conversations">
-            <h1>Conversations</h1>
-            <p className="muted">What the agents of the fleet write to each other, one lane for every two of them.</p>
-            {conversations.length === 0 ? <p className="muted">No agent has written to another yet.</p> : null}
+        <section className="conversations" aria-label={t.conversation.title}>
+            <h1>{t.conversation.title}</h1>
+            <p className="muted">{t.conversation.lead}</p>
+            {conversations.length === 0 ? <p className="muted">{t.conversation.none}</p> : null}
             <ul className="conversation-list">
                 {conversations.map((conversation) => <ConversationCard key={conversation.id} conversation={conversation} onOpen={onOpen} {...fleet} />)}
             </ul>
