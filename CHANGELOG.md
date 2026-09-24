@@ -6,6 +6,12 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Added
 
+- **Notifications outside the browser: Telegram and Web Push.** On the settings page, a bot of your own
+  (its token and a chat id) and Web Push through the service worker of the dashboard tell you when an
+  agent waits for an answer or a permission, fails, or loses its SSH connection — each switched on on
+  its own, one notification per wait, reminders by setting. The answer takes the notification of a
+  wait back. Secrets stay in `~/.flotti/settings.json`, readable by its owner only: never shown to the
+  page, never logged. Nothing set up, nothing sent (#52).
 - **Messages in line show in the chat.** A message sent to a busy agent shows at once at the end of its
   tab, in a "NEXT UP" block under a dashed amber line, with its place in line and **✕ cancel** to take
   it back; the sidebar says "working · 2 in line". Once the agent takes it, it joins the feed where its

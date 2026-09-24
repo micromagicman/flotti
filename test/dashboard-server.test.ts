@@ -11,6 +11,7 @@ import { startDashboard } from '../src/dashboard-server.js';
 import type { Dashboard } from '../src/dashboard-server.js';
 import { loadFleet } from '../src/fleet.js';
 import { FleetSettings } from '../src/fleet-settings.js';
+import { NotificationService } from '../src/notifications.js';
 import { SshError } from '../src/ssh.js';
 import { Supervisor } from '../src/supervisor.js';
 import { FakeFleetAgent, fakeFleet } from './fake-fleet-agent.js';
@@ -220,6 +221,33 @@ test('without fleet settings the page cannot change the fleet', async () => {
     const { dashboard } = await serve('a');
     strictEqual((await call(dashboard.port, 'GET', '/api/fleet')).status, 404);
     strictEqual((await call(dashboard.port, 'POST', '/api/agents', { kind: 'local', id: 'b', command: 'x' })).status, 404);
+});
+test('the settings page sets up the notifications, and never gets a secret back', async () => {
+    const { dashboard: bare } = await serve('a');
+    strictEqual((await call(bare.port, 'GET', '/api/notifications')).status, 404);
+    const home = mkdtempSync(join(webRoot, 'home-'));
+    const { fleet, createAgent } = fakeFleet('a');
+    const supervisor = new Supervisor(fleet, { createAgent });
+    const notifications = new NotificationService(supervisor, {
+        env: { HOME: home, FLOTTI_TELEGRAM_API: 'http://127.0.0.1:1' },
+        warn: () => undefined
+    });
+    const dashboard = await startDashboard(supervisor, { port: 0, webRoot, notifications });
+    open.push({ dashboard, supervisor, sockets: [] });
+    const { port } = dashboard;
+    const token = '123456:a-token-the-page-must-not-see';
+    const changed = await call(port, 'PUT', '/api/notifications', { telegram: { enabled: true, botToken: token, chatId: '42' } });
+    strictEqual(changed.status, 200, changed.text);
+    ok(!changed.text.includes(token));
+    const read = await call(port, 'GET', '/api/notifications');
+    ok(!read.text.includes(token));
+    deepStrictEqual((read.body as { telegram: object }).telegram, { enabled: true, chatId: '42', botTokenSet: true });
+    strictEqual((await call(port, 'PUT', '/api/notifications', { repeatMinutes: 'often' })).status, 400);
+    const subscribed = await call(port, 'POST', '/api/notifications/subscriptions', { endpoint: 'https://push.example.org/1', keys: { p256dh: 'k', auth: 'a' } });
+    deepStrictEqual([subscribed.status, (subscribed.body as { webPush: { subscriptions: number } }).webPush.subscriptions], [201, 1]);
+    const left = await call(port, 'DELETE', '/api/notifications/subscriptions', { endpoint: 'https://push.example.org/1' });
+    strictEqual((left.body as { webPush: { subscriptions: number } }).webPush.subscriptions, 0);
+    notifications.close();
 });
 test('the settings page adds, reads, changes and removes agents, and switches the fleet', async () => {
     const home = mkdtempSync(join(webRoot, 'home-'));

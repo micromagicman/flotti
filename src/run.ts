@@ -14,6 +14,7 @@ import { FleetMcpServer } from './fleet-mcp.js';
 import { FleetSettings } from './fleet-settings.js';
 import type { LoadFleetOptions } from './fleet.js';
 import type { Environment } from './manifest.js';
+import { NotificationService } from './notifications.js';
 import { Supervisor } from './supervisor.js';
 import type { SupervisorOptions } from './supervisor.js';
 import type { Fleet } from './types.js';
@@ -161,8 +162,9 @@ type RunParts = {
     readonly tools: FleetMcpServer;
     readonly supervisor: Supervisor;
     readonly settings: FleetSettings;
+    readonly notifications: NotificationService;
 };
-/** Starts the fleet tools and puts the supervisor and the settings of the fleet on them. */
+/** Starts the fleet tools and puts the supervisor, the settings of the fleet and its notifications on them. */
 async function startSupervisor(fleet: Fleet, file: RunFile, options: RunOptions): Promise<RunParts> {
     const tools = await FleetMcpServer.start();
     const supervisor = new Supervisor(fleet, { persistHistory: true, fleetTools: tools, ...options.supervisor });
@@ -171,7 +173,8 @@ async function startSupervisor(fleet: Fleet, file: RunFile, options: RunOptions)
         env: options.env ?? process.env,
         onSwitch: (next) => file.move(next)
     });
-    return { tools, supervisor, settings };
+    const notifications = new NotificationService(supervisor, { env: options.env ?? process.env });
+    return { tools, supervisor, settings, notifications };
 }
 /** Serves the dashboard; when it cannot listen, closes the fleet tools and says why. */
 function serveDashboard(
@@ -183,10 +186,12 @@ function serveDashboard(
     return startDashboard(parts.supervisor, {
         host: DEFAULT_HOST,
         settings: parts.settings,
+        notifications: parts.notifications,
         ...options.dashboard,
         port,
         shutdown
     }).catch((error: unknown) => parts.tools.close().then(() => {
+        parts.notifications.close();
         throw describeListenError(error, port);
     }));
 }
@@ -205,6 +210,7 @@ function stopOnce(dashboard: Dashboard, parts: RunParts, file: RunFile): () => P
     return (): Promise<void> => {
         stopping ??= (async () => {
             await dashboard.close();
+            parts.notifications.close();
             await parts.supervisor.stop();
             await parts.tools.close();
             file.remove();
@@ -236,6 +242,7 @@ async function runFleet(options: RunOptions = {}): Promise<Running> {
     const parts = await startSupervisor(fleet, file, options);
     let requestStop = (): void => undefined;
     const dashboard = await serveDashboard(parts, options, port, { token, onRequest: () => requestStop() });
+    parts.notifications.setDashboardUrl(dashboard.url);
     file.write({ pid: process.pid, url: dashboard.url, token, startedAt: new Date().toISOString() });
     announceRun(print, created, fleet, dashboard.url);
     const stop = stopOnce(dashboard, parts, file);

@@ -3,9 +3,12 @@ import { dirname, join } from 'node:path';
 import { ConfigurationError } from './errors.js';
 /**
  * What flotti remembers about itself between runs, as the dashboard set it:
- * `~/.flotti/settings.json`. Only the fleet directory for now — the command
- * line has nothing but `run` and `stop`, so whatever a flag used to say lives
- * here and is changed on the settings page.
+ * `~/.flotti/settings.json`. The fleet directory lives here, and — under
+ * `notifications`, read by notifications.ts — how to reach a person outside
+ * the browser. The command line has nothing but `run` and `stop`, so whatever
+ * a flag used to say lives here and is changed on the settings page.
+ *
+ * The file may hold secrets (a bot token), so it is written for its owner only.
  */
 type Settings = {
     /** Absolute path of the fleet directory the dashboard chose. */
@@ -38,6 +41,17 @@ function readSettings(env: Environment): Settings {
         return {};
     }
     return parseSettings(text, path);
+}
+/**
+ * One top-level field of the settings file, as it is there; `undefined` when
+ * there is no file or no such field.
+ *
+ * @throws ConfigurationError when the file is there but is not a JSON object.
+ */
+function readSettingsField(env: Environment, name: string): unknown {
+    const path = settingsFile(env);
+    const text = path === undefined ? undefined : settingsText(path);
+    return text === undefined || path === undefined ? undefined : (settingsObject(text, path) as Record<string, unknown>)[name];
 }
 /**
  * Text of the settings file; `undefined` when there is no file yet.
@@ -93,7 +107,7 @@ function settingsObject(text: string, path: string): object {
  *
  * @returns Path of the settings file.
  */
-function writeSettings(env: Environment, settings: Settings): string {
+function writeSettings(env: Environment, settings: Settings | Readonly<Record<string, unknown>>): string {
     const path = settingsFile(env);
     if (path === undefined) {
         throw new ConfigurationError(
@@ -104,7 +118,7 @@ function writeSettings(env: Environment, settings: Settings): string {
     const kept = keptSettings(path);
     mkdirSync(dirname(path), { recursive: true });
     const temporary = `${path}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify({ ...kept, ...settings }, null, 4)}\n`);
+    writeFileSync(temporary, `${JSON.stringify({ ...kept, ...settings }, null, 4)}\n`, { mode: 0o600 });
     renameSync(temporary, path);
     return path;
 }
@@ -121,5 +135,5 @@ function keptSettings(path: string): Record<string, unknown> {
     }
     return kept;
 }
-export { readSettings, settingsFile, writeSettings };
+export { readSettings, readSettingsField, settingsFile, writeSettings };
 export type { Settings };

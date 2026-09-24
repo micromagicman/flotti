@@ -6,6 +6,7 @@ import type { Draft } from '../agent-draft.js';
 import { api } from '../api.js';
 import { AgentForm } from './AgentForm.js';
 import { ConnectionHealthView } from './ConnectionHealth.js';
+import { NotificationSettingsSection } from './NotificationSettings.js';
 import { StatusBadge } from './StatusBadge.js';
 type SettingsPanelProps = {
     /** The fleet as the socket says it, with live statuses. */
@@ -238,6 +239,7 @@ function SettingsPanel({ agents }: SettingsPanelProps) {
                         <SshConnect />
                         <FleetDirectory />
                         <AgentList agents={agents} onEditing={setEditing} />
+                        <NotificationSettingsSection />
                     </>
                 )
                 : <AgentEditor editing={editing} onDone={() => setEditing(undefined)} />}
