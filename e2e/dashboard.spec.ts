@@ -224,17 +224,17 @@ test('on a narrow screen the conversations are one tab away, in the list of them
 });
 test('an agent gives another a task: both tabs show who gave it to whom and how it ended, and the outcome comes back', async ({ page }) => {
     await page.goto(url);
-    await say(page, 'eva', 'give claude a task');
-    const card = feed(page, 'eva').getByRole('group', { name: 'Task from eva to claude: completed' });
-    await expect(card.locator('.delegation-bar')).toContainText('task · eva → claude');
+    await say(page, 'relay', 'give claude a task');
+    const card = feed(page, 'relay').getByRole('group', { name: 'Task from relay to claude: completed' });
+    await expect(card.locator('.delegation-bar')).toContainText('task · relay → claude');
     await expect(card).toContainText('Collect the failing tests');
-    await expect(card.locator('.delegation-result')).toContainText('you said: [from eva] Task');
-    const outcome = feed(page, 'eva').locator('.message-peer').filter({ hasText: 'you said: [from eva] Task' }).last();
-    await expect(outcome.locator('.envelope-bar')).toContainText('claude → eva');
+    await expect(card.locator('.delegation-result')).toContainText('you said: [from relay] Task');
+    const outcome = feed(page, 'relay').locator('.message-peer').filter({ hasText: 'you said: [from relay] Task' }).last();
+    await expect(outcome.locator('.envelope-bar')).toContainText('claude → relay');
     await expect(outcome.locator('.quote')).toContainText('Collect the failing tests');
     await tab(page, 'claude').click();
-    await expect(feed(page, 'claude').getByRole('group', { name: 'Task from eva to claude: completed' })).toBeVisible();
-    await expect(feed(page, 'claude')).toContainText(/you said: \[from eva\] Task \S+, given to you\./);
+    await expect(feed(page, 'claude').getByRole('group', { name: 'Task from relay to claude: completed' })).toBeVisible();
+    await expect(feed(page, 'claude')).toContainText(/you said: \[from relay\] Task \S+, given to you\./);
 });
 /** The row of the last message of the tab that says `text`, with its Reply and Forward. */
 const messageRow = (page: Page, name: string, text: string, side: 'user' | 'agent' = 'agent') =>
