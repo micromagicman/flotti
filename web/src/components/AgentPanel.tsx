@@ -55,6 +55,7 @@ function AgentTitle({ agent, feed, color }: HeaderProps) {
             <h1><AgentMark color={color} />{agent.name}</h1>
             <span className="kind">{agent.kind === 'local' ? 'local · ACP' : 'remote · A2A'}</span>
             <HarnessBadge agent={agent} />
+            {agent.admin === true ? <span className="admin-badge" title="Administrator: may restart agents and clear their context">admin</span> : null}
             <StatusBadge status={feed.status} />
             {feed.reason === undefined ? null : <span className="reason">{feed.reason}</span>}
         </div>
@@ -151,10 +152,14 @@ function AgentPanel({ agent, feed, agents, colors, dispatch, quotes, jump }: Age
         dispatch({ type: 'permission-answered', agentId: agent.id, requestId });
         void api.answerPermission(agent.id, requestId, optionId).catch(() => undefined);
     };
+    const answerAdmin = (actionId: string, allow: boolean): void => {
+        dispatch({ type: 'admin-answered', actionId });
+        void api.answerAdminAction(actionId, allow).catch(() => undefined);
+    };
     return (
         <section className="agent-panel" aria-label={agent.name}>
             <AgentHeader agent={agent} feed={feed} color={colors[agent.id]} />
-            <Feed items={feed.items} queue={feed.queue} status={feed.status} line={lineActions(agent.id)} agentId={agent.id} agentName={agent.name} agents={agents} colors={colors} onAnswer={answer} actions={messaging.actions} jump={jump} />
+            <Feed items={feed.items} queue={feed.queue} status={feed.status} line={lineActions(agent.id)} agentId={agent.id} agentName={agent.name} agents={agents} colors={colors} onAnswer={answer} onAdminAnswer={answerAdmin} actions={messaging.actions} jump={jump} />
             <AgentComposer agent={agent} agents={agents} colors={colors} messaging={messaging} />
         </section>
     );

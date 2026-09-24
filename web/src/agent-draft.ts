@@ -9,6 +9,8 @@ type Draft = {
     readonly id: string;
     readonly name: string;
     readonly description: string;
+    /** An administrator of the fleet: may restart the other agents and clear their context. */
+    readonly admin: boolean;
     /** Local agents. */
     readonly adapter: LocalAgentAdapter | '';
     readonly model: string;
@@ -43,6 +45,7 @@ const EMPTY: Draft = {
     id: '',
     name: '',
     description: '',
+    admin: false,
     adapter: '',
     model: '',
     command: '',
@@ -107,7 +110,14 @@ function fromLocalConfig(common: Draft, config: LocalAgentConfig): Draft {
     };
 }
 function fromConfig(config: AgentConfig): Draft {
-    const common = { ...EMPTY, kind: config.kind, id: config.id, name: config.name ?? '', description: config.description ?? '' };
+    const common = {
+        ...EMPTY,
+        kind: config.kind,
+        id: config.id,
+        name: config.name ?? '',
+        description: config.description ?? '',
+        admin: config.admin === true
+    };
     if (config.kind === 'remote') {
         return fromRemoteConfig(common, config);
     }
@@ -120,7 +130,8 @@ function commonConfig(draft: Draft) {
     return {
         id: draft.id.trim(),
         ...optional('name', draft.name.trim()),
-        ...optional('description', draft.description.trim())
+        ...optional('description', draft.description.trim()),
+        admin: draft.admin
     };
 }
 type CommonConfig = ReturnType<typeof commonConfig>;

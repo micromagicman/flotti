@@ -3,16 +3,19 @@ import { dirname, join } from 'node:path';
 import { ConfigurationError } from './errors.js';
 /**
  * What flotti remembers about itself between runs, as the dashboard set it:
- * `~/.flotti/settings.json`. The fleet directory lives here, and — under
- * `notifications`, read by notifications.ts — how to reach a person outside
- * the browser. The command line has nothing but `run` and `stop`, so whatever
- * a flag used to say lives here and is changed on the settings page.
+ * `~/.flotti/settings.json`. The fleet directory lives here, whether actions
+ * of administrators wait for a person, and — under `notifications`, read by
+ * notifications.ts — how to reach a person outside the browser. The command
+ * line has nothing but `run` and `stop`, so whatever a flag used to say lives
+ * here and is changed on the settings page.
  *
  * The file may hold secrets (a bot token), so it is written for its owner only.
  */
 type Settings = {
     /** Absolute path of the fleet directory the dashboard chose. */
     readonly fleet?: string;
+    /** Whether an action of an administrator of the fleet waits for a person to allow it; off when absent. */
+    readonly confirmAdminActions?: boolean;
 };
 type Environment = Readonly<Record<string, string | undefined>>;
 /** Where the settings live, relative to the home directory. */
@@ -78,15 +81,17 @@ function settingsText(path: string): string | undefined {
  * @throws ConfigurationError when the text is not settings.
  */
 function parseSettings(text: string, path: string): Settings {
-    const value = settingsObject(text, path);
-    const { fleet } = value as { fleet?: unknown };
-    if (fleet === undefined) {
-        return {};
-    }
-    if (typeof fleet !== 'string' || fleet.trim() === '') {
+    const { fleet, confirmAdminActions } = settingsObject(text, path) as { fleet?: unknown; confirmAdminActions?: unknown };
+    if (fleet !== undefined && (typeof fleet !== 'string' || fleet.trim() === '')) {
         throw new ConfigurationError('wrong-type', `${path}: fleet must be a non-empty string`, { path });
     }
-    return { fleet };
+    if (confirmAdminActions !== undefined && typeof confirmAdminActions !== 'boolean') {
+        throw new ConfigurationError('wrong-type', `${path}: confirmAdminActions must be true or false`, { path });
+    }
+    return {
+        ...(fleet === undefined ? {} : { fleet }),
+        ...(confirmAdminActions === undefined ? {} : { confirmAdminActions })
+    };
 }
 /** @throws ConfigurationError when the text is not a JSON object. */
 function settingsObject(text: string, path: string): object {

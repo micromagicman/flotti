@@ -115,6 +115,12 @@ class FakeFleetAgent implements FleetAgent {
         this.emit({ type: 'status', status: 'starting', reason: 'restarting' });
         this.emit({ type: 'status', status: 'idle' });
     }
+    async clearContext(): Promise<void> {
+        this.calls.push('clear-context');
+        if (this.broken) {
+            throw new Error(`${this.agentId} is broken`);
+        }
+    }
     async stop(): Promise<void> {
         this.calls.push('stop');
         this.emit({ type: 'status', status: 'stopped' });

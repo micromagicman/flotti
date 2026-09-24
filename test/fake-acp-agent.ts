@@ -195,7 +195,7 @@ acp.agent({ name: 'fake-acp-agent' })
         const { sessionId } = context.params;
         const first = context.params.prompt[0];
         const text = first?.type === 'text' ? first.text : '';
-        record({ event: 'session/prompt', text });
+        record({ event: 'session/prompt', text, sessionId });
         switch (text) {
             case 'crash':
                 await say(context.client, sessionId, 'about to crash');

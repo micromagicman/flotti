@@ -114,6 +114,8 @@ type Run = {
     permanent: boolean;
     /** While `session/load` replays the history, its updates are not news. */
     replaying: boolean;
+    /** What the session was opened with: a new session, when the context is cleared, is opened the same way. */
+    sessionRequest?: NewSessionRequest;
     trace?: WriteStream;
     stderrLog?: WriteStream;
     /** On an SSH host: reads where the command runs and the port of the way back, from standard error. */
@@ -149,6 +151,8 @@ class LocalAgentProcess implements FleetAgent {
     private readonly permissions = new Map<string, (response: RequestPermissionResponse) => void>();
     private permissionCount = 0;
     private waiters: { resolve: () => void; reject: (error: Error) => void }[] = [];
+    /** Set while the context is being cleared: the messages in line wait for the new session. */
+    private renewing = false;
     constructor(agent: LocalAgent, options: LocalAgentOptions = {}) {
         this.agent = agent;
         this.events = new AgentEvents(agent.id);
@@ -237,6 +241,37 @@ class LocalAgentProcess implements FleetAgent {
         const ready = this.whenReady();
         void this.launch();
         return ready;
+    }
+    /**
+     * Opens a new ACP session with the running agent: the next message goes
+     * without the conversation before it. The message in work is cancelled
+     * first; the messages in line go to the new session. An agent that is not
+     * running gets a new session when it starts.
+     */
+    async clearContext(): Promise<void> {
+        const run = this.run;
+        if (this.lifecycle !== 'running' || run?.connection === undefined || run.sessionRequest === undefined) {
+            this.session = undefined;
+            return;
+        }
+        this.renewing = true;
+        try {
+            await this.cancel();
+            await this.renewSession(run, run.connection, run.sessionRequest);
+        } finally {
+            this.renewing = false;
+        }
+        this.pump();
+    }
+    /** The new session of {@link clearContext}; an agent that cannot open one is failed and restarted by its policy. */
+    private async renewSession(run: Run, connection: acp.ClientConnection, request: NewSessionRequest): Promise<void> {
+        this.session = undefined;
+        try {
+            await this.applyModel(run, await this.newSession(connection, request, false));
+        } catch (error) {
+            this.fail(run, `could not open a new session: ${message(error)}`);
+            throw error;
+        }
     }
     /**
      * Sends a message. While the agent works on another one, the message waits
@@ -534,6 +569,7 @@ class LocalAgentProcess implements FleetAgent {
     ): Promise<SessionConfigOption[] | null | undefined> {
         const agentCapabilities = capabilities.agentCapabilities;
         const common = this.sessionParameters(capabilities, handover, place);
+        run.sessionRequest = common;
         const previous = this.session;
         if (previous !== undefined && agentCapabilities?.sessionCapabilities?.resume) {
             return await this.resumeSession(connection, common, previous);
@@ -631,7 +667,7 @@ class LocalAgentProcess implements FleetAgent {
     // --- running ---------------------------------------------------------------------------------------------
     private pump(): void {
         const run = this.run;
-        if (this.active !== undefined || this.lifecycle !== 'running' || run?.connection === undefined) {
+        if (this.active !== undefined || this.renewing || this.lifecycle !== 'running' || run?.connection === undefined) {
             return;
         }
         const turn = this.queue.shift();

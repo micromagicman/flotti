@@ -814,6 +814,59 @@ describe('A2AAgent: tasks between an A2A agent and a local one', { timeout: 20_0
         await supervisor.stop();
     });
 });
+describe('A2AAgent: clearing the context', () => {
+    it('sends the next message without the context of the conversation before', async () => {
+        const agent = await fake({ script: echo });
+        const { client } = connect(agent);
+        await client.start();
+        await client.send('one');
+        await client.send('two');
+        await reaches(client, 'idle');
+        ok((agent.received[1]?.params['message'] as { contextId?: string }).contextId);
+        await client.clearContext();
+        await client.send('three');
+        await reaches(client, 'idle');
+        const third = agent.received.at(-1)?.params['message'] as { contextId?: string; parts?: { text?: string }[] };
+        strictEqual(third.parts?.[0]?.text, 'three');
+        strictEqual(third.contextId, undefined);
+    });
+});
+describe('A2AAgent: requests of an administrator through the inbox', () => {
+    it('hands a request over once, and only a request it understands', async () => {
+        const { agent, post, isOpen } = await inboxAgent();
+        const requests: unknown[] = [];
+        const { client, events } = connect(agent, { onAdminRequest: request => requests.push(request) });
+        await client.start();
+        await eventually(isOpen);
+        post('', 'adm-1', { [INBOX_EXTENSION]: { kind: 'admin', action: 'clear-context', agent: 'builder' } });
+        post('', 'adm-1', { [INBOX_EXTENSION]: { kind: 'admin', action: 'clear-context', agent: 'builder' } });
+        post('', 'adm-2', { [INBOX_EXTENSION]: { kind: 'admin', action: 'delete', agent: 'builder' } });
+        post('', 'adm-3', { [INBOX_EXTENSION]: { kind: 'admin', action: 'restart', agent: 'fake' } });
+        await eventually(() => requests.length === 2);
+        await new Promise(resolve => setTimeout(resolve, 50));
+        deepStrictEqual(requests, [{ action: 'clear-context', target: 'builder' }, { action: 'restart', target: 'fake' }]);
+        ok(events.some(event => event.type === 'log' && /flotti does not know/.test(event.text)));
+        deepStrictEqual(messages(events), [], 'a request is not a message of the agent');
+    });
+    it('lets an administrator clear the context of another agent, and tells a non-administrator it may not', async (t) => {
+        const admin = await inboxAgent();
+        const other = await inboxAgent();
+        const agents = [{ ...manifest(admin.agent.url), id: 'a', admin: true as const }, { ...manifest(other.agent.url), id: 'b' }];
+        // No createAgent: the supervisor wires the inbox requests to its administrators itself.
+        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents });
+        t.after(() => supervisor.stop());
+        await supervisor.start();
+        await eventually(() => admin.isOpen() && other.isOpen());
+        admin.post('', 'adm-1', { [INBOX_EXTENSION]: { kind: 'admin', action: 'clear-context', agent: 'b' } });
+        const done = (id: string) => supervisor.history(id)
+            .some(event => event.type === 'admin-action' && event.state === 'done' && event.admin === 'a' && event.target === 'b');
+        await eventually(() => done('a') && done('b'));
+        other.post('', 'adm-2', { [INBOX_EXTENSION]: { kind: 'admin', action: 'restart', agent: 'a' } });
+        await eventually(() => conversation(other.agent).length === 1);
+        match(conversation(other.agent)[0]?.[0] ?? '', /Refused: only an administrator/);
+        ok(!supervisor.history('a').some(event => event.type === 'admin-action' && event.admin === 'b'), 'nothing happened to "a"');
+    });
+});
 describe('cardLocation', () => {
     it('looks for the card under the address', () => {
         deepStrictEqual(cardLocation('https://eva.example.org/a2a'), {

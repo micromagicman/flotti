@@ -24,6 +24,13 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   that is not there or is stopped fails at once; the giver can take a task back (`cancel_delegation`, or
   `cancel` in the inbox), and a task not done by its optional deadline fails. Both tabs show the task as a
   card: who gave it to whom, where it stands and how it ended (#51).
+- **Administrators of the fleet.** An agent with `admin` in its manifest, or **Administrator** ticked in
+  the settings, may restart the agents of the fleet and clear their context — itself included — with
+  the tools `restart_agent` and `clear_context`, or a remote one through the inbox (`kind: admin`).
+  Anyone else is refused, and only a person gives or takes the role. Each action is a line in the tab
+  of the administrator and in the tab of the agent; a cleared context is a divider there, and the
+  history stays. **Ask me before an administrator…** in the settings makes every action wait for
+  **Allow**; a refusal reaches the administrator as one. `list_agents` marks administrators (#55).
 - **Conversations of agents.** Every two agents that wrote to each other get a tab under
   "Conversations": one read-only lane of all they sent each other, in order, with quotes and forwards,
   and **Write to …** for either agent. The sidebar names the four newest pairs; the rest, and all of

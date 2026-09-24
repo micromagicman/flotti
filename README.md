@@ -111,6 +111,10 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
 - **All agents** sends one message to every agent you leave ticked. Each gets it on its own, so an
   agent that is down or busy holds nobody up; the page shows, agent by agent, whether the message was
   delivered, waits in line or failed, and the answers come in each agent's tab.
+- **Administrators** of the fleet are marked `admin` in the header of their tab. What one does to an
+  agent — a restart, a cleared context — is a line in its own tab and in the tab of that agent; a
+  cleared context is a divider in the tab of the agent it was cleared for, and the history above it
+  stays. See [Administrators of the fleet](#administrators-of-the-fleet).
 - **Settings** sets the fleet up; see below.
 
 ### Settings
@@ -143,6 +147,11 @@ same files: the fleet stays directories a person can read and edit by hand.
   changes. The choice is saved in `~/.flotti/settings.json`, and the next `flotti run` opens it.
 - **Notifications.** For when you are away from the dashboard; see
   [Notifications outside the browser](#notifications-outside-the-browser).
+- **Administrators.** **Administrator** in the form of an agent gives it the role (`admin` in its
+  manifest); only a person gives and takes it. **Ask me before an administrator restarts an agent or
+  clears its context** makes every such action wait for **Allow** in the tab of the administrator —
+  **Refuse** reaches the administrator as a refusal; off, the action is done at once. It is off by
+  default, saved in `~/.flotti/settings.json` and read at every action.
 
 ### Notifications outside the browser
 
@@ -211,6 +220,8 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `GET /api/notifications`, `PUT /api/notifications` `{events?, repeatMinutes?, dashboardUrl?, telegram?, webPush?}` | the notification settings, without secrets; a change of them |
 | `POST /api/notifications/subscriptions`, `DELETE …` `{endpoint, keys}` | a browser subscribes to Web Push, or stops |
 | `POST /api/notifications/test`                | a test notification over every channel switched on      |
+| `GET /api/admin-settings`, `PUT /api/admin-settings` `{confirmActions}` | whether actions of administrators wait for a person |
+| `POST /api/admin-actions/<action>` `{allow}`  | allows or refuses an action of an administrator waiting for it |
 | `/ws`                                         | `fleet` first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and gets the events after them, then live ones; `health` whenever the health of the SSH connection of an agent changes |
 
 With no login, the server guards against other web pages rather than against people: it answers only
@@ -297,6 +308,7 @@ The smallest one:
 | `env`                 | no       | object of strings               | `{}`                           | Variables added to the agent environment.                                        |
 | `restart`             | no       | `always`, `on-failure`, `never` | `on-failure`                   | What to do when the agent stops.                                                 |
 | `heartbeatTimeoutSec` | no       | positive number                 | `60`                           | Seconds without a heartbeat before the agent counts as lost.                      |
+| `admin`               | no       | `true`, `false`                 | `false`                        | An administrator of the fleet: see [Administrators of the fleet](#administrators-of-the-fleet). |
 
 The system prompt is not a field: it is the file `system-prompt.md` next to the manifest. A prompt is
 prose, often long, and a JSON string is a poor place to write prose in.
@@ -340,6 +352,7 @@ A full example:
 | `name`        | no       | non-empty string | the id             | Name shown to people.                            |
 | `description` | no       | non-empty string | —                  | One line about the agent.                        |
 | `id`          | no       | non-empty string | —                  | If given, must equal the directory name.         |
+| `admin`       | no       | `true`, `false`  | `false`            | An administrator of the fleet: see [Administrators of the fleet](#administrators-of-the-fleet). |
 
 `auth` is one of:
 
@@ -409,7 +422,7 @@ and `session/load`. A bare Claude Code or Codex sees them as `mcp__flotti__…`:
 
 | Tool           | What it does                                                                          |
 |----------------|---------------------------------------------------------------------------------------|
-| `list_agents`  | the agents of the fleet — id, name, description, harness, status; the caller is marked `you` |
+| `list_agents`  | the agents of the fleet — id, name, description, harness, status; the caller is marked `you`, administrators `admin` |
 | `send_message` | sends a message to another agent: `to` — its id, `text`                                |
 | `reply`        | answers the agent whose message came last, quoting it                                  |
 | `forward`      | forwards the last message another agent sent, as it was, to another agent; `comment` goes before it |
@@ -446,6 +459,25 @@ both adapters take — claude-agent-acp 0.81.1 declares `mcpCapabilities` `http`
 tunnel carries to an agent on another host. An agent that declares no `http` gets no tools, and a log
 event says so. A remote A2A agent — one with a loop of its own — gets no tools; a message from an agent
 reaches it with a line saying who wrote.
+
+### Administrators of the fleet
+
+An agent with `"admin": true` in its manifest — or **Administrator** ticked in the settings — may
+look after the other agents without a person at hand. There may be several administrators or none;
+by default there are none. An administrator gets two more tools:
+
+| Tool             | What it does                                                                        |
+|------------------|-------------------------------------------------------------------------------------|
+| `restart_agent`  | restarts an agent: `id` — its id; a local agent as a process, a remote one through [the restart extension](docs/a2a-restart.md), or with a new conversation when it has none |
+| `clear_context`  | starts the conversation of an agent anew: a local agent gets a new ACP session, a remote one a new `contextId`; what it is doing now is cancelled |
+
+A remote administrator asks the same through [the inbox](docs/a2a-inbox.md#requests-of-an-administrator).
+An administrator may name itself; the action is then done once the turn it asked in is over.
+Whether the caller may is decided by flotti: an agent that is not an administrator is refused, with
+the reason, and nothing happens. No tool gives or takes the role — only a person does, in the manifest
+or the settings. A cleared context drops the session only: the tab keeps its history, with a divider
+where the context was cleared. With the confirmation on in the settings, every action waits for a
+person to allow it, and a refusal reaches the administrator as one.
 
 ### On another host
 

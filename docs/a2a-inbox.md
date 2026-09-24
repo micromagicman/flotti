@@ -72,7 +72,8 @@ The message may say what it is, under the extension URI in its own metadata:
 ```
 
 - `kind` — `message` (the default) is a message of the agent, shown in its tab like an answer;
-  `progress` is a line about what the agent is doing, shown as such and not as a message.
+  `progress` is a line about what the agent is doing, shown as such and not as a message; `admin` is a
+  request of an administrator of the fleet, below.
 - `busy` — optional: `true` when the agent is busy on its own, `false` when it is done. The tab shows
   the agent as working in between. A message from a person has the last word while it is being worked on.
 - `to` — optional: the id of another agent of the fleet (the name of its directory) the message is for.
@@ -152,6 +153,35 @@ why in the text; so does one not done by its deadline, and the agent working on 
 take a task back, send a message with `{"cancel": "task-1"}`: the task leaves the line of the other
 agent, or its turn is cancelled, and no outcome comes back for it. The tabs of both agents show the task
 and where it stands.
+
+## Requests of an administrator
+
+An agent that is an administrator of the fleet (`"admin": true` in its manifest) asks flotti to restart
+an agent or clear its context with a message of `kind: admin` — `action` is `restart` or
+`clear-context`, `agent` the id of the agent, which may be its own:
+
+```json
+{
+    "messageId": "…",
+    "role": "ROLE_AGENT",
+    "parts": [{"text": ""}],
+    "metadata": {
+        "https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md": {"kind": "admin", "action": "clear-context", "agent": "reviewer"}
+    }
+}
+```
+
+The request is not a message: the tab does not show its text, and `busy` and `to` are not read with it.
+flotti takes it once per `messageId`, checks that the agent is an administrator and does it; the tabs of
+both agents show the action. A request that is refused — the agent is not an administrator, a person
+refused it, there is no such agent — or that failed comes back to the agent as a message,
+`[flotti] Refused: …`, since there is no call to answer. A request on itself is done once the turn the
+agent is in is over. A request with an `action` or `agent` flotti does not know is a line in the tab,
+and nothing else.
+
+`clear-context` means the next message to the agent goes with a new `contextId` — a new conversation,
+without the old history; a task in work is cancelled. What the agent keeps under the old `contextId` is
+its own business.
 
 ## When the stream breaks
 

@@ -23,6 +23,17 @@ import type { ConnectionHealth, HealthListener } from './connection-health.js';
 type AgentStatus = 'starting' | 'idle' | 'working' | 'waiting' | 'error' | 'stopped';
 /** Progress of one tool call the agent makes. */
 type ToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
+/** What an administrator of the fleet does to an agent (#55). */
+type AdminAction = 'restart' | 'clear-context';
+/**
+ * Where an action of an administrator is:
+ * - `pending`   — waits for a person to allow it in the dashboard;
+ * - `refused`   — not done: a person refused it, or the caller may not do it;
+ * - `scheduled` — allowed, and done once the turn the administrator asked it in is over: it acts on itself;
+ * - `done`      — done;
+ * - `failed`    — tried, and it did not work; the reason says why.
+ */
+type AdminActionState = 'pending' | 'refused' | 'scheduled' | 'done' | 'failed';
 /** One answer a person may give to a permission request, as the agent offered it. */
 type PermissionOption = {
     readonly optionId: string;
@@ -140,6 +151,23 @@ type AgentEventBody =
      * a person — `input_required` and `auth_required`.
      */
     | { readonly type: 'turn-end'; readonly reason: string }
+    /**
+     * An action of an administrator of the fleet on an agent: the same event,
+     * by `actionId`, in the tab of the administrator and in the tab of the
+     * agent, once for every state it goes through.
+     */
+    | {
+        readonly type: 'admin-action';
+        readonly actionId: string;
+        readonly action: AdminAction;
+        /** Id of the administrator that asked for it. */
+        readonly admin: string;
+        /** Id of the agent it acts on; may be the administrator itself. */
+        readonly target: string;
+        readonly state: AdminActionState;
+        /** Why it was refused or failed. */
+        readonly reason?: string;
+    }
     /** A line of diagnostics: from the agent itself, or from the side that runs it. */
     | { readonly type: 'log'; readonly source: 'agent' | 'flotti'; readonly text: string }
     /** Something the protocol said that has no event of its own here, untouched. */
@@ -361,6 +389,12 @@ interface FleetAgent {
      * says which.
      */
     restart(): Promise<void>;
+    /**
+     * Starts the conversation anew: the next message goes without what was
+     * said before. Drops the message in work. A local agent gets a new ACP
+     * session, a remote one a new `contextId`.
+     */
+    clearContext(): Promise<void>;
     /** Stops the agent, or disconnects from it; queued messages are dropped. */
     stop(): Promise<void>;
     /**
@@ -402,6 +436,8 @@ class AgentEvents {
 }
 export { AgentEvents, WITHDRAWN, composeText, messageFields, waitingInLine };
 export type {
+    AdminAction,
+    AdminActionState,
     AgentEvent,
     AgentEventBody,
     AgentEventListener,

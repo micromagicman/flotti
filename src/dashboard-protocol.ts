@@ -28,6 +28,8 @@ type AgentSummary = {
     readonly status: AgentStatus;
     /** Health of the SSH connection of a remote agent reached over one; absent for any other. */
     readonly health?: ConnectionHealth;
+    /** Set for an administrator of the fleet: it may restart the other agents and clear their context. */
+    readonly admin?: true;
 };
 /**
  * What the page sends over the socket: the last `seq` it has seen of each
@@ -62,6 +64,18 @@ type SendRequest = {
     readonly forwarded?: Forwarded;
     /** One agent only: the `messageId` of a message that was not delivered, sent again with this one. */
     readonly retryOf?: string;
+};
+/** Body of `POST /api/admin-actions/<actionId>`: a person allows or refuses an action of an administrator. */
+type AdminAnswer = {
+    readonly allow: boolean;
+};
+/** `GET /api/admin-settings`, the body of `PUT /api/admin-settings` and the answer to it. */
+type AdminSettings = {
+    /**
+     * Whether every action of an administrator waits for a person to allow it
+     * in the dashboard; when off, it is done at once.
+     */
+    readonly confirmActions: boolean;
 };
 /** Body of `POST /api/agents/<id>/permissions/<requestId>`; no option refuses the request. */
 type PermissionAnswer = {
@@ -125,6 +139,8 @@ type LocalAgentConfig = {
     readonly env?: Readonly<Record<string, string>>;
     readonly restart?: RestartPolicy;
     readonly heartbeatTimeoutSec?: number;
+    /** An administrator of the fleet; `false` or absent means it is not one. */
+    readonly admin?: boolean;
     /** Text of `system-prompt.md`; empty or absent means no such file. */
     readonly systemPrompt?: string;
 };
@@ -140,6 +156,8 @@ type RemoteAgentConfig = {
     readonly url?: string;
     readonly ssh?: RemoteSsh;
     readonly auth?: RemoteAuth;
+    /** An administrator of the fleet; `false` or absent means it is not one. */
+    readonly admin?: boolean;
 };
 /** Body of `POST /api/ssh-agents`: the one thing a person gives to add the agents of a host. */
 type SshAgentsRequest = {
@@ -220,6 +238,8 @@ type ErrorResponse = {
     readonly error: string;
 };
 export type {
+    AdminAnswer,
+    AdminSettings,
     AgentConfig,
     ConnectionHealth,
     AgentSummary,

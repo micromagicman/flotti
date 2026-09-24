@@ -46,6 +46,8 @@ function localAgent(fleet: string, id: string, adapter?: string): void {
  */
 async function remoteAgent(fleet: string, id: string): Promise<void> {
     let inbox: ((text: string, kind: string, to?: string, extra?: Record<string, unknown>) => void) | undefined;
+    /** A request of an administrator of the fleet, through the inbox as well. */
+    let admin: ((action: string, agent: string) => void) | undefined;
     remote = await new FakeAgent({
         streaming: true,
         extensions: [INBOX_EXTENSION],
@@ -56,6 +58,10 @@ async function remoteAgent(fleet: string, id: string): Promise<void> {
                 inbox = (text, kind, to, extra) => bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_WORKING, {
                     ...agentMessage(text, context, `own-${++count}`),
                     metadata: { [INBOX_EXTENSION]: { kind, ...(to === undefined ? {} : { to }), ...extra } }
+                }));
+                admin = (action, agent) => bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_WORKING, {
+                    ...agentMessage('', context, `own-${++count}`),
+                    metadata: { [INBOX_EXTENSION]: { kind: 'admin', action, agent } }
                 }));
                 await new Promise(() => undefined);
             }
@@ -72,6 +78,9 @@ async function remoteAgent(fleet: string, id: string): Promise<void> {
             }
             if (said(context) === 'give claude a task') {
                 setTimeout(() => inbox?.('Collect the failing tests', 'message', 'claude', { task: {} }), 100);
+            }
+            if (said(context) === 'clear codex') {
+                setTimeout(() => admin?.('clear-context', 'codex'), 100);
             }
         }
     }).listen();
@@ -503,6 +512,38 @@ test('Telegram set up in the settings: a wait is one message, the answer deletes
     await section.getByRole('checkbox', { name: 'Telegram' }).uncheck();
     await section.getByRole('button', { name: 'Save' }).click();
     await expect(section.getByRole('status').filter({ hasText: 'Saved.' })).toBeVisible();
+});
+test('makes an agent an administrator in the settings; its action waits for a person and shows in both tabs', async ({ page }) => {
+    await page.goto(`${url}#/_settings`);
+    await settingsRow(page, 'relay').getByRole('button', { name: 'Edit' }).click();
+    await expect(field(page, 'Administrator')).not.toBeChecked();
+    await field(page, 'Administrator').check();
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(settingsRow(page, 'relay')).toContainText('relay · remote · A2A · admin');
+    const manifest = () => JSON.parse(readFileSync(join(workspace, 'fleet', 'remote', 'relay', 'agent.json'), 'utf8')) as Record<string, unknown>;
+    expect(manifest()['admin']).toBe(true);
+    const confirm = page.getByRole('group', { name: 'Administrators' }).getByRole('checkbox');
+    await expect(confirm).not.toBeChecked();
+    await confirm.check();
+    await expect(confirm).toBeChecked();
+    const settings = () => JSON.parse(readFileSync(join(workspace, '.flotti', 'settings.json'), 'utf8')) as Record<string, unknown>;
+    await expect.poll(() => settings()['confirmAdminActions']).toBe(true);
+    await say(page, 'relay', 'clear codex');
+    await expect(page.locator('.admin-badge')).toHaveText('admin');
+    const request = feed(page, 'relay').locator('.admin-request');
+    await expect(request).toContainText('relay asks to clear the context of codex');
+    await request.getByRole('button', { name: 'Allow' }).click();
+    await expect(feed(page, 'relay')).toContainText('relay cleared the context of codex');
+    await tab(page, 'codex').click();
+    await expect(feed(page, 'codex').getByRole('separator', { name: /Context cleared: relay cleared the context of codex/ })).toBeVisible();
+    await page.goto(`${url}#/_settings`);
+    await confirm.uncheck();
+    await expect(confirm).not.toBeChecked();
+    await settingsRow(page, 'relay').getByRole('button', { name: 'Edit' }).click();
+    await field(page, 'Administrator').uncheck();
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(settingsRow(page, 'relay')).not.toContainText('admin');
+    expect('admin' in manifest()).toBe(false);
 });
 test('adds a local agent in the settings, with no file edited by hand, and it answers in its tab', async ({ page }) => {
     await page.goto(url);

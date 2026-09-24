@@ -1,4 +1,5 @@
 import type {
+    AdminSettings,
     AgentConfig,
     AgentSummary,
     BroadcastResponse,
@@ -47,6 +48,10 @@ const api = {
     create: (config: AgentConfig): Promise<AgentSummary> => post('/api/agents', config),
     update: (config: AgentConfig): Promise<AgentSummary> => call('PUT', agentPath(config.id), config),
     remove: (agentId: string): Promise<{ readonly trash?: string }> => call('DELETE', agentPath(agentId)),
+    answerAdminAction: (actionId: string, allow: boolean): Promise<object> =>
+        post(`/api/admin-actions/${encodeURIComponent(actionId)}`, { allow }),
+    adminSettings: (): Promise<AdminSettings> => call('GET', '/api/admin-settings'),
+    setAdminSettings: (settings: AdminSettings): Promise<AdminSettings> => call('PUT', '/api/admin-settings', settings),
     fleet: (): Promise<FleetInfo> => call('GET', '/api/fleet'),
     switchFleet: (path: string): Promise<FleetInfo> => call('PUT', '/api/fleet', { path }),
     notifications: (): Promise<NotificationSettings> => call('GET', '/api/notifications'),
