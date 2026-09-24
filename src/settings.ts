@@ -33,19 +33,49 @@ function readSettings(env: Environment): Settings {
     if (path === undefined) {
         return {};
     }
-    let text: string;
+    const text = settingsText(path);
+    if (text === undefined) {
+        return {};
+    }
+    return parseSettings(text, path);
+}
+/**
+ * Text of the settings file; `undefined` when there is no file yet.
+ *
+ * @throws ConfigurationError when the file is there but cannot be read.
+ */
+function settingsText(path: string): string | undefined {
     try {
-        text = readFileSync(path, 'utf8');
+        return readFileSync(path, 'utf8');
     } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === 'ENOENT' || code === 'ENOTDIR') {
-            return {};
+            return undefined;
         }
         throw new ConfigurationError('unreadable-file', `Settings could not be read (${code ?? 'unknown error'}): ${path}`, {
             path,
             cause: error
         });
     }
+}
+/**
+ * Settings out of the text of the settings file.
+ *
+ * @throws ConfigurationError when the text is not settings.
+ */
+function parseSettings(text: string, path: string): Settings {
+    const value = settingsObject(text, path);
+    const { fleet } = value as { fleet?: unknown };
+    if (fleet === undefined) {
+        return {};
+    }
+    if (typeof fleet !== 'string' || fleet.trim() === '') {
+        throw new ConfigurationError('wrong-type', `${path}: fleet must be a non-empty string`, { path });
+    }
+    return { fleet };
+}
+/** @throws ConfigurationError when the text is not a JSON object. */
+function settingsObject(text: string, path: string): object {
     let value: unknown;
     try {
         value = JSON.parse(text);
@@ -55,14 +85,7 @@ function readSettings(env: Environment): Settings {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
         throw new ConfigurationError('wrong-type', `${path}: the settings must be a JSON object`, { path });
     }
-    const { fleet } = value as { fleet?: unknown };
-    if (fleet === undefined) {
-        return {};
-    }
-    if (typeof fleet !== 'string' || fleet.trim() === '') {
-        throw new ConfigurationError('wrong-type', `${path}: fleet must be a non-empty string`, { path });
-    }
-    return { fleet };
+    return value;
 }
 /**
  * Saves the settings, keeping whatever else the file holds. Written to a
@@ -78,6 +101,15 @@ function writeSettings(env: Environment, settings: Settings): string {
             'Cannot save the settings: neither HOME nor USERPROFILE is set in the environment'
         );
     }
+    const kept = keptSettings(path);
+    mkdirSync(dirname(path), { recursive: true });
+    const temporary = `${path}.${process.pid}.tmp`;
+    writeFileSync(temporary, `${JSON.stringify({ ...kept, ...settings }, null, 4)}\n`);
+    renameSync(temporary, path);
+    return path;
+}
+/** Whatever the settings file already holds; nothing when it is missing or not a JSON object. */
+function keptSettings(path: string): Record<string, unknown> {
     let kept: Record<string, unknown> = {};
     try {
         const current: unknown = JSON.parse(readFileSync(path, 'utf8'));
@@ -87,11 +119,7 @@ function writeSettings(env: Environment, settings: Settings): string {
     } catch {
         // No file yet, or one we could not read: what we write replaces it.
     }
-    mkdirSync(dirname(path), { recursive: true });
-    const temporary = `${path}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify({ ...kept, ...settings }, null, 4)}\n`);
-    renameSync(temporary, path);
-    return path;
+    return kept;
 }
 export { readSettings, settingsFile, writeSettings };
 export type { Settings };

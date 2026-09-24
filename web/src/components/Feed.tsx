@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from 'react';
+import type { UIEvent } from 'react';
 import type { AgentSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import type { FeedItem } from '../feed.js';
@@ -11,6 +12,22 @@ type FeedProps = {
     readonly colors: AgentColors;
     readonly onAnswer: (requestId: string, optionId?: string) => void;
 };
+function PermissionOptions({ item, onAnswer }: { readonly item: FeedItem & { kind: 'permission' }; readonly onAnswer: FeedProps['onAnswer'] }) {
+    return (
+        <div className="options">
+            {item.options.map((option) => (
+                <button
+                    key={option.optionId}
+                    type="button"
+                    className={option.kind.startsWith('allow') ? 'primary' : ''}
+                    onClick={() => onAnswer(item.requestId, option.optionId)}
+                >
+                    {option.name}
+                </button>
+            ))}
+        </div>
+    );
+}
 function Permission({ item, onAnswer }: { readonly item: FeedItem & { kind: 'permission' }; readonly onAnswer: FeedProps['onAnswer'] }) {
     return (
         <div className="item permission">
@@ -18,20 +35,7 @@ function Permission({ item, onAnswer }: { readonly item: FeedItem & { kind: 'per
             <div>{item.title}</div>
             {item.settled
                 ? <div className="muted">answered</div>
-                : (
-                    <div className="options">
-                        {item.options.map((option) => (
-                            <button
-                                key={option.optionId}
-                                type="button"
-                                className={option.kind.startsWith('allow') ? 'primary' : ''}
-                                onClick={() => onAnswer(item.requestId, option.optionId)}
-                            >
-                                {option.name}
-                            </button>
-                        ))}
-                    </div>
-                )}
+                : <PermissionOptions item={item} onAnswer={onAnswer} />}
         </div>
     );
 }
@@ -60,34 +64,36 @@ function Envelope({ item, peer, agentId, agentName, agents, colors }: {
         </div>
     );
 }
-function FeedEntry({ item, onAnswer, ...fleet }: { readonly item: FeedItem } & Omit<FeedProps, 'items'>) {
+function MessageEntry({ item, ...fleet }: { readonly item: FeedItem & { kind: 'message' } } & Omit<FeedProps, 'items' | 'onAnswer'>) {
     const { agentName } = fleet;
+    const peer = item.role === 'user' ? item.from : item.to;
+    if (peer !== undefined) {
+        return <Envelope item={item} peer={peer} {...fleet} />;
+    }
+    return (
+        <div className={`item message message-${item.role}`}>
+            <div className="item-label">{item.role === 'user' ? 'You' : agentName}</div>
+            <div className="text">{item.text}</div>
+        </div>
+    );
+}
+function ToolEntry({ item }: { readonly item: FeedItem & { kind: 'tool' } }) {
+    return (
+        <div className={`item tool tool-${item.status ?? 'pending'}`}>
+            <span className="tool-title">{item.title}</span>
+            <span className="tool-status">{item.status ?? 'pending'}</span>
+        </div>
+    );
+}
+/** Everything in the feed but messages and permission requests. */
+function NoteEntry({ item }: { readonly item: Exclude<FeedItem, { kind: 'message' | 'permission' }> }) {
     switch (item.kind) {
-        case 'message': {
-            const peer = item.role === 'user' ? item.from : item.to;
-            if (peer !== undefined) {
-                return <Envelope item={item} peer={peer} {...fleet} />;
-            }
-            return (
-                <div className={`item message message-${item.role}`}>
-                    <div className="item-label">{item.role === 'user' ? 'You' : agentName}</div>
-                    <div className="text">{item.text}</div>
-                </div>
-            );
-        }
         case 'thought':
             return <details className="item thought"><summary>Thinking</summary><div className="text">{item.text}</div></details>;
         case 'progress':
             return <div className="item progress">{item.text}</div>;
         case 'tool':
-            return (
-                <div className={`item tool tool-${item.status ?? 'pending'}`}>
-                    <span className="tool-title">{item.title}</span>
-                    <span className="tool-status">{item.status ?? 'pending'}</span>
-                </div>
-            );
-        case 'permission':
-            return <Permission item={item} onAnswer={onAnswer} />;
+            return <ToolEntry item={item} />;
         case 'turn-end':
             return item.reason === 'end_turn' ? <hr className="turn-end" /> : <div className="item turn-end-note">Turn ended: {item.reason}</div>;
         case 'status':
@@ -98,9 +104,18 @@ function FeedEntry({ item, onAnswer, ...fleet }: { readonly item: FeedItem } & O
             return <details className="item raw"><summary>{item.protocol.toUpperCase()} message</summary><pre>{JSON.stringify(item.payload, null, 2)}</pre></details>;
     }
 }
-/** The agent's output, newest at the bottom; follows new output unless the reader scrolled up. */
-function Feed({ items, onAnswer, ...fleet }: FeedProps) {
-    const { agentName } = fleet;
+function FeedEntry({ item, onAnswer, ...fleet }: { readonly item: FeedItem } & Omit<FeedProps, 'items'>) {
+    switch (item.kind) {
+        case 'message':
+            return <MessageEntry item={item} {...fleet} />;
+        case 'permission':
+            return <Permission item={item} onAnswer={onAnswer} />;
+        default:
+            return <NoteEntry item={item} />;
+    }
+}
+/** Keeps the newest output in view, unless the reader scrolled up from the bottom. */
+function usePinnedScroll(items: readonly FeedItem[]) {
     const list = useRef<HTMLDivElement>(null);
     const pinned = useRef(true);
     useLayoutEffect(() => {
@@ -109,16 +124,23 @@ function Feed({ items, onAnswer, ...fleet }: FeedProps) {
             element.scrollTop = element.scrollHeight;
         }
     }, [items]);
+    const onScroll = (event: UIEvent<HTMLDivElement>): void => {
+        const element = event.currentTarget;
+        pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
+    };
+    return { list, onScroll };
+}
+/** The agent's output, newest at the bottom; follows new output unless the reader scrolled up. */
+function Feed({ items, onAnswer, ...fleet }: FeedProps) {
+    const { agentName } = fleet;
+    const { list, onScroll } = usePinnedScroll(items);
     return (
         <div
             className="feed"
             role="log"
             aria-label={`Output of ${agentName}`}
             ref={list}
-            onScroll={(event) => {
-                const element = event.currentTarget;
-                pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
-            }}
+            onScroll={onScroll}
         >
             {items.length === 0 ? <p className="muted empty">Nothing yet. Say something to {agentName}.</p> : null}
             {items.map((item) => <FeedEntry key={item.key} item={item} onAnswer={onAnswer} {...fleet} />)}

@@ -57,29 +57,37 @@ async function main(argv: readonly string[]): Promise<number> {
         return 0;
     }
     try {
-        switch (command) {
-            case 'run':
-                return await run(argv.slice(1));
-            case 'start':
-                return (await startFleet({ argv: argv.slice(1), entry: ENTRY })) ? 0 : 1;
-            case 'stop':
-                return (await stopFleet({ argv: argv.slice(1) })) ? 0 : 1;
-            case 'status':
-                return (await fleetStatus({ argv: argv.slice(1) })) ? 0 : 1;
-            default:
-                console.error(`Unknown command "${command}".\n\n${HELP}`);
-                return 1;
-        }
+        return await runCommand(command, argv.slice(1));
     } catch (error) {
-        if (error instanceof ConfigurationError) {
-            console.error(error.message);
-            if (error.hint !== undefined) {
-                console.error(error.hint);
-            }
-            return 1;
-        }
-        throw error;
+        return reportFailure(error);
     }
+}
+/** Runs one command of the CLI with the arguments that follow it. */
+async function runCommand(command: string, args: readonly string[]): Promise<number> {
+    switch (command) {
+        case 'run':
+            return await run(args);
+        case 'start':
+            return (await startFleet({ argv: args, entry: ENTRY })) ? 0 : 1;
+        case 'stop':
+            return (await stopFleet({ argv: args })) ? 0 : 1;
+        case 'status':
+            return (await fleetStatus({ argv: args })) ? 0 : 1;
+        default:
+            console.error(`Unknown command "${command}".\n\n${HELP}`);
+            return 1;
+    }
+}
+/** A configuration error is told to the person and ends with 1; anything else is thrown on. */
+function reportFailure(error: unknown): number {
+    if (error instanceof ConfigurationError) {
+        console.error(error.message);
+        if (error.hint !== undefined) {
+            console.error(error.hint);
+        }
+        return 1;
+    }
+    throw error;
 }
 // Stopped agents leave no work behind, but a stray timer of a library would
 // keep the process alive: once flotti is done, it is done.

@@ -111,31 +111,40 @@ function withToolCall(items: readonly FeedItem[], event: AgentEvent & { type: 't
     }
     return replaced(items, index, { ...found, title: event.title ?? found.title, status: event.status ?? found.status });
 }
-function withEvent(items: readonly FeedItem[], event: AgentEvent): readonly FeedItem[] {
+function withStatus(items: readonly FeedItem[], event: AgentEvent & { type: 'status' }): readonly FeedItem[] {
+    const settled = event.status === 'waiting' ? items : settlePermissions(items);
+    return isNoteworthy(event.status, event.reason)
+        ? [...settled, { kind: 'status', key: `e${event.seq}`, status: event.status, reason: event.reason }]
+        : settled;
+}
+/** The events that each add one item of their own. */
+function withItem(items: readonly FeedItem[], event: AgentEvent & { type: 'progress' | 'permission' | 'log' | 'raw' }): readonly FeedItem[] {
     const key = `e${event.seq}`;
+    switch (event.type) {
+        case 'progress':
+            return [...items, { kind: 'progress', key, text: event.text }];
+        case 'permission':
+            return [...items, { kind: 'permission', key, requestId: event.requestId, title: event.title, options: event.options, settled: false }];
+        case 'log':
+            return [...items, { kind: 'log', key, source: event.source, text: event.text }];
+        case 'raw':
+            return [...items, { kind: 'raw', key, protocol: event.protocol, payload: event.payload }];
+    }
+}
+function withEvent(items: readonly FeedItem[], event: AgentEvent): readonly FeedItem[] {
     switch (event.type) {
         case 'message':
             return withMessage(items, event);
         case 'thought':
             return withThought(items, event);
-        case 'progress':
-            return [...items, { kind: 'progress', key, text: event.text }];
         case 'tool-call':
             return withToolCall(items, event);
-        case 'permission':
-            return [...items, { kind: 'permission', key, requestId: event.requestId, title: event.title, options: event.options, settled: false }];
         case 'turn-end':
-            return [...settlePermissions(items), { kind: 'turn-end', key, reason: event.reason }];
-        case 'status': {
-            const settled = event.status === 'waiting' ? items : settlePermissions(items);
-            return isNoteworthy(event.status, event.reason)
-                ? [...settled, { kind: 'status', key, status: event.status, reason: event.reason }]
-                : settled;
-        }
-        case 'log':
-            return [...items, { kind: 'log', key, source: event.source, text: event.text }];
-        case 'raw':
-            return [...items, { kind: 'raw', key, protocol: event.protocol, payload: event.payload }];
+            return [...settlePermissions(items), { kind: 'turn-end', key: `e${event.seq}`, reason: event.reason }];
+        case 'status':
+            return withStatus(items, event);
+        default:
+            return withItem(items, event);
     }
 }
 /**

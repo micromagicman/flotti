@@ -74,9 +74,20 @@ function readLocalManifest(value: unknown, context: ManifestContext): LocalAgent
         command: requiredString(fields['command'], at('command')),
         arguments: optionalStringArray(fields['arguments'], at('arguments')),
         ...(ssh === undefined ? {} : { ssh }),
-        workdir: ssh !== undefined
-            ? workdir?.trim() ?? '~'
-            : workdir === undefined ? context.directory : workingDirectory(workdir, context),
+        workdir: localWorkdir(workdir, ssh, context),
+        ...localRuntime(fields, context)
+    };
+}
+/** Working directory of a local agent: on the SSH host as written, here resolved against the agent directory. */
+function localWorkdir(workdir: string | undefined, ssh: string | undefined, context: ManifestContext): string {
+    return ssh !== undefined
+        ? workdir?.trim() ?? '~'
+        : workdir === undefined ? context.directory : workingDirectory(workdir, context);
+}
+/** Environment, restart and heartbeat of a local agent, and the files of its directory. */
+function localRuntime(fields: Fields, context: ManifestContext) {
+    const at = (field: string) => ({ field, path: context.manifestPath });
+    return {
         env: optionalEnvironment(fields['env'], at('env')),
         restart: optionalChoice(fields['restart'], RESTART_POLICIES, at('restart')) ?? DEFAULT_RESTART_POLICY,
         heartbeatTimeoutSec: optionalPositiveNumber(fields['heartbeatTimeoutSec'], at('heartbeatTimeoutSec'))
@@ -100,15 +111,13 @@ function readRemoteManifest(value: unknown, context: ManifestContext): RemoteAge
         protocol: optionalChoice(fields['protocol'], PROTOCOLS, at('protocol')) ?? 'a2a',
         auth: optionalAuth(fields['auth'], at('auth'))
     };
+    return { ...common, ...remoteAddress(fields, context) };
+}
+/** `url` of a remote agent reached directly, or `ssh` of one reached through a tunnel. */
+function remoteAddress(fields: Fields, context: ManifestContext): { url: string } | { ssh: RemoteSsh } {
+    const at = (field: string) => ({ field, path: context.manifestPath });
     if (fields['ssh'] === undefined) {
-        if (fields['url'] === undefined) {
-            reject(
-                'missing-field',
-                context.manifestPath,
-                'url is missing: give the address of the agent, or "ssh": "user@host" to reach it through an SSH tunnel'
-            );
-        }
-        return { ...common, url: requiredUrl(fields['url'], at('url')) };
+        return { url: directUrl(fields, context) };
     }
     if (fields['url'] !== undefined) {
         reject(
@@ -117,7 +126,18 @@ function readRemoteManifest(value: unknown, context: ManifestContext): RemoteAge
             'url and ssh cannot both be given: over ssh, the host tells flotti where the agent is — drop url'
         );
     }
-    return { ...common, ssh: sshAccess(fields['ssh'], at('ssh')) };
+    return { ssh: sshAccess(fields['ssh'], at('ssh')) };
+}
+/** `url` of a remote agent reached without SSH; it must be there. */
+function directUrl(fields: Fields, context: ManifestContext): string {
+    if (fields['url'] === undefined) {
+        reject(
+            'missing-field',
+            context.manifestPath,
+            'url is missing: give the address of the agent, or "ssh": "user@host" to reach it through an SSH tunnel'
+        );
+    }
+    return requiredUrl(fields['url'], { field: 'url', path: context.manifestPath });
 }
 /** `"ssh": "user@host"`, or `"ssh": {"target": "user@host", "agent": "<id>"}`. */
 function sshAccess(value: unknown, place: Place): RemoteSsh {
@@ -285,6 +305,10 @@ function optionalAuth(value: unknown, place: Place): RemoteAuth {
         reject('missing-field', place.path, `${place.field}.type is missing (expected "none", "bearer" or "api-key")`);
     }
     const type = optionalChoice(value['type'], AUTH_TYPES, inside('type'));
+    return authOfType(type, value, inside);
+}
+/** The fields a chosen type of auth needs. */
+function authOfType(type: RemoteAuth['type'] | undefined, value: Fields, inside: (field: string) => Place): RemoteAuth {
     if (type === 'bearer') {
         return { type, tokenEnv: variableName(value['tokenEnv'], inside('tokenEnv')) };
     }

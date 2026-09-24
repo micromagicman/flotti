@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AGENT_CARD_PATH, Role, TaskState } from '@a2a-js/sdk';
-import type { AgentCard, Message, Part, StreamResponse, Task } from '@a2a-js/sdk';
+import type { AgentCard, Message, Part, StreamResponse, Task, TaskArtifactUpdateEvent } from '@a2a-js/sdk';
 import {
     ClientFactory,
     ClientFactoryOptions,
@@ -99,6 +99,15 @@ type InboxProgress = {
     /** The agent turned the inbox down: flotti stops asking. */
     refused: boolean;
 };
+/** The message of a turn on its way: shown and accepted once the agent first answers. */
+type TurnDelivery = {
+    /** Shows the message and settles the send; only the first call does anything. */
+    readonly deliver: () => void;
+    /** Ends the turn on the dashboard, when the message was delivered at all. */
+    readonly end: (reason: string) => void;
+};
+/** An agent card kept between reads. */
+type CachedCard = { body: string; etag: string | null; freshUntil: number };
 /** A turn is over once the agent answered with a message, or its task stopped or paused. */
 const FINAL_STATES: readonly TaskState[] = [
     TaskState.TASK_STATE_COMPLETED,
@@ -158,15 +167,7 @@ class A2AAgent implements FleetAgent {
         this.agent = agent;
         this.events = new AgentEvents(agent.id);
         this.env = options.env ?? process.env;
-        const base = options.fetch ?? globalThis.fetch;
-        const routed: typeof fetch = (input, init) => base(this.route(input), init);
-        this.fetch = createAuthenticatingFetchWithRetry(routed, {
-            headers: async () => this.endpoint?.headers === undefined
-                ? authHeaders(this.agent.auth, this.env)
-                : { ...this.endpoint.headers },
-            // A secret from the environment cannot be refreshed: a refusal is final.
-            shouldRetryWithHeaders: async () => undefined
-        });
+        this.fetch = this.authenticatingFetch(options.fetch ?? globalThis.fetch);
         this.cardFetch = cachingCardFetch(this.fetch);
         this.pollIntervalMs = options.pollIntervalMs ?? 2_000;
         this.reconnectAttempts = options.reconnectAttempts ?? 5;
@@ -266,13 +267,21 @@ class A2AAgent implements FleetAgent {
             return;
         }
         if (this.card?.restart !== true) {
-            if (unfinished !== undefined) {
-                await client.cancelTask({ tenant: '', id: unfinished.id, metadata: undefined }).catch(() => undefined);
-            }
-            this.setStatus('idle', 'new conversation: the agent cannot be restarted remotely');
-            this.openInbox();
+            await this.startNewConversation(client, unfinished);
             return;
         }
+        await this.restartRemotely(client);
+    }
+    /** For an agent that cannot restart: drops the unfinished task, and the conversation starts anew. */
+    private async startNewConversation(client: Client, unfinished: CurrentTask | undefined): Promise<void> {
+        if (unfinished !== undefined) {
+            await client.cancelTask({ tenant: '', id: unfinished.id, metadata: undefined }).catch(() => undefined);
+        }
+        this.setStatus('idle', 'new conversation: the agent cannot be restarted remotely');
+        this.openInbox();
+    }
+    /** Asks the agent to restart through the restart extension and reconnects once it is back. */
+    private async restartRemotely(client: Client): Promise<void> {
         this.setStatus('starting', 'restarting');
         try {
             await askToRestart(client);
@@ -291,6 +300,17 @@ class A2AAgent implements FleetAgent {
         this.setStatus('stopped');
         this.endpoint = undefined;
         await this.connection?.close();
+    }
+    /** The HTTP client that proves flotti to the agent and routes requests down the tunnel. */
+    private authenticatingFetch(base: typeof fetch): typeof fetch {
+        const routed: typeof fetch = (input, init) => base(this.route(input), init);
+        return createAuthenticatingFetchWithRetry(routed, {
+            headers: async () => this.endpoint?.headers === undefined
+                ? authHeaders(this.agent.auth, this.env)
+                : { ...this.endpoint.headers },
+            // A secret from the environment cannot be refreshed: a refusal is final.
+            shouldRetryWithHeaders: async () => undefined
+        });
     }
     /** Where a request really goes: down the tunnel, when the connection has one. */
     private route(input: string | URL | Request): string | URL | Request {
@@ -325,35 +345,46 @@ class A2AAgent implements FleetAgent {
             return;
         }
         this.retrying = signal;
-        let why = reason;
         try {
-            for (let attempt = firstAttempt; !signal.aborted; attempt++) {
-                if (attempt > 0) {
-                    const wait = Math.min(1_000 * 2 ** (attempt - 1), this.reopenDelayMaxMs);
-                    this.setStatus('error', `${why}; trying again in ${Math.ceil(wait / 1_000)} s`);
-                    await pause(wait, signal);
-                    if (signal.aborted) {
-                        return;
-                    }
-                }
-                this.setStatus('starting', `reconnecting: ${why}`);
-                try {
-                    await this.connect();
-                } catch (error) {
-                    why = describeError(error);
-                    continue;
-                }
-                if (!signal.aborted) {
-                    this.setStatus('idle', 'reconnected');
-                    this.openInbox();
-                }
-                return;
-            }
+            await this.reopenUntilBack(reason, firstAttempt, signal);
         } finally {
             if (this.retrying === signal) {
                 this.retrying = undefined;
             }
         }
+    }
+    /** The attempts of `keepTrying`, with growing pauses, until one succeeds or the signal is aborted. */
+    private async reopenUntilBack(reason: string, firstAttempt: number, signal: AbortSignal): Promise<void> {
+        let why = reason;
+        for (let attempt = firstAttempt; !signal.aborted; attempt++) {
+            if (attempt > 0) {
+                const wait = Math.min(1_000 * 2 ** (attempt - 1), this.reopenDelayMaxMs);
+                this.setStatus('error', `${why}; trying again in ${Math.ceil(wait / 1_000)} s`);
+                await pause(wait, signal);
+                if (signal.aborted) {
+                    return;
+                }
+            }
+            const failure = await this.reopenOnce(why, signal);
+            if (failure === undefined) {
+                return;
+            }
+            why = failure;
+        }
+    }
+    /** One attempt to open the connection again: why it failed, or nothing once it is back. */
+    private async reopenOnce(why: string, signal: AbortSignal): Promise<string | undefined> {
+        this.setStatus('starting', `reconnecting: ${why}`);
+        try {
+            await this.connect();
+        } catch (error) {
+            return describeError(error);
+        }
+        if (!signal.aborted) {
+            this.setStatus('idle', 'reconnected');
+            this.openInbox();
+        }
+        return undefined;
     }
     /** Whether a connection that dropped, or never opened, is being tried again right now. */
     private get reopening(): boolean {
@@ -371,8 +402,18 @@ class A2AAgent implements FleetAgent {
         if (url === undefined) {
             throw new Error(`Agent ${this.agentId} has neither url nor ssh in its manifest.`);
         }
+        const factory = this.clientFactory();
+        const location = cardLocation(url);
+        const client = await factory.createFromUrl(location.base, location.path);
+        // The extended card, when the agent has one for those who proved themselves.
+        const card = await client.getAgentCard({ signal: this.session.signal });
+        this.client = client;
+        this.card = describeCard(card, client.protocolVersion);
+    }
+    /** Makes clients for either transport the card may offer, A2A 0.3 agents included. */
+    private clientFactory(): ClientFactory {
         const legacyCompat = { enabled: true };
-        const factory = new ClientFactory(ClientFactoryOptions.createFrom(ClientFactoryOptions.default, {
+        return new ClientFactory(ClientFactoryOptions.createFrom(ClientFactoryOptions.default, {
             transports: [
                 new JsonRpcTransportFactory({ fetchImpl: this.fetch, legacyCompat }),
                 new RestTransportFactory({ fetchImpl: this.fetch, legacyCompat })
@@ -380,12 +421,6 @@ class A2AAgent implements FleetAgent {
             cardResolver: new DefaultAgentCardResolver({ fetchImpl: this.cardFetch, legacyCompat }),
             clientConfig: { polling: true }
         }));
-        const location = cardLocation(url);
-        const client = await factory.createFromUrl(location.base, location.path);
-        // The extended card, when the agent has one for those who proved themselves.
-        const card = await client.getAgentCard({ signal: this.session.signal });
-        this.client = client;
-        this.card = describeCard(card, client.protocolVersion);
     }
     /** Connects again and again until the restarted agent is back or the time is up. */
     private async reconnect(): Promise<void> {
@@ -420,37 +455,62 @@ class A2AAgent implements FleetAgent {
         }
         const message = this.userMessage(text, from);
         this.answering = message.taskId === '' ? undefined : this.task;
-        let delivered = false;
-        const deliver = () => {
-            if (!delivered) {
-                delivered = true;
-                this.events.emit({ type: 'message', role: 'user', messageId: message.messageId, text, append: false, ...(from === undefined ? {} : { from }) });
-                accepted();
-            }
-        };
+        const delivery = this.turnDelivery(message, text, from, accepted);
         this.inTurn = true;
         this.setStatus('working');
+        await this.workOnTurn(client, message, signal, delivery, refused);
+    }
+    /** Shows the message of the turn and settles its send once the agent first answers. */
+    private turnDelivery(message: Message, text: string, from: string | undefined, accepted: () => void): TurnDelivery {
+        let delivered = false;
+        return {
+            deliver: () => {
+                if (!delivered) {
+                    delivered = true;
+                    this.events.emit({ type: 'message', role: 'user', messageId: message.messageId, text, append: false, ...(from === undefined ? {} : { from }) });
+                    accepted();
+                }
+            },
+            end: (reason: string) => {
+                if (delivered) {
+                    this.events.emit({ type: 'turn-end', reason });
+                }
+            }
+        };
+    }
+    /** Exchanges the message of the turn with the agent and ends the turn, however it went. */
+    private async workOnTurn(
+        client: Client,
+        message: Message,
+        signal: AbortSignal,
+        delivery: TurnDelivery,
+        refused: (error: unknown) => void
+    ): Promise<void> {
         try {
-            await this.exchange(client, message, signal, deliver);
-            if (delivered) {
-                this.events.emit({ type: 'turn-end', reason: signal.aborted ? 'cancelled' : this.turnEndReason() });
-            }
+            await this.exchange(client, message, signal, delivery.deliver);
+            delivery.end(signal.aborted ? 'cancelled' : this.turnEndReason());
         } catch (error) {
-            if (delivered) {
-                this.events.emit({ type: 'turn-end', reason: signal.aborted ? 'cancelled' : 'error' });
-            }
-            if (signal.aborted) {
-                refused(error);
-                return;
-            }
-            this.setStatus('error', describeError(error));
-            refused(error);
+            this.turnFailed(error, signal, delivery, refused);
         } finally {
-            this.answering = undefined;
-            this.inTurn = false;
-            if (this.busyOnItsOwn && this.currentStatus === 'idle') {
-                this.setStatus('working');
-            }
+            this.endTurn();
+        }
+    }
+    /** The turn broke off: it ends on the dashboard, and the send is refused. */
+    private turnFailed(error: unknown, signal: AbortSignal, delivery: TurnDelivery, refused: (error: unknown) => void): void {
+        delivery.end(signal.aborted ? 'cancelled' : 'error');
+        if (signal.aborted) {
+            refused(error);
+            return;
+        }
+        this.setStatus('error', describeError(error));
+        refused(error);
+    }
+    /** After a turn the status goes back to what the agent is doing on its own. */
+    private endTurn(): void {
+        this.answering = undefined;
+        this.inTurn = false;
+        if (this.busyOnItsOwn && this.currentStatus === 'idle') {
+            this.setStatus('working');
         }
     }
     /** Sends the message and follows the answer, streamed or polled, until the turn is over. */
@@ -486,15 +546,23 @@ class A2AAgent implements FleetAgent {
             if (await this.readStream(stream, signal, deliver, progress)) {
                 return;
             }
-            if (signal.aborted || this.turnIsOver()) {
-                return;
-            }
-            const task = this.task;
-            if (!progress.received || task === undefined) {
-                throw new Error('the agent closed the stream without answering');
-            }
-            stream = await this.catchUp(client, task, signal, progress);
+            stream = await this.nextStream(client, signal, progress);
         }
+    }
+    /** The stream to go on reading after one ended; nothing when the turn is over or was aborted. */
+    private async nextStream(
+        client: Client,
+        signal: AbortSignal,
+        progress: StreamProgress
+    ): Promise<AsyncGenerator<StreamResponse> | undefined> {
+        if (signal.aborted || this.turnIsOver()) {
+            return undefined;
+        }
+        const task = this.task;
+        if (!progress.received || task === undefined) {
+            throw new Error('the agent closed the stream without answering');
+        }
+        return this.catchUp(client, task, signal, progress);
     }
     /** Reads one stream until it ends; true once an event finished the turn. */
     private async readStream(
@@ -505,10 +573,7 @@ class A2AAgent implements FleetAgent {
     ): Promise<boolean> {
         try {
             for await (const event of stream) {
-                progress.received = true;
-                deliver();
-                progress.failures = 0;
-                if (this.apply(event)) {
+                if (this.takeEvent(event, deliver, progress)) {
                     return true;
                 }
             }
@@ -522,6 +587,13 @@ class A2AAgent implements FleetAgent {
         }
         return false;
     }
+    /** One event of a turn's stream: the message counts as delivered; true once the event finished the turn. */
+    private takeEvent(event: StreamResponse, deliver: () => void, progress: StreamProgress): boolean {
+        progress.received = true;
+        deliver();
+        progress.failures = 0;
+        return this.apply(event);
+    }
     /**
      * Catches up with a task whose stream broke off: the stream to go on reading,
      * or nothing when the turn is over or the wait was aborted.
@@ -533,21 +605,11 @@ class A2AAgent implements FleetAgent {
         progress: StreamProgress
     ): Promise<AsyncGenerator<StreamResponse> | undefined> {
         for (;;) {
-            if (progress.failures >= this.reconnectAttempts) {
-                throw new Error(`lost the stream of task ${task.id}: ${describeError(progress.lastError ?? 'closed early')}`, {
-                    cause: progress.lastError
-                });
-            }
-            await pause(this.backoff(progress.failures++), signal);
-            if (signal.aborted) {
+            if (!await this.waitToCatchUp(task, signal, progress)) {
                 return undefined;
             }
             try {
-                const now = await client.getTask({ tenant: '', id: task.id }, { signal });
-                if (this.apply({ payload: { $case: 'task', value: now } })) {
-                    return undefined;
-                }
-                return client.resubscribeTask({ tenant: '', id: task.id }, { signal });
+                return await this.resubscribe(client, task, signal);
             } catch (error) {
                 if (signal.aborted) {
                     return undefined;
@@ -555,6 +617,28 @@ class A2AAgent implements FleetAgent {
                 progress.lastError = error;
             }
         }
+    }
+    /** Waits before the next attempt to catch up, giving up after too many; false once the wait was aborted. */
+    private async waitToCatchUp(task: CurrentTask, signal: AbortSignal, progress: StreamProgress): Promise<boolean> {
+        if (progress.failures >= this.reconnectAttempts) {
+            throw new Error(`lost the stream of task ${task.id}: ${describeError(progress.lastError ?? 'closed early')}`, {
+                cause: progress.lastError
+            });
+        }
+        await pause(this.backoff(progress.failures++), signal);
+        return !signal.aborted;
+    }
+    /** Asks for the task and subscribes to it again; nothing when the task shows the turn is over. */
+    private async resubscribe(
+        client: Client,
+        task: CurrentTask,
+        signal: AbortSignal
+    ): Promise<AsyncGenerator<StreamResponse> | undefined> {
+        const now = await client.getTask({ tenant: '', id: task.id }, { signal });
+        if (this.apply({ payload: { $case: 'task', value: now } })) {
+            return undefined;
+        }
+        return client.resubscribeTask({ tenant: '', id: task.id }, { signal });
     }
     /**
      * How the turn ended, in the words the event model shares with ACP. A turn
@@ -607,40 +691,51 @@ class A2AAgent implements FleetAgent {
     private apply(event: StreamResponse): boolean {
         const payload = event.payload;
         switch (payload?.$case) {
-            case 'message': {
-                this.contextId = payload.value.contextId || this.contextId;
-                this.task = undefined;
-                this.showMessage(payload.value);
-                this.setStatus('idle');
-                return true;
-            }
-            case 'task': {
-                const task = payload.value;
-                this.contextId = task.contextId || this.contextId;
-                const stale = this.isStale(task);
-                for (const message of task.history) {
-                    if (message.role === Role.ROLE_AGENT) {
-                        this.showMessage(message);
-                    }
-                }
-                for (const artifact of task.artifacts) {
-                    this.showArtifact(task.id, artifact.artifactId, artifact.parts, false);
-                }
-                return stale ? false : this.track(task.id, task.status);
-            }
+            case 'message':
+                return this.applyMessage(payload.value);
+            case 'task':
+                return this.applyTask(payload.value);
             case 'statusUpdate': {
                 this.contextId = payload.value.contextId || this.contextId;
                 return this.track(payload.value.taskId, payload.value.status);
             }
-            case 'artifactUpdate': {
-                const { artifact, taskId } = payload.value;
-                if (artifact !== undefined) {
-                    this.showArtifact(taskId, artifact.artifactId, artifact.parts, payload.value.append);
-                }
+            case 'artifactUpdate':
+                this.showArtifactUpdate(payload.value);
                 return false;
-            }
             default:
                 return false;
+        }
+    }
+    /** The agent answered with a message: the turn is over, with no task. */
+    private applyMessage(message: Message): boolean {
+        this.contextId = message.contextId || this.contextId;
+        this.task = undefined;
+        this.showMessage(message);
+        this.setStatus('idle');
+        return true;
+    }
+    /** A snapshot of the task: what it holds is shown, and its state tracked unless the snapshot is stale. */
+    private applyTask(task: Task): boolean {
+        this.contextId = task.contextId || this.contextId;
+        const stale = this.isStale(task);
+        this.showTaskContents(task, message => this.showMessage(message));
+        return stale ? false : this.track(task.id, task.status);
+    }
+    /** Shows what a task snapshot holds: the messages of the agent, through `show`, and the artifacts. */
+    private showTaskContents(task: Task, show: (message: Message) => void): void {
+        for (const message of task.history) {
+            if (message.role === Role.ROLE_AGENT) {
+                show(message);
+            }
+        }
+        for (const artifact of task.artifacts) {
+            this.showArtifact(task.id, artifact.artifactId, artifact.parts, false);
+        }
+    }
+    private showArtifactUpdate(update: TaskArtifactUpdateEvent): void {
+        const { artifact, taskId, append } = update;
+        if (artifact !== undefined) {
+            this.showArtifact(taskId, artifact.artifactId, artifact.parts, append);
         }
     }
     /**
@@ -696,14 +791,7 @@ class A2AAgent implements FleetAgent {
         while (!signal.aborted && !progress.refused) {
             lastError = undefined;
             try {
-                const stream = await this.inboxStream(client, progress, signal);
-                for await (const event of stream ?? []) {
-                    if (progress.failures > 0) {
-                        this.log('the inbox is back');
-                    }
-                    progress.failures = 0;
-                    this.applyInbox(event, progress);
-                }
+                await this.readInbox(client, progress, signal);
             } catch (error) {
                 lastError = error;
             }
@@ -714,6 +802,17 @@ class A2AAgent implements FleetAgent {
                 this.log(`lost the inbox, reconnecting: ${describeError(lastError ?? 'closed early')}`);
             }
             await pause(this.backoff(progress.failures - 1), signal);
+        }
+    }
+    /** Reads one stream of the inbox until it ends. */
+    private async readInbox(client: Client, progress: InboxProgress, signal: AbortSignal): Promise<void> {
+        const stream = await this.inboxStream(client, progress, signal);
+        for await (const event of stream ?? []) {
+            if (progress.failures > 0) {
+                this.log('the inbox is back');
+            }
+            progress.failures = 0;
+            this.applyInbox(event, progress);
         }
     }
     /** The stream to read the inbox from: a new inbox, or the one open before; nothing when that one is over. */
@@ -730,52 +829,48 @@ class A2AAgent implements FleetAgent {
                 serviceParameters: ServiceParameters.create(withA2AExtensions(INBOX_EXTENSION))
             });
         }
-        let task: Task;
+        const task = await this.inboxTask(client, taskId, progress, signal);
+        this.applyInbox({ payload: { $case: 'task', value: task } }, progress);
+        return progress.taskId === undefined || progress.refused
+            ? undefined
+            : client.resubscribeTask({ tenant: '', id: taskId }, { signal });
+    }
+    /** The inbox task as the agent has it now. */
+    private async inboxTask(client: Client, taskId: string, progress: InboxProgress, signal: AbortSignal): Promise<Task> {
         try {
-            task = await client.getTask({ tenant: '', id: taskId }, { signal });
+            return await client.getTask({ tenant: '', id: taskId }, { signal });
         } catch (error) {
             // The agent does not know the task any more: it restarted. A new inbox, then.
             progress.taskId = undefined;
             throw error;
         }
-        this.applyInbox({ payload: { $case: 'task', value: task } }, progress);
-        return progress.taskId === undefined || progress.refused
-            ? undefined
-            : client.resubscribeTask({ tenant: '', id: taskId }, { signal });
     }
     /** Shows one event of the inbox, and learns from it what became of the inbox task. */
     private applyInbox(event: StreamResponse, progress: InboxProgress): void {
         const payload = event.payload;
         switch (payload?.$case) {
             case 'message':
-                this.inboxMessage(payload.value);
-                this.log('the agent answered the inbox request with a message: it keeps no inbox');
-                progress.refused = true;
+                this.refuseInbox(payload.value, progress);
                 return;
             case 'task':
-                for (const message of payload.value.history) {
-                    if (message.role === Role.ROLE_AGENT) {
-                        this.inboxMessage(message);
-                    }
-                }
-                for (const artifact of payload.value.artifacts) {
-                    this.showArtifact(payload.value.id, artifact.artifactId, artifact.parts, false);
-                }
+                this.showTaskContents(payload.value, message => this.inboxMessage(message));
                 this.trackInbox(payload.value.id, payload.value.status, progress);
                 return;
             case 'statusUpdate':
                 this.trackInbox(payload.value.taskId, payload.value.status, progress);
                 return;
-            case 'artifactUpdate': {
-                const { artifact, taskId, append } = payload.value;
-                if (artifact !== undefined) {
-                    this.showArtifact(taskId, artifact.artifactId, artifact.parts, append);
-                }
+            case 'artifactUpdate':
+                this.showArtifactUpdate(payload.value);
                 return;
-            }
             default:
                 return;
         }
+    }
+    /** The agent answered the inbox request with a message: it keeps no inbox. */
+    private refuseInbox(message: Message, progress: InboxProgress): void {
+        this.inboxMessage(message);
+        this.log('the agent answered the inbox request with a message: it keeps no inbox');
+        progress.refused = true;
     }
     private trackInbox(taskId: string, status: Task['status'], progress: InboxProgress): void {
         progress.taskId = taskId;
@@ -806,12 +901,16 @@ class A2AAgent implements FleetAgent {
             this.showMessage(message, params.to);
         }
         if (params.busy !== undefined) {
-            this.busyOnItsOwn = params.busy;
-            if (!this.inTurn && params.busy && this.currentStatus === 'idle') {
-                this.setStatus('working');
-            } else if (!this.inTurn && !params.busy && this.currentStatus === 'working') {
-                this.setStatus('idle');
-            }
+            this.noteBusyOnItsOwn(params.busy);
+        }
+    }
+    /** The agent said through the inbox whether it is busy on its own: outside a turn the status follows. */
+    private noteBusyOnItsOwn(busy: boolean): void {
+        this.busyOnItsOwn = busy;
+        if (!this.inTurn && busy && this.currentStatus === 'idle') {
+            this.setStatus('working');
+        } else if (!this.inTurn && !busy && this.currentStatus === 'working') {
+            this.setStatus('idle');
         }
     }
     private log(text: string): void {
@@ -918,31 +1017,42 @@ function secret(variable: string, env: Environment): string {
  * `If-None-Match`, so an unchanged card costs a `304`.
  */
 function cachingCardFetch(base: typeof fetch): typeof fetch {
-    let cached: { body: string; etag: string | null; freshUntil: number } | undefined;
-    const replay = (body: string) => new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } });
+    let cached: CachedCard | undefined;
     return async (input, init) => {
         if (cached !== undefined && Date.now() < cached.freshUntil) {
-            return replay(cached.body);
+            return replayCard(cached.body);
         }
-        const headers = new Headers(init?.headers);
-        if (cached?.etag != null) {
-            headers.set('If-None-Match', cached.etag);
-        }
-        const response = await base(input, { ...init, headers });
+        const response = await base(input, { ...init, headers: revalidatingHeaders(init, cached) });
         if (response.status === 304 && cached !== undefined) {
             cached.freshUntil = Date.now() + freshFor(response.headers.get('Cache-Control'));
-            return replay(cached.body);
+            return replayCard(cached.body);
         }
         if (!response.ok) {
             return response;
         }
         const body = await response.text();
-        const cacheControl = response.headers.get('Cache-Control');
-        cached = /\bno-store\b/i.test(cacheControl ?? '')
-            ? undefined
-            : { body, etag: response.headers.get('ETag'), freshUntil: Date.now() + freshFor(cacheControl) };
-        return replay(body);
+        cached = cacheEntry(body, response.headers);
+        return replayCard(body);
     };
+}
+/** A kept card, answered as if the agent sent it. */
+function replayCard(body: string): Response {
+    return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+/** Headers of a card request; `If-None-Match` when the kept card has an `ETag`. */
+function revalidatingHeaders(init: RequestInit | undefined, cached: CachedCard | undefined): Headers {
+    const headers = new Headers(init?.headers);
+    if (cached?.etag != null) {
+        headers.set('If-None-Match', cached.etag);
+    }
+    return headers;
+}
+/** What to keep of a card just read; nothing when its `Cache-Control` says `no-store`. */
+function cacheEntry(body: string, headers: Headers): CachedCard | undefined {
+    const cacheControl = headers.get('Cache-Control');
+    return /\bno-store\b/i.test(cacheControl ?? '')
+        ? undefined
+        : { body, etag: headers.get('ETag'), freshUntil: Date.now() + freshFor(cacheControl) };
 }
 /** Milliseconds a response stays fresh by its `Cache-Control`; 0 means "check every time". */
 function freshFor(cacheControl: string | null): number {
@@ -1048,6 +1158,13 @@ function statusOfTask(state: TaskState): { status: AgentStatus; reason?: string 
             return { status: 'waiting', reason: 'input required' };
         case TaskState.TASK_STATE_AUTH_REQUIRED:
             return { status: 'waiting', reason: 'authentication required' };
+        default:
+            return statusOfStoppedTask(state);
+    }
+}
+/** How a task that stopped shows on the dashboard; nothing for a state that says nothing. */
+function statusOfStoppedTask(state: TaskState): { status: AgentStatus; reason?: string } | undefined {
+    switch (state) {
         case TaskState.TASK_STATE_COMPLETED:
             return { status: 'idle' };
         case TaskState.TASK_STATE_CANCELED:
