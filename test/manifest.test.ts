@@ -119,6 +119,17 @@ describe('local manifest: fields it refuses', () => {
         match(error.message, /id is "claude", but the agent directory is "agent"/);
     });
 });
+describe('manifest: the administrator of the fleet', () => {
+    it('reads admin: true, local or remote, and leaves the agent without the role otherwise', () => {
+        strictEqual(single('local', { ...LOCAL, admin: true }).agent.admin, true);
+        strictEqual(single('remote', { ...REMOTE, admin: true }).agent.admin, true);
+        strictEqual('admin' in single('local', { ...LOCAL, admin: false }).agent, false);
+        strictEqual('admin' in single('local', LOCAL).agent, false);
+    });
+    it('reports admin that is not true or false', () => {
+        match(rejected('local', { ...LOCAL, admin: 'yes' }).message, /admin must be true or false, got "yes"/);
+    });
+});
 describe('remote manifest', () => {
     it('fills the defaults: A2A, no authentication, the id as the name', () => {
         const { agent: found, directory } = single('remote', REMOTE);

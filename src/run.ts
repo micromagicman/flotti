@@ -15,6 +15,7 @@ import { FleetSettings } from './fleet-settings.js';
 import type { LoadFleetOptions } from './fleet.js';
 import type { Environment } from './manifest.js';
 import { NotificationService } from './notifications.js';
+import { readSettings } from './settings.js';
 import { Supervisor } from './supervisor.js';
 import type { SupervisorOptions } from './supervisor.js';
 import type { Fleet } from './types.js';
@@ -164,13 +165,31 @@ type RunParts = {
     readonly settings: FleetSettings;
     readonly notifications: NotificationService;
 };
+/**
+ * Whether actions of administrators wait for a person, as the settings say
+ * now: the checkbox takes effect with the next action. Settings that cannot
+ * be read ask for the person rather than let an action through unasked.
+ */
+function confirmsAdminActions(env: Environment): boolean {
+    try {
+        return readSettings(env).confirmAdminActions === true;
+    } catch {
+        return true;
+    }
+}
 /** Starts the fleet tools and puts the supervisor, the settings of the fleet and its notifications on them. */
 async function startSupervisor(fleet: Fleet, file: RunFile, options: RunOptions): Promise<RunParts> {
     const tools = await FleetMcpServer.start();
-    const supervisor = new Supervisor(fleet, { persistHistory: true, fleetTools: tools, ...options.supervisor });
+    const env = options.env ?? process.env;
+    const supervisor = new Supervisor(fleet, {
+        persistHistory: true,
+        fleetTools: tools,
+        confirmAdminActions: () => confirmsAdminActions(env),
+        ...options.supervisor
+    });
     tools.serve(supervisor);
     const settings = new FleetSettings(fleet, supervisor, {
-        env: options.env ?? process.env,
+        env,
         onSwitch: (next) => file.move(next)
     });
     const notifications = new NotificationService(supervisor, { env: options.env ?? process.env });

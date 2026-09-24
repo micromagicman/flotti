@@ -13,7 +13,7 @@ import {
 } from '@a2a-js/sdk/client';
 import type { Client } from '@a2a-js/sdk/client';
 import { AgentEvents, WITHDRAWN, composeText, messageFields } from './agent-events.js';
-import type { AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
+import type { AdminAction, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
 import type { Environment } from './manifest.js';
 import { HealthTracker } from './connection-health.js';
 import type { ConnectionHealth, HealthListener, HealthTrackerOptions } from './connection-health.js';
@@ -66,9 +66,17 @@ type A2AAgentOptions = {
     readonly healthIntervalMs?: number;
     /** The clock and the pace of the health of the connection; tests put their own in. */
     readonly health?: HealthTrackerOptions;
+    /**
+     * Takes what the agent asks of flotti as an administrator of the fleet,
+     * through the inbox (docs/a2a-inbox.md); without it such a request is
+     * only a line in the tab.
+     */
+    readonly onAdminRequest?: (request: AdminRequest) => void;
 };
 /** A round trip that takes longer than this is not measured: the connection says itself when it is gone. */
 const PROBE_TIMEOUT_MS = 10_000;
+/** An action on another agent — or on itself — the agent asked for through the inbox. */
+type AdminRequest = { readonly action: AdminAction; readonly target: string };
 /** What the agent card told about the agent, for the dashboard. */
 type A2AAgentInfo = {
     readonly name: string;
@@ -201,6 +209,9 @@ class A2AAgent implements FleetAgent {
     private inTurn = false;
     /** Whether the agent last said, through the inbox, that it is busy on its own. */
     private busyOnItsOwn = false;
+    /** Ids of the administrator requests already taken: a snapshot of the inbox repeats them, a new conversation too. */
+    private readonly takenRequests = new Set<string>();
+    private readonly onAdminRequest: ((request: AdminRequest) => void) | undefined;
     constructor(agent: RemoteAgent, options: A2AAgentOptions = {}) {
         this.agentId = agent.id;
         this.agent = agent;
@@ -215,8 +226,8 @@ class A2AAgent implements FleetAgent {
         this.reconnectDelayMaxMs = options.reconnectDelayMaxMs ?? 5_000;
         this.restartTimeoutMs = options.restartTimeoutMs ?? 60_000;
         this.reopenDelayMaxMs = options.reopenDelayMaxMs ?? 30_000;
-        this.connection = options.connection
-            ?? (agent.ssh === undefined ? undefined : new SshConnection(agent.ssh, options.ssh));
+        this.onAdminRequest = options.onAdminRequest;
+        this.connection = options.connection ?? (agent.ssh === undefined ? undefined : new SshConnection(agent.ssh, options.ssh));
         this.connection?.onDrop((reason: string) => this.dropped(reason));
         this.tracker = this.connection === undefined ? undefined : new HealthTracker(options.health);
         this.healthIntervalMs = options.healthIntervalMs ?? 15_000;
@@ -357,6 +368,26 @@ class A2AAgent implements FleetAgent {
             return;
         }
         await this.restartRemotely(client);
+    }
+    /**
+     * Starts a new conversation: the next message goes with a new `contextId`,
+     * so the agent does not get the old history. A task in work is cancelled,
+     * and the messages in line are dropped, as a restart drops them.
+     */
+    async clearContext(): Promise<void> {
+        const client = this.client;
+        const unfinished = this.task !== undefined && !FINAL_STATES.includes(this.task.state) ? this.task : undefined;
+        if (client === undefined || (unfinished === undefined && !this.inTurn)) {
+            this.forgetContext();
+            return;
+        }
+        this.endSession();
+        this.forgetContext();
+        if (unfinished !== undefined) {
+            await client.cancelTask({ tenant: '', id: unfinished.id, metadata: undefined }).catch(() => undefined);
+        }
+        this.setStatus('idle');
+        this.openInbox();
     }
     /** For an agent that cannot restart: drops the unfinished task, and the conversation starts anew. */
     private async startNewConversation(client: Client, unfinished: CurrentTask | undefined): Promise<void> {
@@ -1025,10 +1056,12 @@ class A2AAgent implements FleetAgent {
             progress.taskId = undefined;
         }
     }
-    /** A message that came through the inbox: a message of the agent's own, or a line of progress. */
+    /** A message that came through the inbox: a message of the agent's own, a line of progress, a request. */
     private inboxMessage(message: Message): void {
         const params = inboxParams(message);
-        if (params.cancel !== undefined) {
+        if (params.kind === 'admin') {
+            this.adminRequest(message.messageId, params.request);
+        } else if (params.cancel !== undefined) {
             this.events.emit({ type: 'cancel-delegation', delegationId: params.cancel });
         } else if (params.kind === 'progress') {
             const id = message.messageId || randomUUID();
@@ -1040,8 +1073,22 @@ class A2AAgent implements FleetAgent {
         } else {
             this.showMessage(message, params.to, params.task);
         }
-        if (params.busy !== undefined) {
+        if (params.kind !== 'admin' && params.busy !== undefined) {
             this.noteBusyOnItsOwn(params.busy);
+        }
+    }
+    /** A request of the agent as an administrator of the fleet: handed over once, whatever repeats it. */
+    private adminRequest(messageId: string, request: AdminRequest | undefined): void {
+        if (messageId !== '' && this.takenRequests.has(messageId)) {
+            return;
+        }
+        this.takenRequests.add(messageId);
+        if (request === undefined) {
+            this.log('the agent asked for an action of an administrator flotti does not know: "action" and "agent" say what and on whom');
+        } else if (this.onAdminRequest === undefined) {
+            this.log(`the agent asked to ${request.action} "${request.target}", and nothing here takes such requests`);
+        } else {
+            this.onAdminRequest(request);
         }
     }
     /** The agent said through the inbox whether it is busy on its own: outside a turn the status follows. */
@@ -1127,6 +1174,12 @@ class A2AAgent implements FleetAgent {
             this.events.emit({ type: 'unqueued', messageId, outcome: 'dropped', reason });
             refused(new Error(reason));
         }
+    }
+    /** The conversation starts anew; what was shown stays shown. */
+    private forgetContext(): void {
+        this.contextId = undefined;
+        this.task = undefined;
+        this.answering = undefined;
     }
     private forgetConversation(): void {
         this.contextId = undefined;
@@ -1290,6 +1343,10 @@ type InboxParams = {
     readonly task?: { readonly deadline?: string };
     /** Id of a task the agent gave and takes back. */
     readonly cancel?: string;
+} | {
+    /** A request of an administrator of the fleet: not a message, so `busy` and `to` are not read with it. */
+    readonly kind: 'admin';
+    readonly request: AdminRequest | undefined;
 };
 /** What an inbox message says of itself under the extension URI; anything else there is ignored. */
 function inboxParams(message: Message): InboxParams {
@@ -1298,6 +1355,9 @@ function inboxParams(message: Message): InboxParams {
         return { kind: 'message' };
     }
     const { kind, busy, to, task, cancel } = params as Record<string, unknown>;
+    if (kind === 'admin') {
+        return { kind, request: adminRequestOf(params as Record<string, unknown>) };
+    }
     return {
         kind: kind === 'progress' ? 'progress' : 'message',
         ...(typeof busy === 'boolean' ? { busy } : {}),
@@ -1309,6 +1369,14 @@ function inboxParams(message: Message): InboxParams {
 function taskParams(task: Record<string, unknown>): { readonly deadline?: string } {
     const { deadline } = task;
     return typeof deadline === 'string' && deadline !== '' ? { deadline } : {};
+}
+/** `"action": "restart" | "clear-context"` on `"agent": "<id>"`; nothing when either is missing or unknown. */
+function adminRequestOf(params: Record<string, unknown>): AdminRequest | undefined {
+    const { action, agent } = params;
+    if ((action !== 'restart' && action !== 'clear-context') || typeof agent !== 'string' || agent === '') {
+        return undefined;
+    }
+    return { action, target: agent };
 }
 function sendRequest(message: Message) {
     return { tenant: '', message, configuration: undefined, metadata: undefined };
@@ -1383,4 +1451,4 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
     });
 }
 export { A2AAgent, HARNESS_EXTENSION, INBOX_EXTENSION, RESTART_EXTENSION, cardLocation };
-export type { A2AAgentInfo, A2AAgentOptions };
+export type { A2AAgentInfo, A2AAgentOptions, AdminRequest };

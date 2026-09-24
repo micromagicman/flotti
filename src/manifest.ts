@@ -178,7 +178,20 @@ function manifestObject(value: unknown, context: ManifestContext): Fields {
 }
 function agentBase(fields: Fields, context: ManifestContext): AgentBase {
     const at = (field: string) => ({ field, path: context.manifestPath });
-    const id = optionalString(fields['id'], at('id'));
+    requireSameId(optionalString(fields['id'], at('id')), context);
+    const description = optionalString(fields['description'], at('description'));
+    const admin = optionalBoolean(fields['admin'], at('admin'));
+    return {
+        id: context.id,
+        name: optionalString(fields['name'], at('name')) ?? context.id,
+        ...(description === undefined ? {} : { description }),
+        ...(admin === true ? { admin } : {}),
+        directory: context.directory,
+        manifestPath: context.manifestPath
+    };
+}
+/** An `id` in the manifest must be the name of the directory: the directory is what counts. */
+function requireSameId(id: string | undefined, context: ManifestContext): void {
     if (id !== undefined && id !== context.id) {
         reject(
             'id-mismatch',
@@ -187,14 +200,6 @@ function agentBase(fields: Fields, context: ManifestContext): AgentBase {
             + 'rename the directory or drop the field'
         );
     }
-    const description = optionalString(fields['description'], at('description'));
-    return {
-        id: context.id,
-        name: optionalString(fields['name'], at('name')) ?? context.id,
-        ...(description === undefined ? {} : { description }),
-        directory: context.directory,
-        manifestPath: context.manifestPath
-    };
 }
 function workingDirectory(workdir: string, context: ManifestContext): string {
     if (workdir === '~' || workdir.startsWith('~/') || workdir.startsWith('~\\')) {
@@ -227,6 +232,12 @@ function nonEmptyString(value: unknown, place: Place): string {
     }
     if (value.trim() === '') {
         reject('wrong-type', place.path, `${place.field} must be a non-empty string, got an empty one`);
+    }
+    return value;
+}
+function optionalBoolean(value: unknown, place: Place): boolean | undefined {
+    if (value !== undefined && typeof value !== 'boolean') {
+        reject('wrong-type', place.path, `${place.field} must be true or false, got ${shown(value)}`);
     }
     return value;
 }

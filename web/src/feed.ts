@@ -3,7 +3,17 @@
  * glued into one message, updates of a tool call folded into one card. Pure
  * functions, no React: the reducer of the page and the tests share them.
  */
-import type { AgentEvent, AgentStatus, Delegation, Forwarded, PermissionOption, Quote, ToolCallStatus } from '../../src/agent-events.js';
+import type {
+    AdminAction,
+    AdminActionState,
+    AgentEvent,
+    AgentStatus,
+    Delegation,
+    Forwarded,
+    PermissionOption,
+    Quote,
+    ToolCallStatus
+} from '../../src/agent-events.js';
 type FeedItem =
     | {
         readonly kind: 'message';
@@ -44,6 +54,19 @@ type FeedItem =
     }
     /** A task one agent gave another, where it was given, as it stands now. */
     | ({ readonly kind: 'delegation'; readonly key: string } & Delegation)
+    | {
+        /** An action of an administrator of the fleet, in its latest state: one item per action. */
+        readonly kind: 'admin-action';
+        readonly key: string;
+        readonly actionId: string;
+        readonly action: AdminAction;
+        readonly admin: string;
+        readonly target: string;
+        readonly state: AdminActionState;
+        readonly reason: string | undefined;
+        /** Allowed or refused from this page, before the server says so: the buttons go away. */
+        readonly settled: boolean;
+    }
     | { readonly kind: 'turn-end'; readonly key: string; readonly reason: string }
     | { readonly kind: 'status'; readonly key: string; readonly status: AgentStatus; readonly reason: string | undefined }
     | { readonly kind: 'log'; readonly key: string; readonly source: 'agent' | 'flotti'; readonly text: string }
@@ -180,6 +203,17 @@ function withStatus(items: readonly FeedItem[], event: AgentEvent & { type: 'sta
         ? [...settled, { kind: 'status', key: `e${event.seq}`, status: event.status, reason: event.reason }]
         : settled;
 }
+/** The first state of an action of an administrator is a new item; the next ones change it. */
+function withAdminAction(items: readonly FeedItem[], event: AgentEvent & { type: 'admin-action' }): readonly FeedItem[] {
+    const index = lastIndex(items, (item) => item.kind === 'admin-action' && item.actionId === event.actionId);
+    const found = items[index];
+    const { actionId, action, admin, target, state } = event;
+    const changed = { actionId, action, admin, target, state, reason: event.reason };
+    if (found?.kind !== 'admin-action') {
+        return [...items, { kind: 'admin-action', key: `e${event.seq}`, ...changed, settled: false }];
+    }
+    return replaced(items, index, { ...found, ...changed });
+}
 /**
  * The events that each add one item of their own, and those that add none: the
  * line of messages is kept apart from the feed (see withLine), and the card of
@@ -219,6 +253,8 @@ function withEvent(items: readonly FeedItem[], event: AgentEvent): readonly Feed
             return withStatus(items, event);
         case 'delegation':
             return withDelegation(items, event);
+        case 'admin-action':
+            return withAdminAction(items, event);
         default:
             return withItem(items, event);
     }
@@ -295,6 +331,44 @@ function settlePermission(feed: AgentFeed, requestId: string): AgentFeed {
         (item.kind === 'permission' && item.requestId === requestId ? { ...item, settled: true } : item));
     return { ...feed, items };
 }
+/** Marks an action of an administrator allowed or refused from this page, before the server says so. */
+function settleAdminAction(feed: AgentFeed, actionId: string): AgentFeed {
+    if (!feed.items.some((item) => item.kind === 'admin-action' && item.actionId === actionId)) {
+        return feed;
+    }
+    const items = feed.items.map((item) =>
+        (item.kind === 'admin-action' && item.actionId === actionId ? { ...item, settled: true } : item));
+    return { ...feed, items };
+}
+/** Whether the feed has an action of the administrator `agentId` waiting for a person. */
+function awaitsAllowance(feed: AgentFeed | undefined, agentId: string): boolean {
+    return (feed?.items ?? []).some((item) => item.kind === 'admin-action' && item.admin === agentId && item.state === 'pending' && !item.settled);
+}
+type AdminActionItem = FeedItem & { kind: 'admin-action' };
+/** What the action does, in words, with the names of the agents. */
+function adminDoing(item: AdminActionItem, name: (agentId: string) => string): string {
+    if (item.admin === item.target) {
+        return item.action === 'restart' ? 'restart itself' : 'clear its own context';
+    }
+    return item.action === 'restart' ? `restart ${name(item.target)}` : `clear the context of ${name(item.target)}`;
+}
+/** The line a tab shows for an action of an administrator, in its latest state. */
+function adminActionText(item: AdminActionItem, name: (agentId: string) => string): string {
+    const admin = name(item.admin);
+    const doing = adminDoing(item, name);
+    switch (item.state) {
+        case 'pending':
+            return `${admin} asks to ${doing}`;
+        case 'scheduled':
+            return `${admin} will ${doing} once its turn is over`;
+        case 'done':
+            return `${admin} ${doing.replace(/^restart/, 'restarted').replace(/^clear/, 'cleared')}`;
+        case 'refused':
+            return `${admin} may not ${doing}: ${item.reason ?? 'refused'}`;
+        case 'failed':
+            return `${admin} could not ${doing}: ${item.reason ?? 'no reason given'}`;
+    }
+}
 type MessageItem = FeedItem & { kind: 'message' };
 /** Who wrote a message of the tab of `agentId`: that agent, another one, or a person (`undefined`). */
 function authorOf(item: MessageItem, agentId: string): string | undefined {
@@ -327,5 +401,15 @@ function quotedMessage(feed: AgentFeed | undefined, quote: Pick<Quote, 'messageI
         && (quote.seq === undefined ? item.messageId === quote.messageId : item.seq === quote.seq))];
     return found?.kind === 'message' ? found : undefined;
 }
-export { applyEvent, emptyFeed, forwardOf, quoteOf, quotedMessage, settlePermission };
-export type { AgentFeed, FeedItem, MessageItem, QueuedMessage };
+export {
+    adminActionText,
+    applyEvent,
+    awaitsAllowance,
+    emptyFeed,
+    forwardOf,
+    quoteOf,
+    quotedMessage,
+    settleAdminAction,
+    settlePermission
+};
+export type { AdminActionItem, AgentFeed, FeedItem, MessageItem, QueuedMessage };

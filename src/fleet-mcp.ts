@@ -2,9 +2,10 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { Forwarded, SendOptions } from './agent-events.js';
+import type { AdminAction, Forwarded, SendOptions } from './agent-events.js';
 import type { AgentSummary, Delivery } from './dashboard-protocol.js';
 import type { DelegationCancel, DelegationStart } from './delegations.js';
+import type { AdminOutcome } from './fleet-admin.js';
 /**
  * The fleet as tools: an MCP server flotti hands to every ACP agent it starts,
  * in `mcpServers` of `session/new`, so a bare Claude Code or Codex can see its
@@ -33,6 +34,12 @@ interface FleetDirectory {
     delegate(from: string, to: string, text: string, deadline?: string): Promise<DelegationStart>;
     /** Takes back a task the agent `from` gave; throws when it gave no such task. */
     cancelDelegation(from: string, delegationId: string): DelegationCancel;
+    /**
+     * Restarts an agent or clears its context on behalf of an administrator of
+     * the fleet; refuses anyone else. Without it the tools of administrators
+     * answer that they are not available.
+     */
+    administer?(adminId: string, action: AdminAction, target: string): Promise<AdminOutcome>;
 }
 /** How an agent reaches the tools: the port on its side and the token that says who it is. */
 type FleetToolsAccess = {
@@ -68,7 +75,7 @@ const TOOLS = [
     {
         name: 'list_agents',
         description: 'Lists the agents of your flotti fleet: id, name, what they are for and what they are doing now. '
-            + 'Your own entry is marked "you".',
+            + 'Your own entry is marked "you", administrators of the fleet "admin".',
         inputSchema: { type: 'object', properties: {}, additionalProperties: false }
     },
     {
@@ -142,6 +149,35 @@ const TOOLS = [
         }
     }
 ] as const;
+/** The tools of an administrator of the fleet: listed to administrators only, refused to anyone else. */
+const ADMIN_TOOLS = [
+    {
+        name: 'restart_agent',
+        description: 'Restarts an agent of the fleet — you are an administrator of it. A local agent is restarted '
+            + 'as a process, a remote one is asked to restart itself. Naming yourself restarts you once this turn '
+            + 'is over.',
+        inputSchema: {
+            type: 'object',
+            properties: { id: { type: 'string', description: 'Id of the agent, as list_agents gives it; may be yours.' } },
+            required: ['id'],
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'clear_context',
+        description: 'Clears the context of an agent of the fleet — you are an administrator of it: its next message '
+            + 'starts a new conversation, without the old history. What it is doing now is cancelled. Naming '
+            + 'yourself clears yours once this turn is over.',
+        inputSchema: {
+            type: 'object',
+            properties: { id: { type: 'string', description: 'Id of the agent, as list_agents gives it; may be yours.' } },
+            required: ['id'],
+            additionalProperties: false
+        }
+    }
+] as const;
+/** What each tool of an administrator does. */
+const ADMIN_ACTIONS: Readonly<Record<string, AdminAction>> = { restart_agent: 'restart', clear_context: 'clear-context' };
 /**
  * The fleet tools of one flotti run. Listens on the loopback only; a call
  * without the token of an agent of the fleet is refused, so a web page on the
@@ -265,11 +301,11 @@ class FleetMcpServer {
         const fields = isObject(params) ? params : {};
         switch (method) {
             case 'initialize':
-                return initializeResult(caller, fields);
+                return initializeResult(caller, fields, this.isAdmin(caller));
             case 'ping':
                 return {};
             case 'tools/list':
-                return { tools: TOOLS };
+                return { tools: this.isAdmin(caller) ? [...TOOLS, ...ADMIN_TOOLS] : TOOLS };
             case 'tools/call':
                 return this.callTool(caller, fields);
             default:
@@ -305,7 +341,7 @@ class FleetMcpServer {
                 return this.taskTool(fleet, caller, name, args);
         }
     }
-    /** The tools of tasks one agent gives another. */
+    /** The tools of tasks one agent gives another; any other is one of an administrator, or none. */
     private taskTool(fleet: FleetDirectory, caller: string, name: string, args: ToolArguments): Promise<ToolResult> {
         switch (name) {
             case 'delegate':
@@ -313,8 +349,24 @@ class FleetMcpServer {
             case 'cancel_delegation':
                 return this.cancelDelegation(fleet, caller, stringArgument(args, 'id'));
             default:
-                throw new RpcError(-32602, `no tool ${name}`);
+                return this.adminTool(fleet, caller, name, args);
         }
+    }
+    /** Whether the caller is an administrator of the fleet: it is then listed the tools of one. */
+    private isAdmin(caller: string): boolean {
+        return this.fleet?.agents().find((agent) => agent.id === caller)?.admin === true;
+    }
+    /** `restart_agent` and `clear_context`: whether the caller may is for the fleet to say. */
+    private async adminTool(fleet: FleetDirectory, caller: string, name: string, args: ToolArguments): Promise<ToolResult> {
+        const action = Object.hasOwn(ADMIN_ACTIONS, name) ? ADMIN_ACTIONS[name] : undefined;
+        if (action === undefined) {
+            throw new RpcError(-32602, `no tool ${name}`);
+        }
+        if (fleet.administer === undefined) {
+            return failure('the tools of administrators are not available in this fleet');
+        }
+        const outcome = await fleet.administer(caller, action, stringArgument(args, 'id'));
+        return outcome.ok ? text(outcome.text) : failure(outcome.text);
     }
     /** The `reply` tool: to the agent whose message came last, quoting it — as a reply of a person does. */
     private async reply(fleet: FleetDirectory, caller: string, args: ToolArguments): Promise<ToolResult> {
@@ -398,8 +450,8 @@ async function deliver(fleet: FleetDirectory, to: string, message: string, optio
         return { agentId: to, result: 'failed', error: error instanceof Error ? error.message : String(error) };
     }
 }
-/** The answer to `initialize`: the protocol version, the capabilities and who the caller is. */
-function initializeResult(caller: string, fields: Record<string, unknown>): object {
+/** The answer to `initialize`: the protocol version, the capabilities, who the caller is and whether it administers. */
+function initializeResult(caller: string, fields: Record<string, unknown>, admin: boolean): object {
     return {
         protocolVersion: PROTOCOL_VERSIONS.find((known) => known === fields['protocolVersion'])
             ?? PROTOCOL_VERSIONS[0],
@@ -407,6 +459,7 @@ function initializeResult(caller: string, fields: Record<string, unknown>): obje
         serverInfo: { name: MCP_SERVER_NAME, version: '1' },
         instructions: `You are "${caller}", one agent of a flotti fleet. These tools let you see the other `
             + 'agents and write to them.'
+            + (admin ? ' You are an administrator of the fleet: you may also restart agents and clear their context.' : '')
     };
 }
 function stringArgument(args: ToolArguments, name: string): string {

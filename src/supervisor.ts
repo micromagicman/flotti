@@ -1,12 +1,15 @@
 import { A2AAgent } from './a2a-agent.js';
+import type { AdminRequest } from './a2a-agent.js';
 import { AgentAnswers } from './agent-answers.js';
 import { waitingInLine } from './agent-events.js';
-import type { AgentEvent, AgentEventBody, FleetAgent, Quote, SendOptions } from './agent-events.js';
+import type { AdminAction, AgentEvent, AgentEventBody, FleetAgent, Quote, SendOptions } from './agent-events.js';
 import { HistoryFile } from './agent-history.js';
 import type { ConnectionHealth } from './connection-health.js';
 import { Delegations } from './delegations.js';
 import type { DelegationCancel, DelegationFleet, DelegationStart } from './delegations.js';
 import type { AgentSummary, Delivery, Harness } from './dashboard-protocol.js';
+import { FleetAdmin } from './fleet-admin.js';
+import type { AdminFleet, AdminOutcome } from './fleet-admin.js';
 import type { FleetToolsAccess } from './fleet-mcp.js';
 import { LocalAgentProcess } from './local-agent.js';
 import type { Agent, Fleet } from './types.js';
@@ -58,6 +61,11 @@ type SupervisorOptions = {
      * absent. `flotti run` gives them, tests of fake fleets do not.
      */
     readonly fleetTools?: { access(agentId: string): FleetToolsAccess };
+    /**
+     * Whether an action of an administrator of the fleet waits for a person to
+     * allow it in the dashboard; asked at every action, off when absent.
+     */
+    readonly confirmAdminActions?: () => boolean;
 };
 /** One agent of the fleet with what the dashboard needs of it. */
 type Member = {
@@ -77,15 +85,28 @@ type Member = {
     unsubscribe: () => void;
     /** The harness the pages were last told the agent has: a change is announced. */
     harness: string | undefined;
+    /** Whether the agent is in a turn: between a message it took and the end of its answer. */
+    inTurn: boolean;
+    /** Called once the turn is over: actions an administrator asked for on itself in the turn. */
+    turnOver: (() => void)[];
 };
+/** What a member starts with besides its agent and its history. */
+function freshMember(): Pick<Member, 'answers' | 'unsubscribe' | 'harness' | 'inTurn' | 'turnOver'> {
+    return { answers: new AgentAnswers(), unsubscribe: () => undefined, harness: undefined, inTurn: false, turnOver: [] };
+}
 /** An agent the request names that is not in the fleet. */
 class UnknownAgentError extends Error {}
+/**
+ * How an agent of the fleet runs: a local process, or a remote agent whose
+ * requests as an administrator go to `onAdminRequest`.
+ */
 function defaultAgent(
-    fleetTools: SupervisorOptions['fleetTools']
+    fleetTools: SupervisorOptions['fleetTools'],
+    onAdminRequest: (agentId: string, request: AdminRequest) => void
 ): (agent: Agent) => FleetAgent {
     return (agent) => agent.kind === 'local'
         ? new LocalAgentProcess(agent, fleetTools === undefined ? {} : { fleetTools: fleetTools.access(agent.id) })
-        : new A2AAgent(agent);
+        : new A2AAgent(agent, { onAdminRequest: (request) => onAdminRequest(agent.id, request) });
 }
 function describeError(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -117,8 +138,12 @@ class Supervisor {
     private readonly lastSeq = new Map<string, number>();
     /** Tasks agents give one another. */
     private readonly delegations: Delegations;
+    /** What administrators of the fleet do to the agents. */
+    private readonly admin: FleetAdmin;
     constructor(fleet: Fleet, options: SupervisorOptions = {}) {
-        this.createAgent = options.createAgent ?? defaultAgent(options.fleetTools);
+        this.createAgent = options.createAgent
+            ?? defaultAgent(options.fleetTools, (agentId, request) => void this.adminRequest(agentId, request));
+        this.admin = new FleetAdmin(this.adminFleet(), options.confirmAdminActions === undefined ? {} : { confirm: options.confirmAdminActions });
         this.historyLimit = options.historyLimit ?? 5000;
         this.queuedAfterMs = options.queuedAfterMs ?? 500;
         this.persistHistory = options.persistHistory ?? false;
@@ -139,7 +164,8 @@ class Supervisor {
                 ...(agent.description === undefined ? {} : { description: agent.description }),
                 ...harnessOf(agent, running),
                 status: running.status,
-                ...(running.health === undefined ? {} : { health: running.health })
+                ...(running.health === undefined ? {} : { health: running.health }),
+                ...(agent.admin === true ? { admin: true as const } : {})
             }));
     }
     /** The agent as its manifest describes it. */
@@ -324,6 +350,59 @@ class Supervisor {
     answerPermission(agentId: string, requestId: string, optionId?: string): boolean {
         return this.member(agentId).running.answerPermission(requestId, optionId);
     }
+    /** Starts the conversation of the agent anew: its next message goes without the old history. */
+    clearContext(agentId: string): Promise<void> {
+        return this.member(agentId).running.clearContext();
+    }
+    /**
+     * An agent of the fleet, as an administrator, restarts an agent or clears
+     * its context; refused when it is not an administrator.
+     */
+    administer(adminId: string, action: AdminAction, target: string): Promise<AdminOutcome> {
+        return this.admin.request(adminId, action, target);
+    }
+    /**
+     * A person allows or refuses an action of an administrator waiting for it.
+     *
+     * @returns Whether such an action was waiting.
+     */
+    answerAdminAction(actionId: string, allow: boolean): boolean {
+        return this.admin.answer(actionId, allow);
+    }
+    /** The fleet as the administrators act on it. */
+    private adminFleet(): AdminFleet {
+        return {
+            agents: () => this.agents(),
+            restart: (agentId) => this.restart(agentId),
+            clearContext: (agentId) => this.clearContext(agentId),
+            note: (agentId, body) => {
+                const member = this.members.get(agentId);
+                if (member !== undefined) {
+                    this.put(member, body);
+                }
+            },
+            turnOver: (agentId) => this.turnOver(agentId)
+        };
+    }
+    /**
+     * A remote administrator asked through its inbox. It has no tool call to
+     * answer, so a refusal or a failure comes to it as a message.
+     */
+    private async adminRequest(adminId: string, request: AdminRequest): Promise<void> {
+        const outcome = await this.administer(adminId, request.action, request.target);
+        const member = this.members.get(adminId);
+        if (!outcome.ok && member !== undefined) {
+            void this.hand(member, `[flotti] ${outcome.text}`, {});
+        }
+    }
+    /** Resolves once the turn the agent is in is over; at once when it is in none, or is gone. */
+    private turnOver(agentId: string): Promise<void> {
+        const member = this.members.get(agentId);
+        if (member === undefined || !member.inTurn) {
+            return Promise.resolve();
+        }
+        return new Promise((resolve) => member.turnOver.push(resolve));
+    }
     private member(agentId: string): Member {
         const member = this.members.get(agentId);
         if (member === undefined) {
@@ -344,9 +423,7 @@ class Supervisor {
             history,
             offset,
             file: historyFile,
-            answers: new AgentAnswers(),
-            unsubscribe: () => undefined,
-            harness: undefined
+            ...freshMember()
         };
         this.members.set(agent.id, member);
         if (restoredAny) {
@@ -378,6 +455,7 @@ class Supervisor {
         if (event.type === 'status') {
             this.noticeHarness(member);
         }
+        this.followTurn(member, event);
         this.keep(member, event);
         this.pass(member, event);
         this.delegations.take(member.agent.id, event);
@@ -402,6 +480,22 @@ class Supervisor {
                 const { id, deadline } = event.delegation;
                 void this.delegations.delegate(from, event.to, event.text, { id, tellFailure: true, ...(deadline === undefined ? {} : { deadline }) });
             }
+        }
+    }
+    /**
+     * Keeps track of whether the agent is in a turn; when the turn is over — or
+     * the agent stopped, so no turn will end — what waited for that goes on.
+     */
+    private followTurn(member: Member, event: AgentEvent): void {
+        if (event.type === 'message' && event.role === 'user') {
+            member.inTurn = true;
+            return;
+        }
+        const over = event.type === 'turn-end' || (event.type === 'status' && (event.status === 'stopped' || event.status === 'error'));
+        if (over) {
+            member.inTurn = false;
+            // After the turn-end is kept: what waits restarts or clears the agent, and that comes after it in the tab.
+            setImmediate(() => member.turnOver.splice(0).forEach((resolve) => resolve()));
         }
     }
     /**

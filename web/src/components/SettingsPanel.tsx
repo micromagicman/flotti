@@ -124,12 +124,49 @@ function SshConnect() {
         </form>
     );
 }
+/** The checkbox of the confirmation, as the server has it: saved at once, read back from the answer. */
+function useAdminConfirm() {
+    const [confirm, setConfirm] = useState<boolean>();
+    const [error, setError] = useState<string>();
+    useEffect(() => {
+        api.adminSettings().then((found) => setConfirm(found.confirmActions), (reason: unknown) => setError(errorText(reason)));
+    }, []);
+    const change = (next: boolean): void => {
+        const before = confirm;
+        setError(undefined);
+        // The box follows the click at once; what the server saved, or the state before, comes after.
+        setConfirm(next);
+        api.setAdminSettings({ confirmActions: next }).then((found) => setConfirm(found.confirmActions), (reason: unknown) => {
+            setConfirm(before);
+            setError(errorText(reason));
+        });
+    };
+    return { confirm, error, change };
+}
+/** Whether actions of administrators wait for a person: a restart or a clear waits for Allow in the dashboard. */
+function AdminConfirm() {
+    const { confirm, error, change } = useAdminConfirm();
+    return (
+        <div className="settings-section" role="group" aria-label="Administrators">
+            <h2>Administrators</h2>
+            <label className="field-check">
+                <input type="checkbox" checked={confirm === true} disabled={confirm === undefined} onChange={(event) => change(event.target.checked)} />
+                {' '}Ask me before an administrator restarts an agent or clears its context
+            </label>
+            <p className="field-hint">
+                An administrator is an agent with Administrator ticked in its settings. When this is on, each of its
+                actions waits for Allow in the dashboard; a refusal reaches it as one. When off, it is done at once.
+            </p>
+            {error === undefined ? null : <p className="error" role="alert">{error}</p>}
+        </div>
+    );
+}
 type Run = (action: () => Promise<unknown>) => void;
 function AgentRowTitle({ agent }: { readonly agent: AgentSummary }) {
     return (
         <div className="settings-agent-title">
             <span className="settings-agent-name">{agent.name}</span>
-            <span className="kind">{agent.id} · {agent.kind === 'local' ? 'local · ACP' : 'remote · A2A'}</span>
+            <span className="kind">{agent.id} · {agent.kind === 'local' ? 'local · ACP' : 'remote · A2A'}{agent.admin === true ? ' · admin' : ''}</span>
             <StatusBadge status={agent.status} />
         </div>
     );
@@ -240,6 +277,7 @@ function SettingsPanel({ agents }: SettingsPanelProps) {
                         <FleetDirectory />
                         <AgentList agents={agents} onEditing={setEditing} />
                         <NotificationSettingsSection />
+                        <AdminConfirm />
                     </>
                 )
                 : <AgentEditor editing={editing} onDone={() => setEditing(undefined)} />}

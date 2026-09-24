@@ -3,7 +3,8 @@ import type { RefObject, UIEvent } from 'react';
 import type { AgentStatus } from '../../../src/agent-events.js';
 import type { AgentSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
-import type { FeedItem, QueuedMessage } from '../feed.js';
+import { adminActionText } from '../feed.js';
+import type { AdminActionItem, FeedItem, QueuedMessage } from '../feed.js';
 import { DelegationCard } from './DelegationCard.js';
 import { NextUp, Undelivered } from './InLine.js';
 import type { LineActions } from './InLine.js';
@@ -19,6 +20,8 @@ type FeedProps = {
     readonly agents: readonly AgentSummary[];
     readonly colors: AgentColors;
     readonly onAnswer: (requestId: string, optionId?: string) => void;
+    /** A person allows or refuses an action of an administrator. */
+    readonly onAdminAnswer: (actionId: string, allow: boolean) => void;
     readonly actions: MessageActions;
     readonly line: LineActions;
     readonly jump?: Jump | undefined;
@@ -55,6 +58,46 @@ function Permission({ item, onAnswer }: { readonly item: FeedItem & { kind: 'per
         </div>
     );
 }
+type AdminEntryProps = {
+    readonly item: AdminActionItem;
+    readonly agentId: string;
+    readonly agents: readonly AgentSummary[];
+    readonly onAdminAnswer: FeedProps['onAdminAnswer'];
+};
+/** Allow or Refuse, while the action waits for a person. */
+function AdminAllowance({ item, onAdminAnswer }: Pick<AdminEntryProps, 'item' | 'onAdminAnswer'>) {
+    if (item.settled) {
+        return <div className="muted">answered</div>;
+    }
+    return (
+        <div className="options">
+            <button type="button" className="primary" onClick={() => onAdminAnswer(item.actionId, true)}>Allow</button>
+            <button type="button" onClick={() => onAdminAnswer(item.actionId, false)}>Refuse</button>
+        </div>
+    );
+}
+/**
+ * An action of an administrator: a line in both tabs, a request with Allow and
+ * Refuse while it waits for a person, and — in the tab of the agent whose
+ * context was cleared — a divider: what is above it the agent no longer knows.
+ */
+function AdminActionEntry({ item, agentId, agents, onAdminAnswer }: AdminEntryProps) {
+    const name = (id: string): string => agents.find((agent) => agent.id === id)?.name ?? id;
+    const text = adminActionText(item, name);
+    if (item.state === 'done' && item.action === 'clear-context' && item.target === agentId) {
+        return <div className="item context-cleared" role="separator" aria-label={`Context cleared: ${text}`}><span>context cleared · {text}</span></div>;
+    }
+    if (item.state !== 'pending') {
+        return <div className={`item admin-action admin-action-${item.state}`}>{text}</div>;
+    }
+    return (
+        <div className="item permission admin-request">
+            <div className="item-label">Administrator action</div>
+            <div>{text}</div>
+            <AdminAllowance item={item} onAdminAnswer={onAdminAnswer} />
+        </div>
+    );
+}
 function ToolEntry({ item }: { readonly item: FeedItem & { kind: 'tool' } }) {
     return (
         <div className={`item tool tool-${item.status ?? 'pending'}`}>
@@ -63,8 +106,8 @@ function ToolEntry({ item }: { readonly item: FeedItem & { kind: 'tool' } }) {
         </div>
     );
 }
-/** Everything in the feed but messages, tasks and permission requests. */
-function NoteEntry({ item }: { readonly item: Exclude<FeedItem, { kind: 'message' | 'permission' | 'undelivered' | 'delegation' }> }) {
+/** Everything in the feed but messages, tasks, permission requests and actions of administrators. */
+function NoteEntry({ item }: { readonly item: Exclude<FeedItem, { kind: 'message' | 'permission' | 'undelivered' | 'delegation' | 'admin-action' }> }) {
     switch (item.kind) {
         case 'thought':
             return <details className="item thought"><summary>Thinking</summary><div className="text">{item.text}</div></details>;
@@ -82,7 +125,7 @@ function NoteEntry({ item }: { readonly item: Exclude<FeedItem, { kind: 'message
             return <details className="item raw"><summary>{item.protocol.toUpperCase()} message</summary><pre>{JSON.stringify(item.payload, null, 2)}</pre></details>;
     }
 }
-function FeedEntry({ item, onAnswer, line, ...fleet }: { readonly item: FeedItem } & Omit<FeedProps, 'items' | 'jump'>) {
+function FeedEntry({ item, onAnswer, onAdminAnswer, line, ...fleet }: { readonly item: FeedItem } & Omit<FeedProps, 'items' | 'jump'>) {
     switch (item.kind) {
         case 'message':
             return <Message item={item} {...fleet} />;
@@ -92,6 +135,8 @@ function FeedEntry({ item, onAnswer, line, ...fleet }: { readonly item: FeedItem
             return <Permission item={item} onAnswer={onAnswer} />;
         case 'delegation':
             return <DelegationCard item={item} agents={fleet.agents} colors={fleet.colors} />;
+        case 'admin-action':
+            return <AdminActionEntry item={item} agentId={fleet.agentId} agents={fleet.agents} onAdminAnswer={onAdminAnswer} />;
         default:
             return <NoteEntry item={item} />;
     }
@@ -129,7 +174,7 @@ function useJump(list: RefObject<HTMLDivElement | null>, agentId: string, jump: 
     }, [list, agentId, jump]);
 }
 /** The agent's output, newest at the bottom, and what waits for it; follows new output unless the reader scrolled up. */
-function Feed({ items, queue, status, onAnswer, jump, ...fleet }: FeedViewProps) {
+function Feed({ items, queue, status, onAnswer, onAdminAnswer, jump, ...fleet }: FeedViewProps) {
     const { agentName, agentId } = fleet;
     const { list, onScroll } = usePinnedScroll(items, queue);
     useJump(list, agentId, jump);
@@ -142,7 +187,7 @@ function Feed({ items, queue, status, onAnswer, jump, ...fleet }: FeedViewProps)
             onScroll={onScroll}
         >
             {items.length === 0 && queue.length === 0 ? <p className="muted empty">Nothing yet. Say something to {agentName}.</p> : null}
-            {items.map((item) => <FeedEntry key={item.key} item={item} onAnswer={onAnswer} {...fleet} />)}
+            {items.map((item) => <FeedEntry key={item.key} item={item} onAnswer={onAnswer} onAdminAnswer={onAdminAnswer} {...fleet} />)}
             <NextUp queue={queue} status={status} onWithdraw={fleet.line.onWithdraw} {...fleet} />
         </div>
     );

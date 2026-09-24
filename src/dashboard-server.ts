@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import type {
+    AdminAnswer,
     BroadcastResponse,
     ClientMessage,
     ErrorResponse,
@@ -169,6 +170,30 @@ const ROUTES: readonly Route[] = [
         method: 'PUT',
         pattern: /^\/api\/fleet$/,
         handle: async (context, _match, body) => [200, await requireSettings(context).switchTo(body)]
+    },
+    {
+        method: 'GET',
+        pattern: /^\/api\/admin-settings$/,
+        handle: async (context) => [200, requireSettings(context).adminSettings()]
+    },
+    {
+        method: 'PUT',
+        pattern: /^\/api\/admin-settings$/,
+        handle: async (context, _match, body) => [200, requireSettings(context).setAdminSettings(body)]
+    },
+    {
+        method: 'POST',
+        pattern: /^\/api\/admin-actions\/([^/]+)$/,
+        handle: async ({ supervisor }, [actionId], body) => {
+            const { allow } = (body ?? {}) as Partial<AdminAnswer>;
+            if (typeof allow !== 'boolean') {
+                throw new HttpError(400, '"allow" must be true or false.');
+            }
+            if (!supervisor.answerAdminAction(actionId ?? '', allow)) {
+                throw new HttpError(404, 'No such action of an administrator is waiting.');
+            }
+            return [200, {}];
+        }
     },
     {
         method: 'POST',

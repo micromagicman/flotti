@@ -41,6 +41,11 @@ type AgentBase = {
     readonly name: string;
     /** One line about the agent, for the dashboard. */
     readonly description?: string;
+    /**
+     * Set when the agent is an administrator of the fleet: it may restart the
+     * other agents and clear their context. Absent means it is not one.
+     */
+    readonly admin?: true;
     /** Absolute path of the agent directory. */
     readonly directory: string;
     /** Absolute path of the manifest inside it. */

@@ -202,7 +202,24 @@ function IdentityFields({ draft, update, isNew }: FieldsProps & { readonly isNew
             <Field label="Description">
                 <input value={draft.description} onChange={(event) => update('description', event.target.value)} />
             </Field>
+            <AdminField draft={draft} update={update} />
         </>
+    );
+}
+/** The role of an administrator: only a person gives and takes it, here or in the manifest. */
+function AdminField({ draft, update }: FieldsProps) {
+    const id = useId();
+    return (
+        <div className="field field-check">
+            <label>
+                <input type="checkbox" checked={draft.admin} aria-describedby={`${id}-hint`} onChange={(event) => update('admin', event.target.checked)} />
+                {' '}Administrator
+            </label>
+            <span className="field-hint" id={`${id}-hint`}>
+                May restart the agents of the fleet and clear their context, itself included, with the tools of an
+                administrator. Only a person gives and takes this role.
+            </span>
+        </div>
     );
 }
 function FormFooter({ isNew, error, saving, onCancel }: { readonly isNew: boolean; readonly error: string | undefined; readonly saving: boolean; readonly onCancel: () => void }) {
