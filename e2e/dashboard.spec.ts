@@ -112,9 +112,17 @@ function starts(id: string): number {
     const record = join(workspace, 'fleet', 'local', id, 'record.jsonl');
     return existsSync(record) ? readFileSync(record, 'utf8').split('\n').filter((line) => line.includes('"started"')).length : 0;
 }
+/** Notes in the memory bank of an agent, as it would write them. */
+function memoryNotes(fleet: string, id: string): void {
+    const memory = join(fleet, 'local', id, 'memory');
+    mkdirSync(join(memory, 'process'), { recursive: true });
+    writeFileSync(join(memory, 'index.md'), '# Home\nStart at [[Release process]]; see also [[missing note]].\n\n<b>not bold</b>\n');
+    writeFileSync(join(memory, 'process', 'release.md'), '# Release process\n- [x] build\n- [ ] tag it\n\nBack [[Home|home]].\n');
+}
 test.beforeAll(async () => {
     const fleet = join(workspace, 'fleet');
     localAgent(fleet, 'claude', 'claude-code');
+    memoryNotes(fleet, 'claude');
     localAgent(fleet, 'codex', 'codex');
     await remoteAgent(fleet, 'relay');
     telegram = await FakeTelegram.start();
@@ -242,6 +250,48 @@ test('on a narrow screen the conversations are one tab away, in the list of them
     await page.getByRole('tab', { name: /^Conversations/ }).click();
     await page.getByRole('list').getByRole('button', { name: /relay ↔ claude/ }).click();
     await expect(lane(page)).toContainText('Please rerun the e2e job');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+const viewButton = (page: Page, name: 'Chat' | 'Memory') => page.getByRole('group', { name: 'View' }).getByRole('button', { name, exact: true });
+test('the Memory view of a local agent shows its notes: a tree, a note rendered, [[links]] both ways, search', async ({ page }) => {
+    await page.goto(url);
+    await tab(page, 'claude').click();
+    await viewButton(page, 'Memory').click();
+    const notes = page.getByRole('navigation', { name: 'Notes' });
+    await expect(notes.getByRole('button')).toHaveText([/Home/, /Release process/]);
+    await expect(notes.locator('summary')).toHaveText('process');
+    const card = page.locator('.note-card');
+    await expect(card.getByRole('heading', { level: 2 })).toHaveText('Home');
+    await expect(card.locator('.wikilink-broken')).toHaveText('missing note');
+    await expect(card.locator('.md')).toContainText('<b>not bold</b>');
+    await card.locator('.md').getByRole('button', { name: 'Release process' }).click();
+    await expect(card.getByRole('heading', { level: 2 })).toHaveText('Release process');
+    await expect(card.getByRole('checkbox')).toHaveCount(2);
+    await expect(card.locator('.backlinks').getByRole('button')).toHaveText(['Home']);
+    await page.getByRole('searchbox', { name: 'Search notes' }).fill('see also');
+    await expect(notes.getByRole('button')).toHaveText([/Home/]);
+    await viewButton(page, 'Chat').click();
+    await expect(feed(page, 'claude')).toBeVisible();
+    await expect(viewButton(page, 'Chat')).toHaveAttribute('aria-pressed', 'true');
+});
+test('the Memory view says why a remote agent has no notes to show', async ({ page }) => {
+    await page.goto(url);
+    await tab(page, 'relay').click();
+    await viewButton(page, 'Memory').click();
+    await expect(page.locator('.memory-state')).toContainText('A remote agent keeps its memory on its own machine');
+});
+test('on a narrow screen the Memory view is the list, then a note with the way back', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(url);
+    await tab(page, 'claude').click();
+    await viewButton(page, 'Memory').click();
+    const notes = page.getByRole('navigation', { name: 'Notes' });
+    await expect(page.locator('.note-card')).toBeHidden();
+    await notes.getByRole('button', { name: /Release process/ }).click();
+    await expect(notes).toBeHidden();
+    await expect(page.locator('.note-card').getByRole('heading', { level: 2 })).toHaveText('Release process');
+    await page.getByRole('button', { name: '← All notes' }).click();
+    await expect(notes).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 test('an agent gives another a task: both tabs show who gave it to whom and how it ended, and the outcome comes back', async ({ page }) => {

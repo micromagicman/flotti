@@ -101,7 +101,7 @@ function missingFleet(location: FleetLocation): Fleet {
     return { location, exists: false, agents: [] };
 }
 /**
- * Creates the directories a local agent owns but flotti never reads —
+ * Creates the directories a local agent owns and flotti never writes to —
  * `skills/` and `memory/` — where they are missing.
  *
  * @returns Paths it created.

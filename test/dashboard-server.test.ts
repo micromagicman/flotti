@@ -14,6 +14,7 @@ import { FleetSettings } from '../src/fleet-settings.js';
 import { NotificationService } from '../src/notifications.js';
 import { SshError } from '../src/ssh.js';
 import { Supervisor } from '../src/supervisor.js';
+import type { Agent } from '../src/types.js';
 import { FakeFleetAgent, fakeFleet } from './fake-fleet-agent.js';
 const webRoot = mkdtempSync(join(tmpdir(), 'flotti-web-'));
 writeFileSync(join(webRoot, 'index.html'), '<!doctype html><title>flotti</title>');
@@ -328,4 +329,31 @@ test('the settings page adds the agents of user@host in one step, and says why i
     const away = await call(dashboard.port, 'POST', '/api/ssh-agents', { target: 'eva@away.example.org' });
     deepStrictEqual([away.status, (away.body as { error: string }).error], [502, 'Cannot reach away.example.org over SSH (Connection refused).']);
     strictEqual((await call(dashboard.port, 'POST', '/api/ssh-agents', { target: '-oProxyCommand=x' })).status, 400);
+});
+test('shows the memory bank of a local agent, read-only, and nothing outside it', async () => {
+    const memory = mkdtempSync(join(webRoot, 'memory-'));
+    mkdirSync(join(memory, 'process'));
+    writeFileSync(join(memory, 'index.md'), '# Home\nSee [[Release]].');
+    writeFileSync(join(memory, 'process', 'release.md'), '# Release\nTag it.');
+    writeFileSync(join(webRoot, 'outside.md'), '# Outside');
+    const { fleet, createAgent } = fakeFleet('claude', 'codex');
+    const agents = fleet.agents.map((agent): Agent => (agent.kind !== 'local' ? agent : agent.id === 'claude' ? { ...agent, memoryDirectory: memory } : { ...agent, ssh: 'dev@build.example.org' }));
+    const supervisor = new Supervisor({ ...fleet, agents }, { createAgent });
+    const dashboard = await startDashboard(supervisor, { port: 0, webRoot });
+    open.push({ dashboard, supervisor, sockets: [] });
+    const bank = await call(dashboard.port, 'GET', '/api/agents/claude/memory');
+    strictEqual(bank.status, 200, bank.text);
+    deepStrictEqual((bank.body as { notes: { path: string }[] }).notes.map((note) => note.path), ['index.md', 'process/release.md']);
+    const found = await call(dashboard.port, 'GET', '/api/agents/claude/memory?q=tag%20it');
+    deepStrictEqual((found.body as { notes: { path: string }[] }).notes.map((note) => note.path), ['process/release.md']);
+    const note = await call(dashboard.port, 'GET', `/api/agents/claude/memory/${encodeURIComponent('process/release.md')}`);
+    deepStrictEqual([note.status, (note.body as { text: string }).text], [200, '# Release\nTag it.']);
+    for (const path of ['..%2Foutside.md', encodeURIComponent('../outside.md'), '..%5Coutside.md']) {
+        strictEqual((await call(dashboard.port, 'GET', `/api/agents/claude/memory/${path}`)).status, 400, path);
+    }
+    strictEqual((await call(dashboard.port, 'GET', '/api/agents/claude/memory/none.md')).status, 404);
+    strictEqual((await call(dashboard.port, 'GET', '/api/agents/nobody/memory')).status, 404);
+    strictEqual((await call(dashboard.port, 'PUT', '/api/agents/claude/memory/index.md', { text: 'x' })).status, 405);
+    const far = await call(dashboard.port, 'GET', '/api/agents/codex/memory');
+    deepStrictEqual([far.status, (far.body as { available: boolean }).available], [200, false]);
 });

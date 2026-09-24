@@ -18,6 +18,7 @@ import type {
 } from './dashboard-protocol.js';
 import type { Forwarded, Quote, SendOptions } from './agent-events.js';
 import { ConfigurationError } from './errors.js';
+import { MemoryError, readMemoryBank, readMemoryNote } from './memory-bank.js';
 import type { FleetSettings } from './fleet-settings.js';
 import type { NotificationService } from './notifications.js';
 import { UnknownAgentError } from './supervisor.js';
@@ -80,7 +81,7 @@ type Context = {
 type Route = {
     readonly method: Method;
     readonly pattern: RegExp;
-    readonly handle: (context: Context, match: string[], body: unknown) => Promise<[number, unknown]>;
+    readonly handle: (context: Context, match: string[], body: unknown, query: URLSearchParams) => Promise<[number, unknown]>;
 };
 function requireSettings(context: Context): FleetSettings {
     if (context.settings === undefined) {
@@ -120,6 +121,19 @@ const NOTIFICATION_ROUTES: readonly Route[] = [
         method: 'POST',
         pattern: /^\/api\/notifications\/test$/,
         handle: async (context) => [200, await requireNotifications(context).test()]
+    }
+];
+/** The memory bank of a local agent, read-only (#73): the list of its notes, and one note. */
+const MEMORY_ROUTES: readonly Route[] = [
+    {
+        method: 'GET',
+        pattern: /^\/api\/agents\/([^/]+)\/memory$/,
+        handle: async ({ supervisor }, [id], _body, query) => [200, await readMemoryBank(supervisor.agent(id ?? ''), query.get('q') ?? '')]
+    },
+    {
+        method: 'GET',
+        pattern: /^\/api\/agents\/([^/]+)\/memory\/([^/]+)$/,
+        handle: async ({ supervisor }, [id, path]) => [200, await readMemoryNote(supervisor.agent(id ?? ''), path ?? '')]
     }
 ];
 /**
@@ -371,8 +385,9 @@ function collectChunks(request: IncomingMessage, reject: (reason: unknown) => vo
     });
     return chunks;
 }
-async function handleApi(context: Context, request: IncomingMessage, path: string): Promise<[number, unknown]> {
-    const matching = [...ROUTES, ...NOTIFICATION_ROUTES].map((candidate) => ({ candidate, match: candidate.pattern.exec(path) }))
+async function handleApi(context: Context, request: IncomingMessage, url: URL): Promise<[number, unknown]> {
+    const path = url.pathname;
+    const matching = [...ROUTES, ...NOTIFICATION_ROUTES, ...MEMORY_ROUTES].map((candidate) => ({ candidate, match: candidate.pattern.exec(path) }))
         .filter(({ match }) => match !== null);
     if (matching.length === 0) {
         throw new HttpError(404, `Nothing at ${path}.`);
@@ -388,7 +403,7 @@ async function handleApi(context: Context, request: IncomingMessage, path: strin
     }
     const body = request.method === 'GET' ? undefined : await readBody(request);
     const match = route.match.slice(1).map((part) => decodeURIComponent(part));
-    return route.candidate.handle(context, match, body);
+    return route.candidate.handle(context, match, body, url.searchParams);
 }
 /** Serves a file of the built page; any other path gets `index.html`, the page routes itself. */
 async function serveStatic(webRoot: string, path: string, response: ServerResponse): Promise<void> {
@@ -420,6 +435,9 @@ function errorResponse(error: unknown): [number, ErrorResponse] {
     if (error instanceof HttpError) {
         return [error.status, { error: error.message }];
     }
+    if (error instanceof MemoryError) {
+        return [error.status, { error: error.message }];
+    }
     if (error instanceof UnknownAgentError) {
         return [404, { error: error.message }];
     }
@@ -445,22 +463,22 @@ function requestHandler(supervisor: Supervisor, hosts: Set<string>, options: Das
             send(response, 421, { error: 'The dashboard answers on localhost only.' });
             return;
         }
-        const path = new URL(request.url ?? '/', 'http://localhost').pathname;
-        if (isShutdown(request, path, options)) {
+        const url = new URL(request.url ?? '/', 'http://localhost');
+        if (isShutdown(request, url.pathname, options)) {
             send(response, 202, {});
             options.shutdown?.onRequest();
             return;
         }
-        if (!path.startsWith('/api/')) {
-            void serveStatic(webRoot, path, response);
+        if (!url.pathname.startsWith('/api/')) {
+            void serveStatic(webRoot, url.pathname, response);
             return;
         }
-        answerApi({ supervisor, settings: options.settings, notifications: options.notifications }, request, path, response);
+        answerApi({ supervisor, settings: options.settings, notifications: options.notifications }, request, url, response);
     };
 }
 /** Answers an API request with what its route gives, or with the error it fails with. */
-function answerApi(context: Context, request: IncomingMessage, path: string, response: ServerResponse): void {
-    handleApi(context, request, path).then(
+function answerApi(context: Context, request: IncomingMessage, url: URL, response: ServerResponse): void {
+    handleApi(context, request, url).then(
         ([status, body]) => send(response, status, body),
         (error: unknown) => send(response, ...errorResponse(error))
     );

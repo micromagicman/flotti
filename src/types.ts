@@ -89,7 +89,10 @@ type LocalAgent = AgentBase & {
     readonly systemPromptFile?: string;
     /** Absolute path of the agent's own skills; flotti creates it and never reads it. */
     readonly skillsDirectory: string;
-    /** Absolute path of the agent's memory bank; flotti creates it and never reads it. */
+    /**
+     * Absolute path of the agent's memory bank; flotti creates it and never
+     * writes to it. The dashboard shows its notes, read-only.
+     */
     readonly memoryDirectory: string;
 };
 /** An agent that runs elsewhere and is reached over the network, from `<fleet>/remote/<id>/`. */

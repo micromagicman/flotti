@@ -233,6 +233,48 @@ type PushSubscriptionBody = {
 type NotificationTestResponse = {
     readonly results: readonly { readonly channel: string; readonly ok: boolean; readonly error?: string }[];
 };
+/** A note of the memory bank of an agent, as the list of them shows it. */
+type MemoryNoteSummary = {
+    /** Where the note is in the memory bank, folders joined with `/`: `process/release.md`. */
+    readonly path: string;
+    /** The first `# heading` of the note, or its file name without `.md`. */
+    readonly title: string;
+    /** When the file last changed, in milliseconds since the epoch. */
+    readonly modifiedAt: number;
+    /** Size of the file in bytes. */
+    readonly size: number;
+    /** The notes its `[[links]]` name, as written: without the label and the heading. */
+    readonly links: readonly string[];
+    /** Set when the note is too large to read: it is listed, but not shown. */
+    readonly tooLarge?: true;
+};
+/**
+ * `GET /api/agents/<id>/memory`: the notes of the memory bank of a local agent,
+ * read-only. `?q=words` keeps the notes whose title, path or text has them.
+ * An agent whose memory is not on this machine — a remote one, or a local one
+ * started over SSH — has none to show, and the answer says why.
+ */
+type MemoryBank =
+    | {
+        readonly available: true;
+        /** Absolute path of the memory bank. */
+        readonly directory: string;
+        /** Notes in the order of their paths. */
+        readonly notes: readonly MemoryNoteSummary[];
+        /** Set when there were more notes than the dashboard lists. */
+        readonly truncated?: true;
+    }
+    | { readonly available: false; readonly reason: string };
+/** `GET /api/agents/<id>/memory/<path>`, the path encoded as one segment: one note, with its text. */
+type MemoryNote = {
+    readonly path: string;
+    /** Absolute path of the file, for a person to open it elsewhere. */
+    readonly file: string;
+    readonly modifiedAt: number;
+    readonly size: number;
+    /** The markdown of the note as it is in the file. */
+    readonly text: string;
+};
 /** Answer to any request that went wrong. */
 type ErrorResponse = {
     readonly error: string;
@@ -251,6 +293,9 @@ export type {
     FleetSwitch,
     Harness,
     LocalAgentConfig,
+    MemoryBank,
+    MemoryNote,
+    MemoryNoteSummary,
     NotificationEvents,
     NotificationSettings,
     NotificationSettingsChange,

@@ -101,6 +101,14 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   restart itself or starts a new conversation (see [Lifecycle](#lifecycle) and
   [Talking to a remote agent](#talking-to-a-remote-agent)); **Stop** stops it until **Start** starts it
   again; **Cancel** drops the message in work.
+- **Chat and Memory**: the header of a tab switches between the chat and the agent's memory bank.
+  **Memory** shows the notes of `memory/`, read-only: the folders and a search on the left, the note on
+  the right — rendered markdown, where a `[[link]]` opens the note it names, a link to a note that is
+  not there is grey and dashed, and "Linked from" lists the notes that link to this one. On a narrow
+  screen the list comes first and a note opens over it, with **← All notes** back. Only `.md` files
+  inside the bank are read — no hidden ones, none a symbolic link leads out of it, none over a
+  megabyte — and nothing is ever written there. A remote agent, and a local one started over SSH, keep
+  their memory on another machine: the view says so instead.
 - **Reply and Forward** sit on the corner of every message, on hover or focus (always, on a touch
   screen). **Reply** puts the message above the field as a quote; the agent gets the quoted text above
   your answer, and in the tab the quote leads back to the message it answers — in this tab or another
@@ -220,6 +228,8 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `GET /api/agents/<id>`                        | its manifest as the file says it, and its system prompt |
 | `PUT /api/agents/<id>` `{kind, id, …}`        | a changed manifest: writes it and restarts the agent    |
 | `DELETE /api/agents/<id>`                     | stops the agent and moves its directory to `.trash/`    |
+| `GET /api/agents/<id>/memory` `?q=`           | the notes of the agent's memory bank, with the words `q` when given; `available: false` and why for an agent whose memory is not here |
+| `GET /api/agents/<id>/memory/<path>`          | one note and its text; `<path>` is its path in the bank, encoded as one segment |
 | `GET /api/fleet`, `PUT /api/fleet` `{path}`   | the fleet directory; switches to another one            |
 | `POST /api/agents/<id>/permissions/<request>` `{optionId?}` | answers a permission request; no option refuses it |
 | `GET /api/notifications`, `PUT /api/notifications` `{events?, repeatMinutes?, dashboardUrl?, telegram?, webPush?}` | the notification settings, without secrets; a change of them |
@@ -259,7 +269,7 @@ Every agent is a directory, and the directory name is the agent id:
   in `local/` or `remote/` must be an agent directory.
 - `local/` and `remote/` may be absent — that group is simply empty.
 - `skills/` and `memory/` belong to the agent: flotti creates them when they are missing and never
-  reads them. It hands them to the agent, as told in [Running a local agent](#running-a-local-agent).
+  writes to them; the dashboard only shows the notes of `memory/`. It hands them to the agent, as told in [Running a local agent](#running-a-local-agent).
 - `logs/` is where flotti keeps what a running agent said; see the same section.
 - `.flotti-history.jsonl` is the history of the agent's tab, written by flotti; see
   [The dashboard](#the-dashboard).
