@@ -73,8 +73,8 @@ function FleetDirectory() {
                 ? null
                 : <p className="muted">{info.path} — {sourceText(info)}.</p>}
             <div className="field-inline">
-                <input aria-label="Fleet directory path" value={path} onChange={(event) => setPath(event.target.value)} />
-                <button type="submit" disabled={busy || path.trim() === '' || path.trim() === info?.path}>Switch</button>
+                <input className="input" aria-label="Fleet directory path" value={path} onChange={(event) => setPath(event.target.value)} />
+                <button type="submit" className="btn" disabled={busy || path.trim() === '' || path.trim() === info?.path}>Switch</button>
             </div>
             <FleetHint info={info} />
             {error === undefined ? null : <p className="error" role="alert">{error}</p>}
@@ -112,8 +112,8 @@ function SshConnect() {
         <form className="settings-section" aria-label="Connect over SSH" onSubmit={submit}>
             <h2>Connect over SSH</h2>
             <div className="field-inline">
-                <input aria-label="SSH address" placeholder="user@host" value={target} onChange={(event) => setTarget(event.target.value)} />
-                <button type="submit" className="primary" disabled={busy || target.trim() === ''}>{busy ? 'Connecting…' : 'Connect'}</button>
+                <input className="input" aria-label="SSH address" placeholder="user@host" value={target} onChange={(event) => setTarget(event.target.value)} />
+                <button type="submit" className="btn btn-primary" aria-busy={busy} disabled={busy || target.trim() === ''}>{busy ? 'Connecting…' : 'Connect'}</button>
             </div>
             <p className="field-hint">
                 Your public key has to be on the host already. flotti asks the host which agents it publishes, adds them,
@@ -149,7 +149,7 @@ function AdminConfirm() {
     return (
         <div className="settings-section" role="group" aria-label="Administrators">
             <h2>Administrators</h2>
-            <label className="field-check">
+            <label className="check">
                 <input type="checkbox" checked={confirm === true} disabled={confirm === undefined} onChange={(event) => change(event.target.checked)} />
                 {' '}Ask me before an administrator restarts an agent or clears its context
             </label>
@@ -175,8 +175,8 @@ function ConfirmDelete({ agent, run, onKeep }: { readonly agent: AgentSummary; r
     return (
         <div className="actions">
             <span className="note">Stop {agent.name} and move its directory to .trash in the fleet directory?</span>
-            <button type="button" className="danger" onClick={() => run(() => api.remove(agent.id))}>Delete</button>
-            <button type="button" onClick={onKeep}>Keep</button>
+            <button type="button" className="btn btn-sm btn-danger" onClick={() => run(() => api.remove(agent.id))}>Delete</button>
+            <button type="button" className="btn btn-sm" onClick={onKeep}>Keep</button>
         </div>
     );
 }
@@ -191,11 +191,11 @@ function AgentActions({ agent, run, onEdit, onDelete }: AgentActionsProps) {
     return (
         <div className="actions">
             {stopped
-                ? <button type="button" onClick={() => run(() => api.start(agent.id))}>Start</button>
-                : <button type="button" onClick={() => run(() => api.stop(agent.id))}>Stop</button>}
-            <button type="button" onClick={() => run(() => api.restart(agent.id))}>Restart</button>
-            <button type="button" onClick={onEdit}>Edit</button>
-            <button type="button" onClick={onDelete}>Delete</button>
+                ? <button type="button" className="btn btn-sm" onClick={() => run(() => api.start(agent.id))}>Start</button>
+                : <button type="button" className="btn btn-sm" onClick={() => run(() => api.stop(agent.id))}>Stop</button>}
+            <button type="button" className="btn btn-sm" onClick={() => run(() => api.restart(agent.id))}>Restart</button>
+            <button type="button" className="btn btn-sm" onClick={onEdit}>Edit</button>
+            <button type="button" className="btn btn-sm" onClick={onDelete}>Delete</button>
         </div>
     );
 }
@@ -221,7 +221,7 @@ function ManifestLoading({ error, onDone }: { readonly error: string | undefined
     return (
         <div className="settings-section">
             {error === undefined ? <p className="muted">Reading the manifest…</p> : <p className="error" role="alert">{error}</p>}
-            <div className="actions"><button type="button" onClick={onDone}>Back</button></div>
+            <div className="actions"><button type="button" className="btn" onClick={onDone}>Back</button></div>
         </div>
     );
 }
@@ -254,8 +254,8 @@ function AgentList({ agents, onEditing }: { readonly agents: readonly AgentSumma
                 ))}
             </ul>
             <div className="actions">
-                <button type="button" onClick={() => onEditing({ mode: 'new', kind: 'local' })}>Add local agent</button>
-                <button type="button" onClick={() => onEditing({ mode: 'new', kind: 'remote' })}>Add remote agent</button>
+                <button type="button" className="btn" onClick={() => onEditing({ mode: 'new', kind: 'local' })}>Add local agent</button>
+                <button type="button" className="btn" onClick={() => onEditing({ mode: 'new', kind: 'remote' })}>Add remote agent</button>
             </div>
         </div>
     );

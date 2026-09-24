@@ -38,7 +38,7 @@ function PermissionOptions({ item, onAnswer }: { readonly item: FeedItem & { kin
                 <button
                     key={option.optionId}
                     type="button"
-                    className={option.kind.startsWith('allow') ? 'primary' : ''}
+                    className={option.kind.startsWith('allow') ? 'btn btn-sm btn-primary' : 'btn btn-sm'}
                     onClick={() => onAnswer(item.requestId, option.optionId)}
                 >
                     {option.name}
@@ -71,8 +71,8 @@ function AdminAllowance({ item, onAdminAnswer }: Pick<AdminEntryProps, 'item' | 
     }
     return (
         <div className="options">
-            <button type="button" className="primary" onClick={() => onAdminAnswer(item.actionId, true)}>Allow</button>
-            <button type="button" onClick={() => onAdminAnswer(item.actionId, false)}>Refuse</button>
+            <button type="button" className="btn btn-sm btn-primary" onClick={() => onAdminAnswer(item.actionId, true)}>Allow</button>
+            <button type="button" className="btn btn-sm" onClick={() => onAdminAnswer(item.actionId, false)}>Refuse</button>
         </div>
     );
 }

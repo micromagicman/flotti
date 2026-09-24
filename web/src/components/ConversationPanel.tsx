@@ -104,7 +104,7 @@ function LaneHeader({ pair, conversation, conversationsId, onOpen, agents, color
                 ))}
             </h1>
             <span className="muted">{messagesText(conversation?.messages.length ?? 0)}</span>
-            <button type="button" className="lane-all" onClick={() => onOpen(conversationsId)}>All conversations</button>
+            <button type="button" className="btn btn-sm lane-all" onClick={() => onOpen(conversationsId)}>All conversations</button>
         </header>
     );
 }
@@ -114,7 +114,7 @@ function LaneFoot({ pair, agents, colors, onOpen }: Fleet & Pick<ConversationPan
         <div className="lane-foot">
             <span>Only the two agents write here.</span>
             {pair.map((id) => (
-                <button key={id} type="button" className={`lane-write agent-color-${colors[id] ?? 0}`} onClick={() => onOpen(id)}>Write to {nameOf(agents, id)}</button>
+                <button key={id} type="button" className={`btn btn-sm lane-write agent-color-${colors[id] ?? 0}`} onClick={() => onOpen(id)}>Write to {nameOf(agents, id)}</button>
             ))}
         </div>
     );

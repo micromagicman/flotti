@@ -62,10 +62,10 @@ function WhenFields({ draft, setDraft }: DraftProps) {
             ))}
             <div className="field-row">
                 <Field label="Remind every (minutes)" hint="While an agent still waits. 0: tell once.">
-                    <input inputMode="numeric" value={draft.repeatMinutes} onChange={(event) => setDraft({ ...draft, repeatMinutes: event.target.value })} />
+                    <input className="input" inputMode="numeric" value={draft.repeatMinutes} onChange={(event) => setDraft({ ...draft, repeatMinutes: event.target.value })} />
                 </Field>
                 <Field label="Link to the dashboard" hint="Empty: the address of this dashboard. Put the address you open it by from elsewhere here.">
-                    <input value={draft.dashboardUrl} placeholder="http://127.0.0.1:4870/" onChange={(event) => setDraft({ ...draft, dashboardUrl: event.target.value })} />
+                    <input className="input" value={draft.dashboardUrl} placeholder="http://127.0.0.1:4870/" onChange={(event) => setDraft({ ...draft, dashboardUrl: event.target.value })} />
                 </Field>
             </div>
         </fieldset>
@@ -78,10 +78,10 @@ function TelegramFields({ draft, setDraft, tokenSet }: DraftProps & { readonly t
             <Check label="Telegram" checked={draft.telegramEnabled} onChange={(checked) => setDraft({ ...draft, telegramEnabled: checked })} />
             <div className="field-row">
                 <Field label="Bot token" hint={tokenSet ? 'Saved; it is never shown. Type a new one to replace it.' : 'From @BotFather. Kept on this machine, never shown again.'}>
-                    <input type="password" autoComplete="off" value={draft.botToken} placeholder={tokenSet ? 'saved' : '123456:ABC…'} onChange={(event) => setDraft({ ...draft, botToken: event.target.value })} />
+                    <input className="input" type="password" autoComplete="off" value={draft.botToken} placeholder={tokenSet ? 'saved' : '123456:ABC…'} onChange={(event) => setDraft({ ...draft, botToken: event.target.value })} />
                 </Field>
                 <Field label="Chat id" hint="Your id, or the id of a group the bot is in.">
-                    <input value={draft.chatId} onChange={(event) => setDraft({ ...draft, chatId: event.target.value })} />
+                    <input className="input" value={draft.chatId} onChange={(event) => setDraft({ ...draft, chatId: event.target.value })} />
                 </Field>
             </div>
         </fieldset>
@@ -153,8 +153,8 @@ function WebPushView({ supported, here, count, error, onStart, onStop }: WebPush
                 : (
                     <div className="actions">
                         {here === true
-                            ? <button type="button" onClick={onStop}>Stop on this browser</button>
-                            : <button type="button" onClick={onStart} disabled={here === undefined}>Notify this browser</button>}
+                            ? <button type="button" className="btn btn-sm" onClick={onStop}>Stop on this browser</button>
+                            : <button type="button" className="btn btn-sm" onClick={onStart} disabled={here === undefined}>Notify this browser</button>}
                     </div>
                 )}
             {error === undefined ? null : <p className="error" role="alert">{error}</p>}
@@ -174,7 +174,7 @@ function TestButton() {
     };
     return (
         <>
-            <button type="button" onClick={test}>Send a test</button>
+            <button type="button" className="btn btn-sm" onClick={test}>Send a test</button>
             {result === undefined ? null : <span className="note" role="status">{result}</span>}
         </>
     );
@@ -215,7 +215,7 @@ function NotificationFields({ view, draft, setDraft, error, saved, onPush }: Not
             <Check label="Web Push to the subscribed browsers" checked={draft.webPushEnabled} onChange={(checked) => setDraft({ ...draft, webPushEnabled: checked })} />
             <WebPushControl view={view} onChange={onPush} />
             <div className="actions">
-                <button type="submit" className="primary">Save</button>
+                <button type="submit" className="btn btn-primary">Save</button>
                 <TestButton />
                 {saved ? <span className="note" role="status">Saved.</span> : null}
             </div>

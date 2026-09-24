@@ -66,11 +66,11 @@ function AgentActions({ agent, feed, run }: { readonly agent: AgentSummary; read
     const stopped = feed.status === 'stopped' || feed.status === 'error';
     return (
         <div className="actions">
-            {busy ? <button type="button" onClick={() => run(() => api.cancel(agent.id))}>Cancel</button> : null}
+            {busy ? <button type="button" className="btn btn-sm" onClick={() => run(() => api.cancel(agent.id))}>Cancel</button> : null}
             {stopped
-                ? <button type="button" onClick={() => run(() => api.start(agent.id))}>Start</button>
-                : <button type="button" onClick={() => run(() => api.stop(agent.id))}>Stop</button>}
-            <button type="button" onClick={() => run(() => api.restart(agent.id))}>Restart</button>
+                ? <button type="button" className="btn btn-sm" onClick={() => run(() => api.start(agent.id))}>Start</button>
+                : <button type="button" className="btn btn-sm" onClick={() => run(() => api.stop(agent.id))}>Stop</button>}
+            <button type="button" className="btn btn-sm" onClick={() => run(() => api.restart(agent.id))}>Restart</button>
         </div>
     );
 }
