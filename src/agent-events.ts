@@ -1,3 +1,4 @@
+import type { ConnectionHealth, HealthListener } from './connection-health.js';
 /**
  * The one shape every agent of the fleet has for the dashboard, whether it is a
  * local process spoken to over ACP or a remote service spoken to over A2A: the
@@ -232,6 +233,13 @@ interface FleetAgent {
     restart(): Promise<void>;
     /** Stops the agent, or disconnects from it; queued messages are dropped. */
     stop(): Promise<void>;
+    /**
+     * Health of the connection to an agent reached over one that has to be kept
+     * open — an SSH tunnel; absent for any other agent.
+     */
+    readonly health?: ConnectionHealth;
+    /** Calls the listener whenever {@link health} changes; returns the way to stop. */
+    onHealth?(listener: HealthListener): () => void;
 }
 /**
  * Keeps the listeners of one agent and hands its events to them, numbered and

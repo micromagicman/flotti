@@ -50,7 +50,10 @@ take `--port <port>` or `FLOTTI_PORT`.
   It asks over the dashboard rather than with a signal, because on Windows a signal kills at once and
   would leave the agents running. With nothing running it says so and exits with `0`.
 - **`flotti status`** asks the running flotti for its agents and prints them as a table, one line an
-  agent; the harness is `-` where flotti does not know it (see [A local agent](#a-local-agent)):
+  agent; the harness is `-` where flotti does not know it (see [A local agent](#a-local-agent)). When
+  an agent of the fleet is reached over SSH, the table also has the health of its connection — the
+  latency, the reconnects in all and in the last hour, how long the tunnel has been up, and `POOR:`
+  with the reason when it is poor (see [The health of the connection](#the-health-of-the-connection)):
 
   ```text
   flotti runs /home/me/.flotti/agents (process 4242), dashboard http://127.0.0.1:4870/
@@ -155,7 +158,7 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 
 | Request                                       | What it does                                           |
 |-----------------------------------------------|--------------------------------------------------------|
-| `GET /api/agents`                             | the agents and their statuses                          |
+| `GET /api/agents`                             | the agents and their statuses; `health` for an agent over SSH |
 | `POST /api/agents/<id>/messages` `{text, replyTo?, forwarded?}` | a message to one agent: `taken`, `queued` or `failed`; `replyTo` quotes a message, `forwarded` sends one on (`text` may then be empty) |
 | `POST /api/broadcast` `{text, agents?}`       | one message to these agents, or to all; a result each  |
 | `POST /api/agents/<id>/restart`               | restarts the agent; answers at once, the status follows |
@@ -168,7 +171,7 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `DELETE /api/agents/<id>`                     | stops the agent and moves its directory to `.trash/`    |
 | `GET /api/fleet`, `PUT /api/fleet` `{path}`   | the fleet directory; switches to another one            |
 | `POST /api/agents/<id>/permissions/<request>` `{optionId?}` | answers a permission request; no option refuses it |
-| `/ws`                                         | `fleet` first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and gets the events after them, then live ones |
+| `/ws`                                         | `fleet` first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and gets the events after them, then live ones; `health` whenever the health of the SSH connection of an agent changes |
 
 With no login, the server guards against other web pages rather than against people: it answers only
 to the host names of this machine (a page elsewhere cannot rebind a name of its own to `127.0.0.1`),
@@ -514,10 +517,28 @@ says `"ssh": "user@host"`, and flotti does the rest with nothing but the user's 
 - **Says why it could not**: the key is not accepted (and where the public key goes), the host is not
   known, cannot be reached, or its key changed; the host publishes nothing, or several agents and the
   manifest does not say which.
+- **Shows how healthy the connection is** — see below.
 
 SSH runs non-interactively (`BatchMode=yes`) through the `ssh` of this machine, so `~/.ssh/config`,
 the SSH agent and the known hosts are the user's own; a host seen for the first time is remembered
 (`StrictHostKeyChecking=accept-new`), one whose key changed is refused.
+
+#### The health of the connection
+
+The status says whether the tunnel is up now; the health says whether it is stable. The header of the
+agent's tab and its row in **Settings** show, and keep up to date without a reload:
+
+- **latency** — the round trip of a request to the agent down the tunnel: flotti asks for the agent
+  card when the tunnel comes up and every 15 s after, with no secret in the request;
+- **reconnects** — how many times the tunnel came back after it dropped since the agent was started, how
+  many of them in the last hour, and when the last one was;
+- **last activity** — when the agent last said something or answered a request;
+- **tunnel up** — how long the tunnel that is open now has been up, or `down`.
+
+A connection with 3 or more reconnects in the last hour, or a latency of 1 s or more, is **poor**: the
+health turns red and says why, and the tab of the agent says `poor connection`, seen from any tab.
+`flotti status` shows the same numbers. The health carries numbers and times only — no address, no
+token, no header — and is not written to the history of the tab.
 
 Not done, on purpose:
 

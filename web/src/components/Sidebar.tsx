@@ -4,6 +4,7 @@ import { shownInSidebar } from '../conversations.js';
 import type { Conversation } from '../conversations.js';
 import type { AgentFeed } from '../feed.js';
 import { AgentMark, PairMarks, nameOf } from './AgentMark.js';
+import { PoorConnectionMark } from './ConnectionHealth.js';
 import { StatusBadge } from './StatusBadge.js';
 /** How many conversations the sidebar lists by name; the rest are in the list of them all. */
 const CONVERSATIONS_SHOWN = 4;
@@ -66,7 +67,7 @@ function AgentTab({ agent, feed, color, unread, selected, onSelect }: AgentTabPr
                 <span className="tab-label">{agent.name}</span>
                 {unread ? <span className="unread" aria-label="new output" /> : null}
             </span>
-            <StatusBadge status={status} />
+            <StatusBadge status={status} /><PoorConnectionMark health={agent.health} />
         </button>
     );
 }
