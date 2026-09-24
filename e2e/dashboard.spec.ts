@@ -222,25 +222,71 @@ test('the conversation of two agents has a tab of its own: one lane, read-only, 
     await page.getByRole('button', { name: 'Write to claude' }).click();
     await expect(page.getByRole('textbox', { name: 'Message to claude' })).toBeVisible();
 });
-/** The colour an element is painted with: the fill of a mark, the bar of an envelope. */
-const fill = (element: ReturnType<Page['locator']>) => element.evaluate((node) => getComputedStyle(node).backgroundColor);
-async function relayColors(page: Page): Promise<string[]> {
-    await tab(page, 'relay').click();
-    const colors = [
-        await fill(tab(page, 'relay').locator('.agent-mark')),
-        await fill(page.locator('.agent-header .agent-mark')),
-        await fill(feed(page, 'relay').locator('.message-sent .envelope-bar').first())
-    ];
-    await pairTab(page).click();
-    colors.push(await fill(lane(page).locator('.lane-first .envelope-bar').first()), await fill(page.locator('.lane-title .agent-mark').first()));
-    return colors;
+/** The channels of a colour, 0–255: `#rrggbb`, `rgb()`, or the `color(srgb …)` a `color-mix()` computes to. */
+function channels(color: string): number[] {
+    const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color.trim());
+    if (hex !== null) {
+        return hex.slice(1, 4).map((part) => parseInt(part, 16));
+    }
+    const rgb = /rgba?\(([^)]+)\)/.exec(color);
+    if (rgb?.[1] !== undefined) {
+        return rgb[1].split(/[\s,/]+/).filter(Boolean).slice(0, 3).map(Number);
+    }
+    const srgb = /color\(srgb ([^)]+)\)/.exec(color);
+    if (srgb?.[1] !== undefined) {
+        return srgb[1].split(/[\s/]+/).filter(Boolean).slice(0, 3).map((part) => Math.round(Number(part) * 255));
+    }
+    throw new Error(`not a colour: ${color}`);
 }
-test('an agent has one colour in the sidebar, in the header of its tab, on its envelopes and in a conversation, in both themes', async ({ page }) => {
+/** How far a colour is from grey: the spread of its channels. */
+const chroma = (color: string) => {
+    const [r = 0, g = 0, b = 0] = channels(color);
+    return Math.max(r, g, b) - Math.min(r, g, b);
+};
+const TRANSPARENT = 'rgba(0, 0, 0, 0)';
+/** The colour a mark is drawn in: its fill, or the ring of a hollow one. */
+const paint = (element: Locator) => element.evaluate((node, transparent) => {
+    const style = getComputedStyle(node);
+    return style.backgroundColor === transparent ? /^(rgba?|color)\([^)]*\)/.exec(style.boxShadow)?.[0] ?? style.boxShadow : style.backgroundColor;
+}, TRANSPARENT);
+/** A colour an element takes from its style. */
+const css = (element: Locator, property: string) => element.evaluate((node, name) => getComputedStyle(node).getPropertyValue(name).trim(), property);
+type Bar = { readonly hue: string; readonly background: string; readonly text: string; readonly border: string };
+/** The bar of an envelope: the hue it takes, its fill and text, and the border of the envelope. */
+async function bar(envelope: Locator): Promise<Bar> {
+    const head = envelope.locator('.envelope-bar');
+    return {
+        hue: await css(head, '--agent-hue'),
+        background: await css(head, 'background-color'),
+        text: await css(head, 'color'),
+        border: await css(envelope, 'border-top-color')
+    };
+}
+async function relayColors(page: Page): Promise<{ marks: string[]; bars: Bar[] }> {
+    await tab(page, 'relay').click();
+    const marks = [await paint(tab(page, 'relay').locator('.agent-mark')), await paint(page.locator('.agent-header .agent-mark'))];
+    const bars = [await bar(feed(page, 'relay').locator('.message-sent').first())];
+    await pairTab(page).click();
+    marks.push(await paint(page.locator('.lane-title .agent-mark').first()));
+    bars.push(await bar(lane(page).locator('.lane-first .message-sent').first()));
+    return { marks, bars };
+}
+test('an agent has one hue on its mark in the sidebar, in the header of its tab and in a conversation, and a tone of it on its envelopes, in both themes (#96)', async ({ page }) => {
     for (const colorScheme of ['light', 'dark'] as const) {
         await page.emulateMedia({ colorScheme });
         await page.goto(url);
-        const colors = await relayColors(page);
-        expect(new Set(colors).size, `${colorScheme}: ${colors.join(', ')}`).toBe(1);
+        const { marks, bars } = await relayColors(page);
+        expect(new Set(marks).size, `${colorScheme}: ${marks.join(', ')}`).toBe(1);
+        const mark = marks[0] ?? '';
+        expect(chroma(mark), `${colorScheme}: the mark is in colour, ${mark}`).toBeGreaterThan(15);
+        for (const { hue, background, text, border } of bars) {
+            expect(channels(hue), `${colorScheme}: the bar takes the hue of the mark`).toEqual(channels(mark));
+            expect(chroma(background), `${colorScheme}: the bar is a faint tone, ${background}`).toBeLessThan(8);
+            expect(channels(background), `${colorScheme}: the bar is not the hue itself`).not.toEqual(channels(mark));
+            // The rest of the envelope is grey: the text of the bar and the border.
+            expect(chroma(text), `${colorScheme}: the text of the bar, ${text}`).toBeLessThan(8);
+            expect(chroma(border), `${colorScheme}: the border of the envelope, ${border}`).toBeLessThan(8);
+        }
     }
 });
 test('on a narrow screen the conversations are one tab away, in the list of them all', async ({ page }) => {
@@ -504,6 +550,31 @@ test('on a wide screen the composer and the line waiting in it span the feed, in
     const broadcast = await edges(page.locator('.broadcast .composer-card'));
     expect(Math.abs(broadcast.left - targets.left)).toBeLessThanOrEqual(1);
     expect(Math.abs(broadcast.right - targets.right)).toBeLessThanOrEqual(1);
+});
+test('the palette is calm, in both themes: a state is a grey chip with a dot in colour, the line is grey, the primary button holds the one colour of action (#96)', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'claude', 'wait');
+    const chip = tab(page, 'claude').locator('[data-status]');
+    await expect(chip).toHaveAttribute('data-status', 'working');
+    await sayInLine(page, 'claude', 'queued in a calm palette');
+    const field = page.getByRole('textbox', { name: 'Message to claude' });
+    await field.fill('not sent');
+    const send = composer(page, 'claude').getByRole('button', { name: 'Send' });
+    for (const colorScheme of ['light', 'dark'] as const) {
+        await page.emulateMedia({ colorScheme });
+        // A control eases into the colours of the theme: read them once it has settled.
+        await page.evaluate(() => Promise.allSettled(document.getAnimations().filter((animation) => animation instanceof CSSTransition).map((animation) => animation.finished)));
+        expect(chroma(await css(chip, 'background-color')), `${colorScheme}: the chip`).toBeLessThan(8);
+        expect(chroma(await css(chip, 'color')), `${colorScheme}: the word of the chip`).toBeLessThan(8);
+        expect(chroma(await css(chip.locator('.dot'), 'background-color')), `${colorScheme}: the dot`).toBeGreaterThan(15);
+        const bar = nextUp(page, 'claude').locator('.message-queued .envelope-bar');
+        expect(chroma(await css(bar, 'background-color')), `${colorScheme}: the bar of a message in line`).toBeLessThan(8);
+        expect(chroma(await css(nextUp(page, 'claude'), 'border-top-color')), `${colorScheme}: the line`).toBeLessThan(8);
+        expect(chroma(await css(send, 'background-color')), `${colorScheme}: the primary button`).toBeGreaterThan(15);
+    }
+    await field.fill('');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(nextUp(page, 'claude')).toHaveCount(0);
 });
 /** Sends a message the agent is too busy to take: the field clears once the dashboard says it waits in line. */
 async function sayInLine(page: Page, name: string, text: string): Promise<void> {
