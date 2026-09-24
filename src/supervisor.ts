@@ -7,7 +7,7 @@ import { HistoryFile } from './agent-history.js';
 import type { ConnectionHealth } from './connection-health.js';
 import { Delegations } from './delegations.js';
 import type { DelegationCancel, DelegationFleet, DelegationStart } from './delegations.js';
-import type { AgentSummary, Delivery, Harness } from './dashboard-protocol.js';
+import type { AgentSummary, Delivery, Harness, MemoryStatus } from './dashboard-protocol.js';
 import { FleetAdmin } from './fleet-admin.js';
 import type { AdminFleet, AdminOutcome } from './fleet-admin.js';
 import type { FleetToolsAccess } from './fleet-mcp.js';
@@ -31,6 +31,18 @@ function harnessOf(agent: Agent, running: FleetAgent): { readonly harness?: Harn
         case undefined:
             return {};
     }
+}
+/**
+ * The memory of an agent as the dashboard shows it: what the running agent
+ * delivered, and for a remote agent that flotti gives it none (#94).
+ */
+function memoryOf(agent: Agent, running: FleetAgent): MemoryStatus | undefined {
+    if (running.memory !== undefined) {
+        return running.memory;
+    }
+    return agent.kind === 'remote'
+        ? { state: 'unsupported', reason: 'a remote agent keeps its own memory: flotti gives it none yet' }
+        : undefined;
 }
 /** What the supervisor says besides the agents' own events. */
 type SupervisorNotice =
@@ -85,14 +97,16 @@ type Member = {
     unsubscribe: () => void;
     /** The harness the pages were last told the agent has: a change is announced. */
     harness: string | undefined;
+    /** The memory status the pages were last told, as JSON: a change is announced. */
+    memory: string | undefined;
     /** Whether the agent is in a turn: between a message it took and the end of its answer. */
     inTurn: boolean;
     /** Called once the turn is over: actions an administrator asked for on itself in the turn. */
     turnOver: (() => void)[];
 };
 /** What a member starts with besides its agent and its history. */
-function freshMember(): Pick<Member, 'answers' | 'unsubscribe' | 'harness' | 'inTurn' | 'turnOver'> {
-    return { answers: new AgentAnswers(), unsubscribe: () => undefined, harness: undefined, inTurn: false, turnOver: [] };
+function freshMember(): Pick<Member, 'answers' | 'unsubscribe' | 'harness' | 'memory' | 'inTurn' | 'turnOver'> {
+    return { answers: new AgentAnswers(), unsubscribe: () => undefined, harness: undefined, memory: undefined, inTurn: false, turnOver: [] };
 }
 /** An agent the request names that is not in the fleet. */
 class UnknownAgentError extends Error {}
@@ -157,16 +171,30 @@ class Supervisor {
     agents(): AgentSummary[] {
         return [...this.members.values()]
             .sort((left, right) => fleetOrder(left.agent, right.agent))
-            .map(({ agent, running }) => ({
-                id: agent.id,
-                name: agent.name,
-                kind: agent.kind,
-                ...(agent.description === undefined ? {} : { description: agent.description }),
-                ...harnessOf(agent, running),
-                status: running.status,
-                ...(running.health === undefined ? {} : { health: running.health }),
-                ...(agent.admin === true ? { admin: true as const } : {})
-            }));
+            .map(({ agent, running }) => {
+                const memory = memoryOf(agent, running);
+                return {
+                    id: agent.id,
+                    name: agent.name,
+                    kind: agent.kind,
+                    ...(agent.description === undefined ? {} : { description: agent.description }),
+                    ...harnessOf(agent, running),
+                    status: running.status,
+                    ...(running.health === undefined ? {} : { health: running.health }),
+                    ...(agent.admin === true ? { admin: true as const } : {}),
+                    ...(memory === undefined ? {} : { memory })
+                };
+            });
+    }
+    /**
+     * The memory bank the memory tools work on for this agent (#101): a local
+     * agent on this machine with an adapter has one; any other has none.
+     */
+    memoryBank(agentId: string): string | undefined {
+        const agent = this.members.get(agentId)?.agent;
+        return agent?.kind === 'local' && agent.ssh === undefined && agent.adapter !== undefined
+            ? agent.memoryDirectory
+            : undefined;
     }
     /** The agent as its manifest describes it. */
     agent(agentId: string): Agent {
@@ -425,6 +453,7 @@ class Supervisor {
             file: historyFile,
             ...freshMember()
         };
+        member.memory = JSON.stringify(member.running.memory ?? null);
         this.members.set(agent.id, member);
         if (restoredAny) {
             this.markRestored(member);
@@ -540,15 +569,18 @@ class Supervisor {
         member.offset += 1;
     }
     /**
-     * A remote agent tells its harness once connected to, which it says with a
-     * status: the pages learn it with the fleet, and only when it changed.
+     * A remote agent tells its harness once connected to, and a local one what
+     * memory it was given once started, which each says with a status: the
+     * pages learn it with the fleet, and only when it changed.
      */
     private noticeHarness(member: Member): void {
         const harness = member.running.harness;
-        if (harness === member.harness) {
+        const memory = JSON.stringify(member.running.memory ?? null);
+        if (harness === member.harness && memory === member.memory) {
             return;
         }
         member.harness = harness;
+        member.memory = memory;
         if (this.members.get(member.agent.id) === member) {
             this.announce();
         }

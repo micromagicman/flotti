@@ -1,5 +1,7 @@
 import { lstatSync, mkdirSync, readFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { MEMORY_POLICY_VERSION, bankProblem, installMemorySkill, withPolicy } from './memory-contract.js';
+import type { SkillState } from './memory-contract.js';
 import type { LocalAgent } from './types.js';
 /** Environment variable codex-acp reads extra Codex configuration from, as a JSON object. */
 const CODEX_CONFIG_VARIABLE = 'CODEX_CONFIG';
@@ -18,6 +20,10 @@ const CODEX_CONFIG_VARIABLE = 'CODEX_CONFIG';
  * Both get the agent directory as an extra workspace root, so the agent can
  * read its skills and keep its memory bank. The model is not here: ACP has a
  * standard way for it, the session's `model` config option.
+ *
+ * The memory contract (#101) rides the same channels: the policy after the
+ * system prompt, the built-in skill among the agent's skills. Every start
+ * composes them anew — nothing piles up, and system-prompt.md is never written.
  */
 type Handover = {
     /** Variables added to the environment of the adapter process. */
@@ -28,6 +34,15 @@ type Handover = {
     readonly additionalDirectories: readonly string[];
     /** What could not be handed over, in words for people. */
     readonly notes: readonly string[];
+    /** What of the memory contract went out; absent when none did. */
+    readonly memory?: MemoryHandover;
+};
+/** The memory contract as handed over: the version of the policy, where the skill stands, and a bank that cannot be used. */
+type MemoryHandover = {
+    readonly policy: number;
+    readonly skill: SkillState;
+    /** Why the bank cannot be read and written; absent when it can. */
+    readonly unavailable?: string;
 };
 /**
  * Decides how the system prompt and the skills reach the agent, and prepares
@@ -35,20 +50,46 @@ type Handover = {
  *
  * @param env Environment the adapter will run with, to merge into what it already holds.
  */
-function prepareHandover(agent: LocalAgent, env: Readonly<Record<string, string | undefined>>): Handover {
+/**
+ * @param memory Whether the memory contract goes too: the agent gets the
+ *   memory tools. Only an agent on this machine with an adapter takes it.
+ */
+function prepareHandover(agent: LocalAgent, env: Readonly<Record<string, string | undefined>>, memory = false): Handover {
     const systemPrompt = readSystemPrompt(agent);
     if (agent.ssh !== undefined) {
         return remoteHandover(agent, env, systemPrompt);
     }
     switch (agent.adapter) {
-        case 'claude-code':
-            return localClaudeCodeHandover(agent, systemPrompt);
-        case 'codex':
+        case 'claude-code': {
+            const contract = memory ? memoryContract(agent) : undefined;
+            return withMemory(localClaudeCodeHandover(agent, contract === undefined ? systemPrompt : withPolicy(systemPrompt)), contract);
+        }
+        case 'codex': {
             linkCodexSkills(agent);
-            return codexHandover(env, systemPrompt, [agent.directory], []);
+            const contract = memory ? memoryContract(agent) : undefined;
+            return withMemory(codexHandover(env, systemPrompt, [agent.directory], [], contract !== undefined), contract);
+        }
         default:
             return noAdapterHandover(systemPrompt);
     }
+}
+/** Installs the built-in skill and looks at the bank; the policy itself goes with the instructions. */
+function memoryContract(agent: LocalAgent): MemoryHandover {
+    const unavailable = bankProblem(agent.memoryDirectory);
+    return {
+        policy: MEMORY_POLICY_VERSION,
+        skill: installMemorySkill(agent.skillsDirectory),
+        ...(unavailable === undefined ? {} : { unavailable })
+    };
+}
+function withMemory(handover: Handover, memory: MemoryHandover | undefined): Handover {
+    if (memory === undefined) {
+        return handover;
+    }
+    const notes = memory.skill === 'user'
+        ? ['skills/flotti-memory is the agent\'s own: the built-in memory skill is not installed over it']
+        : memory.skill === 'missing' ? ['the built-in memory skill could not be written to skills/flotti-memory'] : [];
+    return { ...handover, memory, notes: [...handover.notes, ...notes] };
 }
 /** Claude Code on this machine: the system prompt in `_meta`, the agent directory as a local plugin. */
 function localClaudeCodeHandover(agent: LocalAgent, systemPrompt: string | undefined): Handover {
@@ -62,15 +103,19 @@ function localClaudeCodeHandover(agent: LocalAgent, systemPrompt: string | undef
         notes: []
     };
 }
-/** Codex, here or on another host: the system prompt goes in `CODEX_CONFIG`. */
+/**
+ * Codex, here or on another host: the system prompt goes in `CODEX_CONFIG`,
+ * and the memory policy after it when `policy` is set.
+ */
 function codexHandover(
     env: Readonly<Record<string, string | undefined>>,
     systemPrompt: string | undefined,
     additionalDirectories: readonly string[],
-    notes: readonly string[]
+    notes: readonly string[],
+    policy = false
 ): Handover {
     return {
-        env: systemPrompt === undefined ? {} : { [CODEX_CONFIG_VARIABLE]: codexConfig(env, systemPrompt) },
+        env: systemPrompt === undefined && !policy ? {} : { [CODEX_CONFIG_VARIABLE]: codexConfig(env, systemPrompt, policy) },
         additionalDirectories,
         notes
     };
@@ -127,9 +172,10 @@ function readSystemPrompt(agent: LocalAgent): string | undefined {
 /**
  * The Codex configuration with the system prompt in it. A `CODEX_CONFIG` the
  * manifest or the environment already sets is kept; a `developer_instructions`
- * in it wins over the file, because it was written on purpose.
+ * in it wins over the file, because it was written on purpose. The memory
+ * policy goes after whichever instructions win.
  */
-function codexConfig(env: Readonly<Record<string, string | undefined>>, systemPrompt: string): string {
+function codexConfig(env: Readonly<Record<string, string | undefined>>, systemPrompt: string | undefined, policy: boolean): string {
     const given = env[CODEX_CONFIG_VARIABLE];
     let config: Record<string, unknown> = {};
     if (given !== undefined && given.trim() !== '') {
@@ -139,7 +185,11 @@ function codexConfig(env: Readonly<Record<string, string | undefined>>, systemPr
         }
         config = parsed as Record<string, unknown>;
     }
-    return JSON.stringify({ developer_instructions: systemPrompt, ...config });
+    if (!policy) {
+        return JSON.stringify({ developer_instructions: systemPrompt, ...config });
+    }
+    const written = config['developer_instructions'];
+    return JSON.stringify({ ...config, developer_instructions: withPolicy(typeof written === 'string' ? written : systemPrompt) });
 }
 /**
  * Codex looks for skills in `<root>/.agents/skills`, and the agent keeps them in
@@ -160,4 +210,4 @@ function linkCodexSkills(agent: LocalAgent): void {
     symlinkSync(agent.skillsDirectory, link, 'junction');
 }
 export { CODEX_CONFIG_VARIABLE, prepareHandover };
-export type { Handover };
+export type { Handover, MemoryHandover };

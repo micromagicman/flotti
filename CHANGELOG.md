@@ -4,6 +4,15 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ## [Unreleased]
 
+### Added
+
+- **Agent memory.** Every local agent with an adapter gets a memory of its own with nothing to install:
+  the tools `memory_search`, `memory_read`, `memory_write` and `memory_delete` of the fleet MCP server,
+  a short policy after its system prompt, the built-in skill `flotti-memory`, and an index of its
+  `memory/` at the start of the first message of every session. A write is confirmed only once the note
+  is on disk, and a stale revision is a conflict, not an overwrite. The header of the tab says whether
+  the agent has memory — on, unsupported or unavailable — as flotti delivered it (#101).
+
 ### Fixed
 
 - **The composer and the messages in line span the chat on a wide window.** The card of the message

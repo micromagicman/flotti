@@ -55,6 +55,28 @@ function HarnessBadge({ agent }: { readonly agent: AgentSummary }) {
     const why = agent.kind === 'remote' ? t.agent.harnessRemote : t.agent.harnessLocal;
     return <span className="harness harness-unknown" data-harness="unknown" title={why}>{t.agent.harnessUnknown}</span>;
 }
+/**
+ * Whether the agent has memory (#101), as flotti delivered it: on with the
+ * version of the policy, unsupported, or unavailable — with why in the hint.
+ * Nothing before a local agent was started once: flotti does not guess.
+ */
+function MemoryBadge({ agent }: { readonly agent: AgentSummary }) {
+    const t = useT();
+    const memory = agent.memory;
+    if (memory === undefined) {
+        return null;
+    }
+    if (memory.state === 'on') {
+        const skill = memory.skill === 'user' ? t.agent.memorySkillUser : memory.skill === 'missing' ? t.agent.memorySkillMissing : '';
+        return (
+            <span className="memory-badge" data-memory="on" data-skill={memory.skill} title={`${t.agent.memoryOnHint}${skill === '' ? '' : ` ${skill}`}`}>
+                {t.agent.memoryOn(memory.policy)}
+            </span>
+        );
+    }
+    const label = memory.state === 'unsupported' ? t.agent.memoryUnsupported : t.agent.memoryUnavailable;
+    return <span className="memory-badge memory-badge-off" data-memory={memory.state} title={memory.reason}>{label}</span>;
+}
 function AgentTitle({ agent, feed, color }: HeaderProps) {
     const t = useT();
     return (
@@ -62,6 +84,7 @@ function AgentTitle({ agent, feed, color }: HeaderProps) {
             <h1><AgentMark color={color} />{agent.name}</h1>
             <span className="kind">{agent.kind === 'local' ? t.common.localKind : t.common.remoteKind}</span>
             <HarnessBadge agent={agent} />
+            <MemoryBadge agent={agent} />
             {agent.admin === true ? <span className="admin-badge" title={t.agent.adminHint}>{t.agent.admin}</span> : null}
             <StatusBadge status={feed.status} />
             {feed.reason === undefined ? null : <span className="reason">{feed.reason}</span>}

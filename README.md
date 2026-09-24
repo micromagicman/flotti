@@ -107,8 +107,11 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   not there is grey and dashed, and "Linked from" lists the notes that link to this one. On a narrow
   screen the list comes first and a note opens over it, with **← All notes** back. Only `.md` files
   inside the bank are read — no hidden ones, none a symbolic link leads out of it, none over a
-  megabyte — and nothing is ever written there. A remote agent, and a local one started over SSH, keep
-  their memory on another machine: the view says so instead.
+  megabyte — and the dashboard never writes there. A remote agent, and a local one started over SSH, keep
+  their memory on another machine: the view says so instead, and so it does for a bank that cannot be
+  read — an unavailable bank is never shown as an empty one. Next to the harness, the header says whether
+  the agent has [memory](#memory): **memory on · policy v1**, **memory unsupported** or **memory
+  unavailable**, with why on hover.
 - **Reply and Forward** sit on the corner of every message, on hover or focus (always, on a touch
   screen). **Reply** puts the message above the field as a quote; the agent gets the quoted text above
   your answer, and in the tab the quote leads back to the message it answers — in this tab or another
@@ -268,8 +271,10 @@ Every agent is a directory, and the directory name is the agent id:
 - Entries whose names start with `.` are skipped, so `.DS_Store` and the like do no harm. Anything else
   in `local/` or `remote/` must be an agent directory.
 - `local/` and `remote/` may be absent — that group is simply empty.
-- `skills/` and `memory/` belong to the agent: flotti creates them when they are missing and never
-  writes to them; the dashboard only shows the notes of `memory/`. It hands them to the agent, as told in [Running a local agent](#running-a-local-agent).
+- `skills/` and `memory/` belong to the agent: flotti creates them when they are missing, and writes
+  there only what [memory](#memory) needs — the built-in skill `skills/flotti-memory`, never over a skill
+  of the agent's own of that name, and the notes the agent writes with the memory tools; the dashboard
+  only shows the notes of `memory/`. It hands them to the agent, as told in [Running a local agent](#running-a-local-agent).
 - `logs/` is where flotti keeps what a running agent said; see the same section.
 - `.flotti-history.jsonl` is the history of the agent's tab, written by flotti; see
   [The dashboard](#the-dashboard).
@@ -474,6 +479,56 @@ both adapters take — claude-agent-acp 0.81.1 declares `mcpCapabilities` `http`
 tunnel carries to an agent on another host. An agent that declares no `http` gets no tools, and a log
 event says so. A remote A2A agent — one with a loop of its own — gets no tools; a message from an agent
 reaches it with a line saying who wrote.
+
+### Memory
+
+A local agent with an `adapter`, on this machine, has a memory that outlives its conversations: the
+notes of its `memory/`, one fact per markdown file, with a front matter of `title`, `description` and
+`updated` — the same files the Memory view shows, and files a person may edit too. Nothing needs to be
+installed; flotti hands it over on every start (#101):
+
+- **The tools.** The fleet tools get four more for such an agent:
+
+  | Tool            | What it does                                                                         |
+  |-----------------|--------------------------------------------------------------------------------------|
+  | `memory_search` | `query` — the notes whose id, title, description or text hold the words: id, title, description, `updated`, a snippet |
+  | `memory_read`   | `id` — the note, with its `revision`                                                 |
+  | `memory_write`  | `title`, `description`, `body`, optional `id` and `expected_revision` — writes the note and answers `{id, revision, scope, at}` once it is on disk |
+  | `memory_delete` | `id`, optional `expected_revision` — answers `{id, deleted: true}` once it is gone    |
+
+  The id of a note is its path in the bank without `.md`; the revision is a hash of the file, so an edit
+  made outside the tools changes it too. Without `id`, `memory_write` adds a new note; a note that is
+  there is changed only with the revision it has now — a stale one is a conflict, and nothing is
+  written. A write goes to a hidden file that takes the note's place in one rename. Nothing is read or
+  written outside the bank: no `..`, no hidden entry, no folder that leads out of it. `scope` may be
+  given; anything but `agent` is refused as not supported yet.
+- **The policy.** A few rules go after the agent's own system prompt, through the channel of its adapter
+  (`_meta.systemPrompt.append` or `developer_instructions`): asked about the past, search; asked to
+  remember, search for a duplicate, then write; asked to forget, delete; confirm that something is
+  stored only after the tool succeeded, and say so when it failed; no secrets, no archive of every
+  message. It is composed anew at every start: `system-prompt.md` is never written, and nothing piles up.
+- **The skill.** `skills/flotti-memory/SKILL.md` holds the details — duplicates, contradictions,
+  conflicts, forgetting, failures, what not to store — and reaches the agent the way its skills do. Its
+  last line carries its version and a hash of its text: flotti brings its own skill up to date, and
+  leaves alone a skill of that name it did not write, or one a person edited. The policy still arrives
+  then, and the status says the skill is the agent's own.
+- **The index.** The first message of every session — new, resumed, loaded, or opened when the context
+  is cleared — starts with the rule and a bounded index of the bank: the ids, titles and descriptions of
+  the newest 50 notes, when it was taken, and a mark when it was cut short. It is a block marked as data,
+  not instructions, and not part of the system prompt: Codex fixes that when its process starts, and a
+  resumed session would keep a stale index. The feed shows the message as it was written.
+
+The status in the header is decided by what flotti delivered, not by what the agent says: **on** when
+the tools are in the session and the policy went with the instructions, **unavailable** when `memory/`
+cannot be read and written, **unsupported** for an agent without an adapter, one that takes no MCP
+server over HTTP, one on another host — memory there waits for an end-to-end test on the storage it has
+— and a remote A2A agent (#94). A running turn is never interrupted: an agent gets the contract, and a
+new version of the policy, on its next start. Memory calls show in the feed like any other tool call.
+
+Not yet — candidates for a second stage: a memory of the whole fleet with access rights; recalling the
+relevant notes on the server before every message; a handshake that holds messages until the agent
+acknowledged the policy; a warning when an agent says it remembered without a write; memory for remote
+and SSH agents.
 
 ### Administrators of the fleet
 

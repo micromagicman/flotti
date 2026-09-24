@@ -19,7 +19,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.test.json && tsc -p web/tsconfig.json",
     "test": "tsc -p tsconfig.test.json && node --test build-test/test/*.test.js",
-    "test:e2e": "npm run build && tsc -p tsconfig.test.json && playwright test -c e2e/playwright.config.ts"
+    "test:e2e": "npm run build && tsc -p tsconfig.test.json && playwright test -c e2e/playwright.config.ts",
+    "smoke:memory": "tsc -p tsconfig.test.json && node build-test/test/smoke/memory-smoke.js"
   },
   "repository": {
     "type": "git",

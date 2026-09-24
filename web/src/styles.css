@@ -378,6 +378,9 @@ input[type="checkbox"]:disabled { cursor: not-allowed; }
 .kind, .reason, .muted, .description { color: var(--muted); font-size: 12px; }
 .harness { font-family: var(--mono); font-size: 12px; padding: 0 6px; border: 1px solid var(--border); border-radius: 4px; }
 .harness-unknown { font-family: inherit; color: var(--muted); border-style: dashed; }
+.memory-badge { font-size: 12px; padding: 0 6px; border: 1px solid var(--border); border-radius: 4px; }
+.memory-badge-off { color: var(--muted); border-style: dashed; }
+.memory-badge[data-memory="unavailable"] { color: var(--bad-text); }
 .description { margin: 0; width: 100%; order: 3; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .error { color: var(--bad-text); font-size: 12px; }
