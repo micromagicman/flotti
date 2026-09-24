@@ -27,11 +27,13 @@ type Refs = {
     readonly shown: MutableRefObject<Map<string, Notification>>;
     readonly open: MutableRefObject<(agentId: string) => void>;
 };
+/** The flotti mark on its plate: a notification shows it next to the text. */
+const NOTIFICATION_ICON = '/icon-192.png';
 /** Notifies of the agents that started waiting while the page is out of sight. */
 function notifyNewlyWaiting(refs: Refs, waiting: ReturnType<typeof waitingAgents>, feeds: FleetState['feeds']): void {
     for (const agent of newlyWaiting(refs.wasWaiting.current, waiting)) {
         const { title, body } = notificationText(agent, feeds[agent.id]);
-        const notification = new Notification(title, { body, tag: `flotti-waiting-${agent.id}` });
+        const notification = new Notification(title, { body, tag: `flotti-waiting-${agent.id}`, icon: NOTIFICATION_ICON });
         notification.onclick = () => {
             window.focus();
             refs.open.current(agent.id);

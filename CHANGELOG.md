@@ -6,6 +6,9 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Added
 
+- **Logo and icon.** Three sails in a wedge over the waterline, the lead one blue, next to the word
+  flotti: in the header of the dashboard, as the favicon (it follows the light or dark theme of the
+  browser), on notifications and at the top of the README. The files are in `assets/logo` (#54).
 - **Notifications outside the browser: Telegram and Web Push.** On the settings page, a bot of your own
   (its token and a chat id) and Web Push through the service worker of the dashboard tell you when an
   agent waits for an answer or a permission, fails, or loses its SSH connection — each switched on on

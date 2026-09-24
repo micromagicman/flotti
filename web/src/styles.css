@@ -83,7 +83,14 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
     border-bottom: 1px solid var(--border);
     background: var(--panel);
 }
-.brand { font-weight: 600; letter-spacing: .02em; }
+.logo { display: block; height: 22px; width: auto; }
+.logo-sail { stroke-width: 1.4; stroke-linejoin: round; }
+.logo-back { fill: var(--off); stroke: var(--off); }
+.logo-ink { fill: var(--text); stroke: var(--text); }
+.logo-lead { fill: var(--accent); stroke: var(--accent); }
+.logo-water { fill: none; stroke: var(--text); stroke-width: 2.4; stroke-linecap: round; }
+.logo-word { fill: none; stroke: var(--text); stroke-width: 3.6; stroke-linecap: round; stroke-linejoin: round; }
+.logo-dot { fill: var(--accent); }
 .topbar-side { display: flex; align-items: center; gap: 12px; }
 .notify { font-size: 12px; padding: 2px 10px; }
 .link { font-size: 12px; color: var(--muted); }
