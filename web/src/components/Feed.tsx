@@ -83,7 +83,7 @@ function FeedEntry({ item, onAnswer, ...fleet }: { readonly item: FeedItem } & O
     }
 }
 /** Keeps the newest output in view, unless the reader scrolled up from the bottom. */
-function usePinnedScroll(items: readonly FeedItem[]) {
+function usePinnedScroll(items: readonly unknown[]) {
     const list = useRef<HTMLDivElement>(null);
     const pinned = useRef(true);
     useLayoutEffect(() => {
@@ -130,5 +130,5 @@ function Feed({ items, onAnswer, jump, ...fleet }: FeedProps) {
         </div>
     );
 }
-export { Feed };
+export { Feed, usePinnedScroll };
 export type { Jump };

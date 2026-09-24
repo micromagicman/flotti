@@ -108,7 +108,12 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 }
 .tab[aria-selected="true"] { background: var(--panel); border-color: var(--border); }
 .tab-broadcast { margin-bottom: 8px; }
-.tab-name { font-weight: 500; display: flex; align-items: center; gap: 6px; }
+.tab-name { font-weight: 500; display: flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; }
+.tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* The conversations of agents (#50): a heading, the newest pairs, and the list of them all when they do not fit. */
+.side-head { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 10px 10px 2px; }
+.tab-pair { max-width: 100%; }
+.tab-narrow-only { display: none; }
 .tab-hint { font-size: 12px; color: var(--muted); }
 .tab-waiting .tab-name { color: var(--wait); }
 /* An agent waiting for a person stands out until it is answered (#27). */
@@ -178,6 +183,16 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .agent-color-4 { --agent-color: var(--agent-4); }
 .agent-color-5 { --agent-color: var(--agent-5); }
 .author-person { --agent-color: var(--person); }
+/*
+ * The colour of an agent where its name stands (#50): a square in the sidebar,
+ * in the header of its tab and in a conversation, so the eye ties the name to
+ * its envelopes. Square, unlike the round dots of status and of unread.
+ */
+.agent-mark { display: inline-block; flex-shrink: 0; width: 10px; height: 10px; border-radius: 3px; background: var(--agent-color); }
+.pair-marks { display: inline-flex; gap: 2px; flex-shrink: 0; }
+.agent-title h1 { display: inline-flex; align-items: center; gap: 8px; }
+.agent-title h1 .agent-mark { width: 12px; height: 12px; }
+.agent-header-colored { box-shadow: inset 0 3px 0 var(--agent-color); }
 /*
  * One message with what can be done with it (#30). The row takes the place of
  * the bubble in the feed: the side, and the room it needs.
@@ -288,10 +303,42 @@ button.quote-jump:focus-visible { outline: 2px solid var(--accent); outline-offs
 .delivery-taken .delivery-result { color: var(--ok); }
 .delivery-queued .delivery-result { color: var(--wait); }
 .delivery-failed .delivery-result { color: var(--bad); }
+/* A conversation of two agents (#50): the envelopes of the first on the left, of the second on the right. */
+.lane-header { align-items: center; }
+.lane-title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 18px; margin: 0; flex: 1; min-width: 0; }
+.lane-agent { display: inline-flex; align-items: center; gap: 6px; }
+.lane-arrow { color: var(--muted); font-weight: 400; margin-right: 2px; }
+.lane-title .agent-mark { width: 12px; height: 12px; }
+.lane-all { font-size: 12px; padding: 2px 10px; }
+.lane .message-row { max-width: min(640px, 86%); }
+.lane .lane-second { align-self: flex-end; align-items: flex-end; }
+.lane-foot { border-top: 1px solid var(--border); background: var(--panel); padding: 10px 16px; font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+button.lane-write { font-size: 12px; padding: 2px 10px; border-color: var(--agent-color); box-shadow: inset 3px 0 0 var(--agent-color); }
+button.lane-write:hover:not(:disabled) { border-color: var(--agent-color); background: color-mix(in srgb, var(--agent-color) 12%, var(--panel)); }
+.conversations { flex: 1; padding: 16px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.conversations h1 { font-size: 18px; margin: 0; }
+.conversations p { margin: 0; }
+.conversation-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-width: 900px; }
+.conversation-card { width: 100%; display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 8px 12px; }
+.conversation-card-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.conversation-card-names { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.conversation-card-last { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.conversation-card:focus-visible, .lane-write:focus-visible, .lane-all:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (max-width: 700px) {
     .app { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr; }
     .sidebar { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); }
     .tab-broadcast { margin-bottom: 0; }
+    /* A row of pairs would run off a narrow screen: one tab leads to the list of them all instead. */
+    .side-head, .tab-pair { display: none; }
+    .tab-narrow-only { display: flex; }
+    /* Next to All agents, in sight without scrolling the row. */
+    .tab-broadcast { order: -2; }
+    .tab-conversations { order: -1; }
+    .tab-conversations .tab-name, .tab-conversations .tab-hint { white-space: nowrap; }
+    .lane-title { flex-basis: 100%; font-size: 16px; }
+    .tab.tab-holds-open { background: var(--panel); border-color: var(--border); }
+    .tab-label { max-width: 40vw; }
+    .lane .message-row { max-width: 92%; }
 }
 button.danger { color: var(--bad); border-color: var(--bad); }
 .tab-settings { margin-top: auto; }

@@ -6,6 +6,11 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Added
 
+- **Conversations of agents.** Every two agents that wrote to each other get a tab under
+  "Conversations": one read-only lane of all they sent each other, in order, with quotes and forwards,
+  and **Write to …** for either agent. The sidebar names the four newest pairs; the rest, and all of
+  them on a narrow screen, are in **All conversations**. The colour of an agent now also marks its tab
+  in the sidebar and the header of its chat (#50).
 - **Links in the chat are clickable.** An `http(s)://` address in a message — of a person or of an
   agent, in the quote of a reply and in a forwarded message — is a link in the accent colour that opens
   in a new tab; punctuation after it stays out, and markdown links `[text](url)` show their text. Links
