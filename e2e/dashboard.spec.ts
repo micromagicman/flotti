@@ -143,6 +143,19 @@ test('every agent has a tab with its status', async ({ page }) => {
         await expect(tab(page, name).locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     }
 });
+test('the page carries the flotti logo in its header and the icon in its tab', async ({ page, request }) => {
+    await page.goto(url);
+    await expect(page.getByRole('banner').getByRole('img', { name: 'flotti' })).toBeVisible();
+    const icons = await page.locator('link[rel="icon"], link[rel="apple-touch-icon"]').evaluateAll(
+        (links) => links.map((link) => (link as HTMLLinkElement).href)
+    );
+    expect(icons.length).toBe(3);
+    for (const icon of icons) {
+        const response = await request.get(icon);
+        expect(response.status(), icon).toBe(200);
+        expect(response.headers()['content-type'], icon).toMatch(/^image\//);
+    }
+});
 test('the header of an agent names its harness, and says when it is not known', async ({ page }) => {
     await page.goto(url);
     for (const [name, harness] of [['claude', 'claude'], ['codex', 'codex'], ['relay', 'harness unknown']] as const) {

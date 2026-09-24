@@ -29,6 +29,7 @@ async function receive(payload) {
     if (payload.type === 'show' && !(await inSight())) {
         await self.registration.showNotification(payload.title, {
             body: payload.body,
+            icon: '/icon-192.png',
             tag: payload.tag,
             renotify: true,
             data: { url: payload.url }

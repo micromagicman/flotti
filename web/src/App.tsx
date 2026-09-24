@@ -4,6 +4,7 @@ import { AgentPanel } from './components/AgentPanel.js';
 import type { Jump } from './components/Feed.js';
 import { BroadcastPanel } from './components/BroadcastPanel.js';
 import { ConversationPanel, ConversationsPanel } from './components/ConversationPanel.js';
+import { Logo } from './components/Logo.js';
 import { SettingsPanel } from './components/SettingsPanel.js';
 import { Sidebar } from './components/Sidebar.js';
 import { useFleet } from './connection.js';
@@ -106,7 +107,7 @@ type AppModel = ReturnType<typeof useAppModel>;
 function Topbar({ attention, link }: { readonly attention: ReturnType<typeof useAttention>; readonly link: Link }) {
     return (
         <header className="topbar">
-            <span className="brand">flotti</span>
+            <Logo />
             <span className="topbar-side">
                 <NotifyButton permission={attention.permission} onAsk={attention.askPermission} />
                 <span className={`link link-${link}`} role="status">{LINK_TEXT[link]}</span>
