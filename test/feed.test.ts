@@ -110,3 +110,58 @@ test('a reply and a forward keep what they carry; a forward sent on again names 
     deepStrictEqual(forwardOf(forward as MessageItem, 'a'), forwarded);
     deepStrictEqual(quoteOf(forward as MessageItem, 'a'), { agentId: 'a', messageId: 'u2', seq: 2, author: 'c', text: 'green' });
 });
+test('a message in line waits after the feed, in order, and joins the feed where its turn starts once taken', () => {
+    const feed = feedOf(
+        { type: 'message', role: 'user', messageId: 'u1', text: 'first', append: false },
+        { type: 'queued', messageId: 'q1', text: 'second' },
+        { type: 'queued', messageId: 'q2', text: 'third', from: 'reviewer' },
+        { type: 'progress', text: 'Working on the first' }
+    );
+    deepStrictEqual(feed.queue, [
+        { messageId: 'q1', seq: 2, time: '', text: 'second' },
+        { messageId: 'q2', seq: 3, time: '', text: 'third', from: 'reviewer' }
+    ]);
+    deepStrictEqual(feed.items.map((item) => item.kind), ['message', 'progress'], 'nothing of the line in the feed itself');
+    const taken = applyEvent(feed, { type: 'message', role: 'user', messageId: 'q1', text: 'second', append: false, agentId: 'a', seq: 5, time: '' });
+    deepStrictEqual(taken.queue.map((queued) => queued.messageId), ['q2']);
+    const last = taken.items.at(-1);
+    strictEqual(last?.kind === 'message' ? last.text : undefined, 'second');
+});
+test('a message taken back leaves the line and nothing in the feed', () => {
+    const feed = feedOf(
+        { type: 'queued', messageId: 'q1', text: 'oops' },
+        { type: 'unqueued', messageId: 'q1', outcome: 'withdrawn' }
+    );
+    deepStrictEqual(feed.queue, []);
+    deepStrictEqual(feed.items, []);
+});
+test('a dropped message stays in the feed as not delivered, and a message sent again in its place settles it', () => {
+    const replyTo = { agentId: 'a', messageId: 'm1', text: 'the build is red' };
+    const feed = feedOf(
+        { type: 'queued', messageId: 'q1', text: 'rerun it', replyTo },
+        { type: 'log', source: 'flotti', text: 'flotti was started again; everything above is from before.' },
+        { type: 'unqueued', messageId: 'q1', outcome: 'dropped', reason: 'flotti restarted' }
+    );
+    deepStrictEqual(feed.queue, []);
+    deepStrictEqual(feed.items.at(-1), {
+        kind: 'undelivered', key: 'u1', messageId: 'q1', time: '', text: 'rerun it', replyTo, reason: 'flotti restarted', resent: false
+    });
+    const again = applyEvent(feed, { type: 'queued', messageId: 'q9', text: 'rerun it', replyTo, retryOf: 'q1', agentId: 'a', seq: 4, time: '' });
+    const settled = again.items.at(-1);
+    strictEqual(settled?.kind === 'undelivered' ? settled.resent : undefined, true);
+    const taken = applyEvent(feedOf(
+        { type: 'queued', messageId: 'q1', text: 'hi' },
+        { type: 'unqueued', messageId: 'q1', outcome: 'dropped', reason: 'agent stopped' },
+        { type: 'message', role: 'user', messageId: 'q2', text: 'hi', append: false, retryOf: 'q1' }
+    ), { type: 'turn-end', reason: 'end_turn', agentId: 'a', seq: 4, time: '' });
+    strictEqual(taken.items.some((item) => item.kind === 'undelivered' && item.resent), true);
+});
+test('the line is counted from the events again after a reconnect: nothing twice', () => {
+    const events = [
+        { type: 'queued', messageId: 'q1', text: 'one' },
+        { type: 'queued', messageId: 'q2', text: 'two' }
+    ] as const;
+    const feed = feedOf(...events);
+    const again = applyEvent(feed, { ...events[0], agentId: 'a', seq: 1, time: '' });
+    deepStrictEqual(again.queue.map((queued) => queued.messageId), ['q1', 'q2']);
+});

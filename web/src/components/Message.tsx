@@ -191,4 +191,4 @@ function Message(props: MessageProps) {
     );
 }
 export { Message, MessageBody, ReplyPreview };
-export type { MessageActions, QuoteActions };
+export type { MessageActions, MessageProps, QuoteActions };

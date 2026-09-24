@@ -147,6 +147,27 @@ test('restarts, cancels and answers permission requests', async () => {
     strictEqual((await call(dashboard.port, 'POST', '/api/agents/a/permissions/r1', { optionId: 'yes' })).status, 200);
     deepStrictEqual(fake('a').calls, ['start', 'restart', 'cancel', 'permission r1 yes', 'permission r1 yes']);
 });
+test('takes a message back out of the line, and sends a dropped one again', async () => {
+    const { dashboard, fake, sockets } = await serve('a');
+    const { port } = dashboard;
+    const { messages } = await page(port, sockets, {});
+    fake('a').busy = true;
+    const sent = await call(port, 'POST', '/api/agents/a/messages', { text: 'later' });
+    deepStrictEqual(sent.body, { agentId: 'a', result: 'queued' });
+    await eventually(() => events(messages).some((event) => event.type === 'queued'));
+    const queued = events(messages).find((event) => event.type === 'queued');
+    ok(queued?.type === 'queued');
+    const path = `/api/agents/a/queue/${encodeURIComponent(queued.messageId)}`;
+    strictEqual((await call(port, 'DELETE', path, {})).status, 200);
+    await eventually(() => events(messages).some((event) => event.type === 'unqueued' && event.messageId === queued.messageId));
+    const again = await call(port, 'DELETE', path, {});
+    deepStrictEqual([again.status, (again.body as { error?: string }).error], [404, 'No such message waits in line: the agent may have taken it already.']);
+    strictEqual((await call(port, 'DELETE', '/api/agents/nobody/queue/x', {})).status, 404);
+    fake('a').release();
+    strictEqual((await call(port, 'POST', '/api/agents/a/messages', { text: 'later', retryOf: 'lost-1' })).status, 200);
+    strictEqual(fake('a').options.at(-1)?.retryOf, 'lost-1');
+    strictEqual((await call(port, 'POST', '/api/agents/a/messages', { text: 'later', retryOf: 7 })).status, 400);
+});
 test('refuses what it should', async () => {
     const { dashboard } = await serve('a');
     const { port } = dashboard;

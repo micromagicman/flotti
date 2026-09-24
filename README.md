@@ -87,7 +87,11 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
 - **Inside the tab**: the agent's output as it comes — messages, collapsed reasoning, tool calls with
   their progress, permission requests with the options the agent offered, diagnostics, and whatever
   else the protocol said, raw and collapsed. Below it, a field to write to the agent: Enter sends,
-  Shift+Enter makes a new line. A message to a busy agent waits in line, and the field says so.
+  Shift+Enter makes a new line. A message to a busy agent waits in line at the end of the feed, under a
+  dashed line "NEXT UP": each one with its place in line and **✕ cancel** to take it back before the
+  agent gets it; the tab in the sidebar says how many wait ("working · 2 in line"). Once the agent takes
+  a message, it joins the feed where its turn starts. A message the line lost — the agent was stopped
+  or restarted, or flotti was — says "Not delivered" and why, with **Send again**.
   **Restart** restarts the agent — a local one keeps its session when it can, a remote one is asked to
   restart itself or starts a new conversation (see [Lifecycle](#lifecycle) and
   [Talking to a remote agent](#talking-to-a-remote-agent)); **Stop** stops it until **Start** starts it
@@ -159,7 +163,8 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | Request                                       | What it does                                           |
 |-----------------------------------------------|--------------------------------------------------------|
 | `GET /api/agents`                             | the agents and their statuses; `health` for an agent over SSH |
-| `POST /api/agents/<id>/messages` `{text, replyTo?, forwarded?}` | a message to one agent: `taken`, `queued` or `failed`; `replyTo` quotes a message, `forwarded` sends one on (`text` may then be empty) |
+| `POST /api/agents/<id>/messages` `{text, replyTo?, forwarded?, retryOf?}` | a message to one agent: `taken`, `queued` or `failed`; `replyTo` quotes a message, `forwarded` sends one on (`text` may then be empty), `retryOf` names the undelivered message it sends again |
+| `DELETE /api/agents/<id>/queue/<messageId>`   | takes a message that waits in line back out of it; 404 once the agent took it |
 | `POST /api/broadcast` `{text, agents?}`       | one message to these agents, or to all; a result each  |
 | `POST /api/agents/<id>/restart`               | restarts the agent; answers at once, the status follows |
 | `POST /api/agents/<id>/cancel`                | drops the message in work                              |
@@ -453,7 +458,10 @@ The states follow supervisord:
   extension request every third of `heartbeatTimeoutSec`. Any message from the agent counts as a sign
   of life, the "method not found" answer too. Silence longer than `heartbeatTimeoutSec` is a lost
   agent: it is killed, and the policy decides the rest.
-- **Messages** sent while the agent is busy wait in line.
+- **Messages** sent while the agent is busy wait in line, in memory: a `queued` event says so, and the
+  `message` event with the same `messageId` follows once the agent takes it. A stop, a restart or a
+  crash drops what waits, and an `unqueued` event says why; so does flotti itself when it starts again
+  and finds messages that were in line when it stopped.
 - **Cancel** sends `session/cancel` and answers the open permission requests with `cancelled`. An agent
   that does not end the message within 5 s is killed.
 - **Stop** cancels the message in work, then ends the process with SIGTERM and, 5 s later, SIGKILL —

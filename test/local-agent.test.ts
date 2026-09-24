@@ -140,6 +140,56 @@ describe('LocalAgentProcess: the queue', { timeout: 20_000 }, () => {
         deepStrictEqual(harness.recorded('session/prompt').map((entry) => entry['text']), ['wait']);
     });
 });
+describe('LocalAgentProcess: the line of messages', { timeout: 20_000 }, () => {
+    it('says a message waits in line, and the same id comes back once the agent takes it', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        await harness.agent.send('wait');
+        const second = harness.agent.send('second', { messageId: 'q-2' });
+        const queued = harness.events.find((event) => event.type === 'queued');
+        ok(queued?.type === 'queued');
+        deepStrictEqual([queued.messageId, queued.text], ['q-2', 'second']);
+        await harness.agent.cancel();
+        await second;
+        const taken = await harness.next((event) => event.type === 'message' && event.role === 'user' && event.text === 'second');
+        ok(taken.type === 'message');
+        strictEqual(taken.messageId, 'q-2');
+        ok(taken.seq > queued.seq);
+    });
+    it('a message taken at once does not say it waits', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        await harness.talk('hello');
+        strictEqual(harness.events.some((event) => event.type === 'queued'), false);
+    });
+    it('takes a message back out of the line, and the agent never gets it', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        await harness.agent.send('wait');
+        const second = harness.agent.send('second', { messageId: 'q-2' });
+        strictEqual(harness.agent.withdraw('q-2'), true);
+        await rejects(second, /taken out of the line/);
+        strictEqual(harness.agent.withdraw('q-2'), false);
+        deepStrictEqual(harness.events.filter((event) => event.type === 'unqueued').map((event) => shape([event])[0]), [
+            { type: 'unqueued', messageId: 'q-2', outcome: 'withdrawn' }
+        ]);
+        await harness.agent.cancel();
+        await harness.next((event) => event.type === 'turn-end');
+        deepStrictEqual(harness.recorded('session/prompt').map((entry) => entry['text']), ['wait']);
+    });
+    it('a stop drops what waits in line, and says so for each message', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        await harness.agent.send('wait');
+        const second = harness.agent.send('second', { messageId: 'q-2' });
+        await harness.agent.stop();
+        await rejects(second, /stopped/);
+        const dropped = harness.events.find((event) => event.type === 'unqueued');
+        ok(dropped?.type === 'unqueued');
+        deepStrictEqual([dropped.messageId, dropped.outcome], ['q-2', 'dropped']);
+        match(dropped.reason ?? '', /stopped/);
+    });
+});
 describe('LocalAgentProcess: permissions and cancelling', { timeout: 20_000 }, () => {
     it('holds a permission request until a person answers it', async () => {
         const harness = new Harness();

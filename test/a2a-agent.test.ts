@@ -404,6 +404,65 @@ describe('A2AAgent: cancel and stop', () => {
         strictEqual(agent.received.length, 1);
     });
 });
+/** An agent that works on `first` until the gate opens, and answers anything else at once. */
+async function busyAgent() {
+    const hold = gate();
+    const agent = await fake({
+        script: async (context, bus) => {
+            bus.publish(task(context, TaskState.TASK_STATE_WORKING));
+            if (said(context) === 'first') {
+                await hold.promise;
+            }
+            bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_COMPLETED, agentMessage(`done ${said(context)}`, context)));
+            bus.finished();
+        }
+    });
+    const { client, events } = connect(agent);
+    await client.start();
+    await client.send('first');
+    return { agent, client, events, hold };
+}
+describe('A2AAgent: the line of messages', () => {
+    it('says a message waits in line, and the same id comes back once the agent takes it', async () => {
+        const { client, events, hold } = await busyAgent();
+        const second = client.send('second', { messageId: 'q-2' });
+        const queued = events.find(event => event.type === 'queued');
+        ok(queued?.type === 'queued');
+        deepStrictEqual([queued.messageId, queued.text], ['q-2', 'second']);
+        hold.open();
+        await second;
+        const taken = events.find(event => event.type === 'message' && event.role === 'user' && event.text === 'second');
+        ok(taken?.type === 'message');
+        strictEqual(taken.messageId, 'q-2');
+    });
+    it('a message to an agent with nothing to do does not wait in line', async () => {
+        const agent = await fake({ script: echo });
+        const { client, events } = connect(agent);
+        await client.start();
+        await client.send('hello');
+        strictEqual(events.some(event => event.type === 'queued'), false);
+    });
+    it('takes a message back out of the line, and the agent never gets it', async () => {
+        const { client, events, hold } = await busyAgent();
+        const second = client.send('second', { messageId: 'q-2' });
+        const third = client.send('third', { messageId: 'q-3' });
+        strictEqual(client.withdraw('q-2'), true);
+        strictEqual(client.withdraw('q-2'), false);
+        await rejects(second, /taken out of the line/);
+        hold.open();
+        await third;
+        await reaches(client, 'idle');
+        deepStrictEqual(messages(events).map(message => message.text), ['first', 'done first', 'third', 'done third']);
+        deepStrictEqual(events.flatMap(event => event.type === 'unqueued' ? [[event.messageId, event.outcome]] : []), [['q-2', 'withdrawn']]);
+    });
+    it('a stop drops what waits in line, and says so for each message', async () => {
+        const { client, events } = await busyAgent();
+        const second = client.send('second', { messageId: 'q-2' });
+        await client.stop();
+        await rejects(second, /stopped/);
+        deepStrictEqual(events.flatMap(event => event.type === 'unqueued' ? [[event.messageId, event.outcome]] : []), [['q-2', 'dropped']]);
+    });
+});
 describe('A2AAgent: restart without the extension', () => {
     it('starts a new conversation when the agent cannot restart itself', async () => {
         const agent = await fake({ script: echo });

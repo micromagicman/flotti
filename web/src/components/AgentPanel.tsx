@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Dispatch } from 'react';
-import type { Forwarded, Quote } from '../../../src/agent-events.js';
-import type { AgentSummary } from '../../../src/dashboard-protocol.js';
+import type { Quote } from '../../../src/agent-events.js';
+import type { AgentSummary, SendRequest } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import { api } from '../api.js';
 import type { AgentFeed } from '../feed.js';
@@ -11,6 +11,7 @@ import { Composer } from './Composer.js';
 import { ConnectionHealthView } from './ConnectionHealth.js';
 import { Feed } from './Feed.js';
 import type { Jump } from './Feed.js';
+import type { LineActions } from './InLine.js';
 import { ReplyPreview } from './Message.js';
 import type { MessageActions } from './Message.js';
 import { StatusBadge } from './StatusBadge.js';
@@ -85,13 +86,31 @@ function AgentHeader({ agent, feed, color }: HeaderProps) {
         </header>
     );
 }
-/** Sends the message, a reply or a forward; a queued one says so under the field, a failed one throws. */
-async function sendMessage(agentId: string, text: string, extras: { replyTo?: Quote; forwarded?: Forwarded } = {}): Promise<string | undefined> {
+/**
+ * Sends the message, a reply or a forward; a failed one throws. A queued one
+ * says nothing under the field: it shows at the end of the feed, in line.
+ */
+async function sendMessage(agentId: string, text: string, extras: Omit<SendRequest, 'text' | 'agents'> = {}): Promise<undefined> {
     const delivery = await api.send(agentId, text, extras);
     if (delivery.result === 'failed') {
         throw new Error(delivery.error ?? 'The message did not reach the agent.');
     }
-    return delivery.result === 'queued' ? 'The agent is busy: the message waits in line.' : undefined;
+    return undefined;
+}
+/** What the messages of the line do: a queued one is taken back, a dropped one sent again as it was. */
+function lineActions(agentId: string): LineActions {
+    return {
+        onWithdraw: async (messageId) => {
+            await api.withdraw(agentId, messageId);
+        },
+        onSendAgain: async (item) => {
+            await sendMessage(agentId, item.text, {
+                ...(item.replyTo === undefined ? {} : { replyTo: item.replyTo }),
+                ...(item.forwarded === undefined ? {} : { forwarded: item.forwarded }),
+                retryOf: item.messageId
+            });
+        }
+    };
 }
 /** The reply being written, if any, and what the messages of the feed can do. */
 function useMessaging(agentId: string, quotes: AgentPanelProps['quotes']) {
@@ -135,7 +154,7 @@ function AgentPanel({ agent, feed, agents, colors, dispatch, quotes, jump }: Age
     return (
         <section className="agent-panel" aria-label={agent.name}>
             <AgentHeader agent={agent} feed={feed} color={colors[agent.id]} />
-            <Feed items={feed.items} agentId={agent.id} agentName={agent.name} agents={agents} colors={colors} onAnswer={answer} actions={messaging.actions} jump={jump} />
+            <Feed items={feed.items} queue={feed.queue} status={feed.status} line={lineActions(agent.id)} agentId={agent.id} agentName={agent.name} agents={agents} colors={colors} onAnswer={answer} actions={messaging.actions} jump={jump} />
             <AgentComposer agent={agent} agents={agents} colors={colors} messaging={messaging} />
         </section>
     );

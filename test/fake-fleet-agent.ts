@@ -1,4 +1,4 @@
-import { AgentEvents, messageFields } from '../src/agent-events.js';
+import { AgentEvents, WITHDRAWN, messageFields } from '../src/agent-events.js';
 import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from '../src/agent-events.js';
 import type { Agent, Fleet, LocalAgent } from '../src/types.js';
 /**
@@ -17,7 +17,8 @@ class FakeFleetAgent implements FleetAgent {
     harness: string | undefined;
     private readonly events: AgentEvents;
     private current: AgentStatus = 'stopped';
-    private held: (() => void)[] = [];
+    /** Messages held while `busy`, in line: each says it is `queued`, and may be withdrawn. */
+    private held: { messageId: string; resolve: () => void; reject: (error: Error) => void }[] = [];
     private permission: string | undefined;
     constructor(readonly agentId: string) {
         this.events = new AgentEvents(agentId);
@@ -47,19 +48,31 @@ class FakeFleetAgent implements FleetAgent {
         if (this.broken) {
             throw new Error(`${this.agentId} is broken`);
         }
+        const messageId = options.messageId ?? `u-${text}`;
         if (this.busy) {
-            await new Promise<void>((resolve) => this.held.push(resolve));
+            this.emit({ type: 'queued', messageId, text, ...messageFields(options) });
+            await new Promise<void>((resolve, reject) => this.held.push({ messageId, resolve, reject }));
         }
-        this.emit({ type: 'message', role: 'user', messageId: `u-${text}`, text, append: false, ...messageFields(options) });
+        this.emit({ type: 'message', role: 'user', messageId, text, append: false, ...messageFields(options) });
         this.emit({ type: 'message', role: 'agent', messageId: `a-${text}`, text: `you said: ${text}`, append: false });
         this.emit({ type: 'turn-end', reason: 'end_turn' });
     }
     /** Lets the held messages through. */
     release(): void {
         this.busy = false;
-        for (const resolve of this.held.splice(0)) {
+        for (const { resolve } of this.held.splice(0)) {
             resolve();
         }
+    }
+    withdraw(messageId: string): boolean {
+        const index = this.held.findIndex((held) => held.messageId === messageId);
+        const [held] = index === -1 ? [] : this.held.splice(index, 1);
+        if (held === undefined) {
+            return false;
+        }
+        this.emit({ type: 'unqueued', messageId, outcome: 'withdrawn' });
+        held.reject(new Error(WITHDRAWN));
+        return true;
     }
     askPermission(requestId: string): void {
         this.permission = requestId;

@@ -139,3 +139,25 @@ test('without persistHistory nothing is written', async () => {
     const second = run(fleet);
     deepStrictEqual(second.supervisor.history('a'), []);
 });
+test('a message that waited in line when flotti stopped is said to be dropped, not waiting for ever', async () => {
+    const { fleet } = fleetOnDisk('a');
+    const first = run(fleet);
+    await first.supervisor.start();
+    const busy = first.fakes.get('a');
+    ok(busy !== undefined);
+    busy.busy = true;
+    await first.supervisor.send('a', 'in line', { messageId: 'q-1' });
+    await first.supervisor.stop();
+    const second = run(fleet);
+    const history = second.supervisor.history('a');
+    const dropped = history.at(-1);
+    ok(dropped?.type === 'unqueued', `the last event is ${dropped?.type}`);
+    deepStrictEqual([dropped.messageId, dropped.outcome, dropped.reason], ['q-1', 'dropped', 'flotti restarted']);
+    strictEqual(history.at(-2)?.type, 'log', 'right after the line about the restart');
+    const seqs = history.map((event) => event.seq);
+    deepStrictEqual(seqs, seqs.map((_, index) => index + 1));
+    await second.supervisor.start();
+    await second.supervisor.send('a', 'again');
+    const after = second.supervisor.history('a').map((event) => event.seq);
+    deepStrictEqual(after, after.map((_, index) => index + 1), 'numbers go on with no gap and no repeat');
+});

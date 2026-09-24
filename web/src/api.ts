@@ -30,6 +30,9 @@ const api = {
         post(agentPath(agentId, 'messages'), { text, ...extras }),
     broadcast: (text: string, agents: readonly string[]): Promise<BroadcastResponse> =>
         post('/api/broadcast', { text, agents }),
+    /** Takes a message that waits in line back out of it. */
+    withdraw: (agentId: string, messageId: string): Promise<object> =>
+        call('DELETE', agentPath(agentId, `queue/${encodeURIComponent(messageId)}`)),
     cancel: (agentId: string): Promise<object> => post(agentPath(agentId, 'cancel')),
     restart: (agentId: string): Promise<object> => post(agentPath(agentId, 'restart')),
     start: (agentId: string): Promise<object> => post(agentPath(agentId, 'start')),

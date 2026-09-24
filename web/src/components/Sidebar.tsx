@@ -1,3 +1,4 @@
+import type { AgentStatus } from '../../../src/agent-events.js';
 import type { AgentSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import { shownInSidebar } from '../conversations.js';
@@ -51,6 +52,15 @@ type AgentTabProps = {
     readonly selected: boolean;
     readonly onSelect: (tab: string) => void;
 };
+/** The status of the agent, and how many messages wait for it when any do. */
+function TabStatus({ status, inLine }: { readonly status: AgentStatus; readonly inLine: number }) {
+    return (
+        <span className="tab-status">
+            <StatusBadge status={status} />
+            {inLine > 0 ? <span className="tab-in-line">· {inLine} in line</span> : null}
+        </span>
+    );
+}
 function AgentTab({ agent, feed, color, unread, selected, onSelect }: AgentTabProps) {
     const status = feed?.status ?? agent.status;
     return (
@@ -67,7 +77,7 @@ function AgentTab({ agent, feed, color, unread, selected, onSelect }: AgentTabPr
                 <span className="tab-label">{agent.name}</span>
                 {unread ? <span className="unread" aria-label="new output" /> : null}
             </span>
-            <StatusBadge status={status} /><PoorConnectionMark health={agent.health} />
+            <TabStatus status={status} inLine={feed?.queue.length ?? 0} /><PoorConnectionMark health={agent.health} />
         </button>
     );
 }

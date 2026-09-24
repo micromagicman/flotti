@@ -45,17 +45,43 @@ type FeedItem =
     | { readonly kind: 'turn-end'; readonly key: string; readonly reason: string }
     | { readonly kind: 'status'; readonly key: string; readonly status: AgentStatus; readonly reason: string | undefined }
     | { readonly kind: 'log'; readonly key: string; readonly source: 'agent' | 'flotti'; readonly text: string }
-    | { readonly kind: 'raw'; readonly key: string; readonly protocol: 'acp' | 'a2a'; readonly payload: unknown };
+    | { readonly kind: 'raw'; readonly key: string; readonly protocol: 'acp' | 'a2a'; readonly payload: unknown }
+    /**
+     * A message that waited in line and was dropped before the agent took it:
+     * the agent stopped or restarted, or flotti did. Its text stays, to be sent again.
+     */
+    | (Omit<QueuedMessage, 'seq'> & {
+        readonly kind: 'undelivered';
+        readonly key: string;
+        readonly reason: string;
+        /** Sent again since: a later message says it is sent in its place. */
+        readonly resent: boolean;
+    });
+/** A message that waits in line for the agent: shown after the feed, in the order it will be taken. */
+type QueuedMessage = {
+    readonly messageId: string;
+    /** The `seq` of its `queued` event. */
+    readonly seq: number;
+    /** ISO 8601 time of its `queued` event. */
+    readonly time: string;
+    readonly text: string;
+    /** Id of the agent that sent it, when not a person. */
+    readonly from?: string;
+    readonly replyTo?: Quote;
+    readonly forwarded?: Forwarded;
+};
 /** Everything one tab knows about its agent. */
 type AgentFeed = {
     readonly items: readonly FeedItem[];
+    /** Messages waiting in line, first to be taken first. */
+    readonly queue: readonly QueuedMessage[];
     /** Last event taken in; a reconnecting page asks for what came after it. */
     readonly lastSeq: number;
     readonly status: AgentStatus;
     readonly reason: string | undefined;
 };
 function emptyFeed(status: AgentStatus): AgentFeed {
-    return { items: [], lastSeq: 0, status, reason: undefined };
+    return { items: [], queue: [], lastSeq: 0, status, reason: undefined };
 }
 /** Statuses worth a line in the feed; `working` and `idle` come and go with every message. */
 function isNoteworthy(status: AgentStatus, reason: string | undefined): boolean {
@@ -159,8 +185,65 @@ function withEvent(items: readonly FeedItem[], event: AgentEvent): readonly Feed
             return [...settlePermissions(items), { kind: 'turn-end', key: `e${event.seq}`, reason: event.reason }];
         case 'status':
             return withStatus(items, event);
+        case 'queued':
+        case 'unqueued':
+            // The line of messages is kept apart from the feed: see withLine.
+            return items;
         default:
             return withItem(items, event);
+    }
+}
+type InLine = Pick<AgentFeed, 'items' | 'queue'>;
+/** The message said to be sent again is not waiting for that any more. */
+function markResent(items: readonly FeedItem[], retryOf: string | undefined): readonly FeedItem[] {
+    if (retryOf === undefined || !items.some((item) => item.kind === 'undelivered' && item.messageId === retryOf && !item.resent)) {
+        return items;
+    }
+    return items.map((item) => (item.kind === 'undelivered' && item.messageId === retryOf ? { ...item, resent: true } : item));
+}
+function withQueued({ items, queue }: InLine, event: AgentEvent & { type: 'queued' }): InLine {
+    const queued: QueuedMessage = {
+        messageId: event.messageId,
+        seq: event.seq,
+        time: event.time,
+        text: event.text,
+        ...(event.from === undefined ? {} : { from: event.from }),
+        ...(event.replyTo === undefined ? {} : { replyTo: event.replyTo }),
+        ...(event.forwarded === undefined ? {} : { forwarded: event.forwarded })
+    };
+    return { items: markResent(items, event.retryOf), queue: [...queue.filter((other) => other.messageId !== event.messageId), queued] };
+}
+/** A message out of the line unsent: a dropped one stays in the feed, where it can be sent again. */
+function withUnqueued({ items, queue }: InLine, event: AgentEvent & { type: 'unqueued' }): InLine {
+    const found = queue.find((queued) => queued.messageId === event.messageId);
+    const rest = queue.filter((queued) => queued !== found);
+    if (found === undefined || event.outcome === 'withdrawn') {
+        return { items, queue: rest };
+    }
+    const { seq, ...message } = found;
+    const undelivered: FeedItem = { kind: 'undelivered', key: `u${seq}`, ...message, reason: event.reason ?? 'dropped', resent: false };
+    return { items: [...items, undelivered], queue: rest };
+}
+/** The line of messages as the event changes it; the rest of the feed goes on as it was. */
+function withLine(line: InLine, event: AgentEvent): InLine {
+    switch (event.type) {
+        case 'queued':
+            return withQueued(line, event);
+        case 'unqueued':
+            return withUnqueued(line, event);
+        case 'message': {
+            const items = withEvent(line.items, event);
+            if (event.role !== 'user') {
+                return { items, queue: line.queue };
+            }
+            // Taken: it leaves the line and goes on as a message of the feed.
+            const queue = line.queue.some((queued) => queued.messageId === event.messageId)
+                ? line.queue.filter((queued) => queued.messageId !== event.messageId)
+                : line.queue;
+            return { items: markResent(items, event.retryOf), queue };
+        }
+        default:
+            return { items: withEvent(line.items, event), queue: line.queue };
     }
 }
 /**
@@ -174,7 +257,7 @@ function applyEvent(feed: AgentFeed, event: AgentEvent): AgentFeed {
     const status = event.type === 'status'
         ? { status: event.status, reason: event.reason }
         : { status: feed.status, reason: feed.reason };
-    return { items: withEvent(feed.items, event), lastSeq: event.seq, ...status };
+    return { ...withLine(feed, event), lastSeq: event.seq, ...status };
 }
 /** Marks a permission request answered from this page, before the agent says so. */
 function settlePermission(feed: AgentFeed, requestId: string): AgentFeed {
@@ -215,4 +298,4 @@ function quotedMessage(feed: AgentFeed | undefined, quote: Pick<Quote, 'messageI
     return found?.kind === 'message' ? found : undefined;
 }
 export { applyEvent, emptyFeed, forwardOf, quoteOf, quotedMessage, settlePermission };
-export type { AgentFeed, FeedItem, MessageItem };
+export type { AgentFeed, FeedItem, MessageItem, QueuedMessage };
