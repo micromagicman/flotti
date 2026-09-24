@@ -14,6 +14,8 @@
  *                       a tool call and a message without `messageId`;
  * - `mcp <call>`      — calls a tool of the MCP server `flotti` it was given, `<call>` being the
  *                       JSON of `tools/call` params, and says the text of the result;
+ *
+ * The message is the last text block of the prompt; the blocks before it are recorded as `before`.
  * - anything else     — answers "you said: <message>" with a tool call on the way.
  */
 import { spawn } from 'node:child_process';
@@ -193,9 +195,10 @@ acp.agent({ name: 'fake-acp-agent' })
     })
     .onRequest(acp.methods.agent.session.prompt, async (context) => {
         const { sessionId } = context.params;
-        const first = context.params.prompt[0];
-        const text = first?.type === 'text' ? first.text : '';
-        record({ event: 'session/prompt', text, sessionId });
+        // What flotti puts before the message — the memory of #101 — comes first; the message is the last block.
+        const blocks = context.params.prompt.map((block) => block.type === 'text' ? block.text : `[${block.type}]`);
+        const text = blocks.at(-1) ?? '';
+        record({ event: 'session/prompt', text, sessionId, before: blocks.slice(0, -1) });
         switch (text) {
             case 'crash':
                 await say(context.client, sessionId, 'about to crash');
