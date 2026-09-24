@@ -2,7 +2,11 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0]
+
+A fleet that works as a team: agents give one another tasks and answer back, their conversations
+in one lane, administrators of the fleet, notifications in Telegram and Web Push, the memory bank of
+an agent in the dashboard, a new look for its controls, and the dashboard in English or Russian.
 
 ### Added
 
@@ -19,55 +23,86 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   nothing is written there, and only `.md` files inside the bank are read (#73).
 - **Logo and icon.** Three sails in a wedge over the waterline, the lead one blue, next to the word
   flotti: in the header of the dashboard, as the favicon (it follows the light or dark theme of the
-  browser), on notifications and at the top of the README. The files are in `assets/logo` (#54).
+  browser), on notifications and at the top of the README. The files are in `assets/logo` (#83).
 - **Notifications outside the browser: Telegram and Web Push.** On the settings page, a bot of your own
   (its token and a chat id) and Web Push through the service worker of the dashboard tell you when an
   agent waits for an answer or a permission, fails, or loses its SSH connection — each switched on on
   its own, one notification per wait, reminders by setting. The answer takes the notification of a
   wait back. Secrets stay in `~/.flotti/settings.json`, readable by its owner only: never shown to the
-  page, never logged. Nothing set up, nothing sent (#52).
+  page, never logged. Nothing set up, nothing sent (#81).
 - **Messages in line show in the chat.** A message sent to a busy agent shows at once at the end of its
   tab, in a "NEXT UP" block under a dashed amber line, with its place in line and **✕ cancel** to take
   it back; the sidebar says "working · 2 in line". Once the agent takes it, it joins the feed where its
   turn starts. A broadcast to busy agents shows in the tab of each. A message the line lost — Stop or
   Restart of the agent, or a restart of flotti — says "Not delivered" and why, with **Send again**
-  (#46).
+  (#75).
 - **Tasks agents give one another.** An agent gives another a task — the `delegate` tool for a local
   agent, `to` with `task` in the inbox for an A2A one — and gets its outcome back by itself: `completed`
   with what the other agent answered in its turn, `failed` or `canceled` with why. A task to an agent
   that is not there or is stopped fails at once; the giver can take a task back (`cancel_delegation`, or
   `cancel` in the inbox), and a task not done by its optional deadline fails. Both tabs show the task as a
-  card: who gave it to whom, where it stands and how it ended (#51).
+  card: who gave it to whom, where it stands and how it ended (#80).
 - **Administrators of the fleet.** An agent with `admin` in its manifest, or **Administrator** ticked in
   the settings, may restart the agents of the fleet and clear their context — itself included — with
   the tools `restart_agent` and `clear_context`, or a remote one through the inbox (`kind: admin`).
   Anyone else is refused, and only a person gives or takes the role. Each action is a line in the tab
   of the administrator and in the tab of the agent; a cleared context is a divider there, and the
   history stays. **Ask me before an administrator…** in the settings makes every action wait for
-  **Allow**; a refusal reaches the administrator as one. `list_agents` marks administrators (#55).
+  **Allow**; a refusal reaches the administrator as one. `list_agents` marks administrators (#84).
 - **Conversations of agents.** Every two agents that wrote to each other get a tab under
   "Conversations": one read-only lane of all they sent each other, in order, with quotes and forwards,
   and **Write to …** for either agent. The sidebar names the four newest pairs; the rest, and all of
   them on a narrow screen, are in **All conversations**. The colour of an agent now also marks its tab
-  in the sidebar and the header of its chat (#50).
+  in the sidebar and the header of its chat (#79).
 - **Links in the chat are clickable.** An `http(s)://` address in a message — of a person or of an
   agent, in the quote of a reply and in a forwarded message — is a link in the accent colour that opens
   in a new tab; punctuation after it stays out, and markdown links `[text](url)` show their text. Links
-  are built from the text, never from HTML, so markup in a message is shown, not run (#47).
+  are built from the text, never from HTML, so markup in a message is shown, not run (#76).
 - **The harness of a remote agent.** A remote agent names the program that runs it with `harness` in
   its published file (`~/.flotti/a2a/<id>.json`) or with the harness extension of its card; the
   header of its tab, `flotti status` and `list_agents` show it instead of `harness unknown`. A name
-  flotti does not know is shown as it is (#49).
+  flotti does not know is shown as it is (#78).
 - **An answer to another agent reaches it.** When an agent answers, in its turn, a message another agent
   of the fleet sent it, flotti sends the answer back to the sender as well — "B → A" in the colour of B,
   quoting the message answered; an A2A agent gets it with `from`, an ACP one as `[from B]`. Only the
-  answer goes, not the progress of the turn, and an answer gets no answer back by itself (#45).
+  answer goes, not the progress of the turn, and an answer gets no answer back by itself (#74).
 - **The health of an SSH connection.** For a remote agent reached over SSH, the header of its tab and
   its row in Settings show the latency of the tunnel, the reconnects since the start and in the last
   hour with the time of the last one, the last activity of the agent and the uptime of the tunnel, kept
   up to date without a reload. A poor connection — 3 or more reconnects in an hour, or a latency of
   1 s or more — turns red, says why and marks the tab. `flotti status` shows the latency and the
-  reconnects too. No secret goes into the health (#53).
+  reconnects too. No secret goes into the health (#82).
+
+### Changed
+
+- **A new message field in the chat.** The field is a card in the soft capsules: the reply it answers
+  at the top, the text growing with what you write up to ten lines and scrolling after, and a bar at the
+  foot with the status of the agent and its line ("working · 2 in line"), the keys (Enter to send,
+  Shift+Enter for a new line) and **Send** with an arrow. In a broadcast the bar counts the agents it
+  goes to ("2 agents selected"), and its button is **Send** as well. Both themes, and narrow screens,
+  where the keys take a line of their own (#77).
+- **One look for the controls of the dashboard.** Buttons, fields, checkboxes, status badges, tabs and
+  cards follow one system of soft capsules, its colours, sizes and corners kept as tokens in one place:
+  tinted buttons with the main one in blue, filled fields with a visible edge, a focus ring on every
+  control, a spinner while a button waits. The main button in the dark theme, the amber "waiting for
+  you" and the edges of fields now pass WCAG AA contrast (#87).
+
+### Fixed
+
+- **`npx` and `codex` start on Windows.** A local agent whose `command` is an npm script — `npx`,
+  `codex`, anything installed as a `.cmd` — is found through `PATH` and `PATHEXT` the way the shell
+  finds it and started through `cmd.exe`, its arguments quoted so that spaces, quotes and `&`, `%`,
+  `^`, `|` reach the agent unchanged; an `.exe` starts directly, as before. Stop and restart end
+  `cmd.exe` with the whole tree under it, and a command found nowhere still says `command not found`.
+  The unit tests run on Windows in CI too (#85).
+
+## [0.2.0]
+
+A fleet that lives on: agents that talk to each other and speak first, remote hosts over SSH, a chat
+history that survives restarts, and a global install with `flotti start`.
+
+### Added
+
 - **Reply and forward in the chat of an agent.** Any message of a tab can be answered with a reply —
   the agent gets the quoted message above the answer, and the tab shows the quote as a link back to it
   — or forwarded to another agent of the fleet, whose tab shows it under a bar "FORWARDED · AUTHOR" in
@@ -102,30 +137,18 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   stands on the person's side as an envelope with a bar "SENDER → RECEIVER" in the sender's colour;
   the sender's tab shows the same envelope, and a line when it could not be delivered. Each agent gets
   a colour of its own, picked at random and kept (#23).
+- **Waiting agents get attention.** A tab whose agent waits for an answer is highlighted, the page
+  title counts the waiting agents, and a browser notification tells when one starts to wait (#27).
+- **The harness in the header.** The header of an agent's chat names its harness — `claude`, `codex`
+  — or says it is unknown (#24).
+- **CI.** Checks run on pull requests and on pushes to `main` and `develop`; a `v*` tag publishes the
+  package to npm (#25).
 
 ### Changed
 
-- **A new message field in the chat.** The field is a card in the soft capsules: the reply it answers
-  at the top, the text growing with what you write up to ten lines and scrolling after, and a bar at the
-  foot with the status of the agent and its line ("working · 2 in line"), the keys (Enter to send,
-  Shift+Enter for a new line) and **Send** with an arrow. In a broadcast the bar counts the agents it
-  goes to ("2 agents selected"), and its button is **Send** as well. Both themes, and narrow screens,
-  where the keys take a line of their own (#77).
-- **One look for the controls of the dashboard.** Buttons, fields, checkboxes, status badges, tabs and
-  cards follow one system of soft capsules, its colours, sizes and corners kept as tokens in one place:
-  tinted buttons with the main one in blue, filled fields with a visible edge, a focus ring on every
-  control, a spinner while a button waits. The main button in the dark theme, the amber "waiting for
-  you" and the edges of fields now pass WCAG AA contrast (#61).
+- The linter limits functions in `src` and `web` to 20 lines; tests are exempt (#39).
 
-### Fixed
-
-- **`npx` and `codex` start on Windows.** A local agent whose `command` is an npm script — `npx`,
-  `codex`, anything installed as a `.cmd` — is found through `PATH` and `PATHEXT` the way the shell
-  finds it and started through `cmd.exe`, its arguments quoted so that spaces, quotes and `&`, `%`,
-  `^`, `|` reach the agent unchanged; an `.exe` starts directly, as before. Stop and restart end
-  `cmd.exe` with the whole tree under it, and a command found nowhere still says `command not found`.
-  The unit tests run on Windows in CI too (#57).
- — MVP
+## [0.1.0] — MVP
 
 The first release: a fleet of AI agents and one dashboard to work with them.
 
@@ -161,4 +184,6 @@ The first release: a fleet of AI agents and one dashboard to work with them.
   ([micromagicman/eva#266](https://github.com/micromagicman/eva/issues/266)).
 - The A2A adapter of Cutie, on the same contract as Eva's (owners/quanthread-ai-hub#218, !194).
 
+[0.3.0]: https://github.com/micromagicman/flotti/releases/tag/v0.3.0
+[0.2.0]: https://github.com/micromagicman/flotti/releases/tag/v0.2.0
 [0.1.0]: https://github.com/micromagicman/flotti/releases/tag/v0.1.0
