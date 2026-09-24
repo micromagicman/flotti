@@ -47,9 +47,9 @@ test('a message between agents keeps who sent it and whom it went to', () => {
         { type: 'message', role: 'user', messageId: 'p', text: 'typed by hand', append: false }
     );
     deepStrictEqual(feed.items, [
-        { kind: 'message', key: 'm1', seq: 1, role: 'user', messageId: 'u', text: 'rerun the tests', from: 'reviewer' },
-        { kind: 'message', key: 'm2', seq: 2, role: 'agent', messageId: 'm', text: 'on it', to: 'reviewer' },
-        { kind: 'message', key: 'm3', seq: 3, role: 'user', messageId: 'p', text: 'typed by hand' }
+        { kind: 'message', key: 'm1', seq: 1, time: '', role: 'user', messageId: 'u', text: 'rerun the tests', from: 'reviewer' },
+        { kind: 'message', key: 'm2', seq: 2, time: '', role: 'agent', messageId: 'm', text: 'on it', to: 'reviewer' },
+        { kind: 'message', key: 'm3', seq: 3, time: '', role: 'user', messageId: 'p', text: 'typed by hand' }
     ]);
 });
 test('updates of a tool call fold into one card', () => {

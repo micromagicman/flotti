@@ -12,6 +12,8 @@ type FeedItem =
         readonly messageId: string;
         /** The `seq` of the event that began it: unique in the tab, unlike the message id. */
         readonly seq: number;
+        /** ISO 8601 time of the event that began it: puts messages of two tabs in one order. */
+        readonly time: string;
         readonly text: string;
         /** Id of the agent that sent it, when not a person: shown on the person's side, marked with the sender. */
         readonly from?: string;
@@ -79,6 +81,22 @@ function settlePermissions(items: readonly FeedItem[]): readonly FeedItem[] {
     }
     return items.map((item) => (item.kind === 'permission' && !item.settled ? { ...item, settled: true } : item));
 }
+/** The first piece of a message, as a message of its own. */
+function newMessage(event: AgentEvent & { type: 'message' }): FeedItem {
+    return {
+        kind: 'message',
+        key: `m${event.seq}`,
+        seq: event.seq,
+        time: event.time,
+        role: event.role,
+        messageId: event.messageId,
+        text: event.text,
+        ...(event.from === undefined ? {} : { from: event.from }),
+        ...(event.to === undefined ? {} : { to: event.to }),
+        ...(event.replyTo === undefined ? {} : { replyTo: event.replyTo }),
+        ...(event.forwarded === undefined ? {} : { forwarded: event.forwarded })
+    };
+}
 /**
  * A message goes on within its turn only: an agent that uses one id for the
  * answer of every turn — the protocols allow it — still gets a new message
@@ -89,18 +107,7 @@ function withMessage(items: readonly FeedItem[], event: AgentEvent & { type: 'me
     const index = lastIndex(items, (item) => item.kind === 'message' && item.messageId === event.messageId);
     const found = index > turnStart ? items[index] : undefined;
     if (found?.kind !== 'message') {
-        return [...items, {
-            kind: 'message',
-            key: `m${event.seq}`,
-            seq: event.seq,
-            role: event.role,
-            messageId: event.messageId,
-            text: event.text,
-            ...(event.from === undefined ? {} : { from: event.from }),
-            ...(event.to === undefined ? {} : { to: event.to }),
-            ...(event.replyTo === undefined ? {} : { replyTo: event.replyTo }),
-            ...(event.forwarded === undefined ? {} : { forwarded: event.forwarded })
-        }];
+        return [...items, newMessage(event)];
     }
     return replaced(items, index, { ...found, text: event.append ? found.text + event.text : event.text });
 }

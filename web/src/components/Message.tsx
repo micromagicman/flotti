@@ -3,6 +3,7 @@ import type { Forwarded, Quote } from '../../../src/agent-events.js';
 import type { AgentSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import { forwardOf, quoteOf } from '../feed.js';
+import { nameOf } from './AgentMark.js';
 import type { MessageItem } from '../feed.js';
 import { LinkedText } from './LinkedText.js';
 /** What a message can do besides being read: be answered, sent on, and lead to the message it answers. */
@@ -24,9 +25,8 @@ type MessageProps = {
     readonly actions: MessageActions;
 };
 type Names = Pick<MessageProps, 'agents' | 'colors'>;
-function nameOf(agents: readonly AgentSummary[], id: string): string {
-    return agents.find((agent) => agent.id === id)?.name ?? id;
-}
+/** What a quote needs: whether the quoted message is still there, and the way to it. */
+type QuoteActions = Pick<MessageActions, 'hasQuoted' | 'onOpenQuote'>;
 /** The colour class of an author: an agent has its own, a person none. */
 function colorOf(colors: AgentColors, author: string | undefined): string {
     return author === undefined ? 'author-person' : `agent-color-${colors[author] ?? 0}`;
@@ -40,7 +40,7 @@ function authorName(agents: readonly AgentSummary[], author: string | undefined)
  * a button laid over the whole quote, not around it: links of the quoted text
  * cannot sit inside a button, so they sit above it.
  */
-function QuoteLink({ quote, agents, colors, actions }: { readonly quote: Quote; readonly actions: MessageActions } & Names) {
+function QuoteLink({ quote, agents, colors, actions }: { readonly quote: Quote; readonly actions: QuoteActions } & Names) {
     const who = authorName(agents, quote.author);
     const className = `quote ${quote.author === undefined ? '' : 'quote-agent'} ${colorOf(colors, quote.author)}`;
     if (!actions.hasQuoted(quote)) {
@@ -86,7 +86,7 @@ function ForwardedBlock({ forwarded, agents, colors }: { readonly forwarded: For
     );
 }
 /** The quote a reply answers, the words of the message, and what it forwards, in that order. */
-function MessageBody({ item, agents, colors, actions }: Omit<MessageProps, 'agentId' | 'agentName'>) {
+function MessageBody({ item, agents, colors, actions }: { readonly item: MessageItem; readonly actions: QuoteActions } & Names) {
     return (
         <>
             {item.replyTo === undefined ? null : <QuoteLink quote={item.replyTo} agents={agents} colors={colors} actions={actions} />}
@@ -190,5 +190,5 @@ function Message(props: MessageProps) {
         </div>
     );
 }
-export { Message, ReplyPreview };
-export type { MessageActions };
+export { Message, MessageBody, ReplyPreview };
+export type { MessageActions, QuoteActions };

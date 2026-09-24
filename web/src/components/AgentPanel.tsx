@@ -6,6 +6,7 @@ import type { AgentColors } from '../agent-colors.js';
 import { api } from '../api.js';
 import type { AgentFeed } from '../feed.js';
 import type { FleetAction } from '../fleet-state.js';
+import { AgentMark } from './AgentMark.js';
 import { Composer } from './Composer.js';
 import { Feed } from './Feed.js';
 import type { Jump } from './Feed.js';
@@ -23,6 +24,7 @@ type AgentPanelProps = {
     readonly quotes: Pick<MessageActions, 'hasQuoted' | 'onOpenQuote'>;
     readonly jump: Jump | undefined;
 };
+type HeaderProps = { readonly agent: AgentSummary; readonly feed: AgentFeed; readonly color: number | undefined };
 /** Restart and cancel answer at once; what happens next shows in the status. */
 function useAction(): [string | undefined, (action: () => Promise<unknown>) => void] {
     const [error, setError] = useState<string>();
@@ -45,10 +47,10 @@ function HarnessBadge({ agent }: { readonly agent: AgentSummary }) {
         : 'The manifest names no adapter, so the harness is not known.';
     return <span className="harness harness-unknown" data-harness="unknown" title={why}>harness unknown</span>;
 }
-function AgentTitle({ agent, feed }: { readonly agent: AgentSummary; readonly feed: AgentFeed }) {
+function AgentTitle({ agent, feed, color }: HeaderProps) {
     return (
         <div className="agent-title">
-            <h1>{agent.name}</h1>
+            <h1><AgentMark color={color} />{agent.name}</h1>
             <span className="kind">{agent.kind === 'local' ? 'local · ACP' : 'remote · A2A'}</span>
             <HarnessBadge agent={agent} />
             <StatusBadge status={feed.status} />
@@ -69,11 +71,12 @@ function AgentActions({ agent, feed, run }: { readonly agent: AgentSummary; read
         </div>
     );
 }
-function AgentHeader({ agent, feed }: { readonly agent: AgentSummary; readonly feed: AgentFeed }) {
+/** The header of the tab, with a stripe in the colour of the agent over it: the colour of its envelopes. */
+function AgentHeader({ agent, feed, color }: HeaderProps) {
     const [error, run] = useAction();
     return (
-        <header className="agent-header">
-            <AgentTitle agent={agent} feed={feed} />
+        <header className={`agent-header agent-header-colored agent-color-${color ?? 0}`}>
+            <AgentTitle agent={agent} feed={feed} color={color} />
             {agent.description === undefined ? null : <p className="description">{agent.description}</p>}
             <AgentActions agent={agent} feed={feed} run={run} />
             {error === undefined ? null : <p className="error" role="alert">{error}</p>}
@@ -129,7 +132,7 @@ function AgentPanel({ agent, feed, agents, colors, dispatch, quotes, jump }: Age
     };
     return (
         <section className="agent-panel" aria-label={agent.name}>
-            <AgentHeader agent={agent} feed={feed} />
+            <AgentHeader agent={agent} feed={feed} color={colors[agent.id]} />
             <Feed items={feed.items} agentId={agent.id} agentName={agent.name} agents={agents} colors={colors} onAnswer={answer} actions={messaging.actions} jump={jump} />
             <AgentComposer agent={agent} agents={agents} colors={colors} messaging={messaging} />
         </section>

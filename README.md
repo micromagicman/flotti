@@ -95,6 +95,12 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   one — until the message is gone from the history. **Forward** sends the message, as it was, to
   another agent you pick: its tab shows it under a bar "FORWARDED · AUTHOR" in the colour of whoever
   wrote it, and the agent gets it as `Forwarded from …:` and the text. Escape drops the reply.
+- **Conversations**, under the agents, list every two agents that wrote to each other, the newest
+  first; a pair beyond the first four, and every pair on a narrow screen, is in **All conversations**.
+  The tab of a pair shows, in one lane and in the order they were sent, the messages the two sent
+  each other — with quotes and forwards, and nothing of their work or of what you wrote them. The
+  lane is read-only: **Write to …** opens the tab of either agent. Every agent keeps one colour
+  everywhere: the square by its name in the sidebar, the stripe over its tab, its envelopes.
 - **All agents** sends one message to every agent you leave ticked. Each gets it on its own, so an
   agent that is down or busy holds nobody up; the page shows, agent by agent, whether the message was
   delivered, waits in line or failed, and the answers come in each agent's tab.

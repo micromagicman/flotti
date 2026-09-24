@@ -100,7 +100,7 @@ test.beforeAll(async () => {
     const fleet = join(workspace, 'fleet');
     localAgent(fleet, 'claude', 'claude-code');
     localAgent(fleet, 'codex', 'codex');
-    await remoteAgent(fleet, 'eva');
+    await remoteAgent(fleet, 'relay');
     url = await startFlotti(fleet);
 });
 test.afterAll(async () => {
@@ -120,14 +120,14 @@ async function say(page: Page, name: string, text: string): Promise<void> {
 }
 test('every agent has a tab with its status', async ({ page }) => {
     await page.goto(url);
-    await expect(page.getByRole('tab')).toHaveText([/All agents/, /claude/, /codex/, /eva/, /Settings/]);
-    for (const name of ['claude', 'codex', 'eva']) {
+    await expect(page.getByRole('tab')).toHaveText([/All agents/, /claude/, /codex/, /relay/, /Settings/]);
+    for (const name of ['claude', 'codex', 'relay']) {
         await expect(tab(page, name).locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     }
 });
 test('the header of an agent names its harness, and says when it is not known', async ({ page }) => {
     await page.goto(url);
-    for (const [name, harness] of [['claude', 'claude'], ['codex', 'codex'], ['eva', 'harness unknown']] as const) {
+    for (const [name, harness] of [['claude', 'claude'], ['codex', 'codex'], ['relay', 'harness unknown']] as const) {
         await tab(page, name).click();
         await expect(page.locator('.agent-header [data-harness]')).toHaveText(harness);
     }
@@ -136,9 +136,9 @@ test('writes to one agent, and the answer stays in its tab', async ({ page }) =>
     await page.goto(url);
     await say(page, 'claude', 'hello claude');
     await expect(feed(page, 'claude')).toContainText('you said: hello claude');
-    await say(page, 'eva', 'hello eva');
-    await expect(feed(page, 'eva')).toContainText('echo: hello eva');
-    await expect(feed(page, 'eva')).not.toContainText('hello claude');
+    await say(page, 'relay', 'hello relay');
+    await expect(feed(page, 'relay')).toContainText('echo: hello relay');
+    await expect(feed(page, 'relay')).not.toContainText('hello claude');
     await tab(page, 'codex').click();
     await expect(feed(page, 'codex')).not.toContainText('you said');
     await tab(page, 'claude').click();
@@ -149,22 +149,64 @@ test('what an agent says of its own shows in its tab, local and remote alike', a
     await say(page, 'claude', 'later');
     await expect(feed(page, 'claude')).toContainText('CI is green');
     await expect(feed(page, 'claude')).toContainText('Check CI');
-    await say(page, 'eva', 'write later');
-    await expect(feed(page, 'eva')).toContainText('echo: write later');
-    await expect(feed(page, 'eva').locator('.progress')).toHaveText('Checking the pipeline');
-    await expect(feed(page, 'eva').locator('.message-agent').last()).toContainText('The merge request is ready');
+    await say(page, 'relay', 'write later');
+    await expect(feed(page, 'relay')).toContainText('echo: write later');
+    await expect(feed(page, 'relay').locator('.progress')).toHaveText('Checking the pipeline');
+    await expect(feed(page, 'relay').locator('.message-agent').last()).toContainText('The merge request is ready');
 });
 test('an agent writes to another: both tabs show who wrote to whom, apart from what a person typed', async ({ page }) => {
     await page.goto(url);
-    await say(page, 'eva', 'write to claude');
-    const sent = feed(page, 'eva').locator('.message-sent');
-    await expect(sent.locator('.envelope-bar')).toContainText('eva → claude');
+    await say(page, 'relay', 'write to claude');
+    const sent = feed(page, 'relay').locator('.message-sent');
+    await expect(sent.locator('.envelope-bar')).toContainText('relay → claude');
     await expect(sent).toContainText('Please rerun the e2e job');
     await tab(page, 'claude').click();
     const received = feed(page, 'claude').locator('.message-peer');
-    await expect(received.locator('.envelope-bar')).toContainText('eva → claude');
+    await expect(received.locator('.envelope-bar')).toContainText('relay → claude');
     await expect(received).toContainText('Please rerun the e2e job');
-    await expect(feed(page, 'claude')).toContainText('you said: [from eva] Please rerun the e2e job');
+    await expect(feed(page, 'claude')).toContainText('you said: [from relay] Please rerun the e2e job');
+});
+const lane = (page: Page) => page.getByRole('log', { name: 'Conversation of relay and claude' });
+const pairTab = (page: Page) => page.getByRole('tab', { name: /^Conversation of relay and claude/ });
+test('the conversation of two agents has a tab of its own: one lane, read-only, with the way to write to either', async ({ page }) => {
+    await page.goto(url);
+    await pairTab(page).click();
+    const envelope = lane(page).locator('.lane-row').filter({ hasText: 'Please rerun the e2e job' });
+    await expect(envelope.locator('.envelope-bar')).toContainText('relay → claude');
+    await expect(envelope).toHaveClass(/lane-first/);
+    await expect(page.getByRole('textbox')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Write to claude' }).click();
+    await expect(page.getByRole('textbox', { name: 'Message to claude' })).toBeVisible();
+});
+/** The colour an element is painted with: the fill of a mark, the bar of an envelope. */
+const fill = (element: ReturnType<Page['locator']>) => element.evaluate((node) => getComputedStyle(node).backgroundColor);
+async function relayColors(page: Page): Promise<string[]> {
+    await tab(page, 'relay').click();
+    const colors = [
+        await fill(tab(page, 'relay').locator('.agent-mark')),
+        await fill(page.locator('.agent-header .agent-mark')),
+        await fill(feed(page, 'relay').locator('.message-sent .envelope-bar').first())
+    ];
+    await pairTab(page).click();
+    colors.push(await fill(lane(page).locator('.lane-first .envelope-bar').first()), await fill(page.locator('.lane-title .agent-mark').first()));
+    return colors;
+}
+test('an agent has one colour in the sidebar, in the header of its tab, on its envelopes and in a conversation, in both themes', async ({ page }) => {
+    for (const colorScheme of ['light', 'dark'] as const) {
+        await page.emulateMedia({ colorScheme });
+        await page.goto(url);
+        const colors = await relayColors(page);
+        expect(new Set(colors).size, `${colorScheme}: ${colors.join(', ')}`).toBe(1);
+    }
+});
+test('on a narrow screen the conversations are one tab away, in the list of them all', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(url);
+    await expect(pairTab(page)).toBeHidden();
+    await page.getByRole('tab', { name: /^Conversations/ }).click();
+    await page.getByRole('list').getByRole('button', { name: /relay ↔ claude/ }).click();
+    await expect(lane(page)).toContainText('Please rerun the e2e job');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 /** The row of the last message of the tab that says `text`, with its Reply and Forward. */
 const messageRow = (page: Page, name: string, text: string, side: 'user' | 'agent' = 'agent') =>
@@ -255,11 +297,11 @@ test('a broadcast reaches every agent picked, and each answers in its own tab', 
     await field.fill('ping');
     await page.getByRole('button', { name: 'Send to 2 agents' }).click();
     const deliveries = page.getByRole('list', { name: 'Delivery' }).getByRole('listitem');
-    await expect(deliveries).toHaveText([/claude\s*delivered/, /eva\s*delivered/]);
+    await expect(deliveries).toHaveText([/claude\s*delivered/, /relay\s*delivered/]);
     await tab(page, 'claude').click();
     await expect(feed(page, 'claude')).toContainText('you said: ping');
-    await tab(page, 'eva').click();
-    await expect(feed(page, 'eva')).toContainText('echo: ping');
+    await tab(page, 'relay').click();
+    await expect(feed(page, 'relay')).toContainText('echo: ping');
     await tab(page, 'codex').click();
     await expect(feed(page, 'codex')).not.toContainText('ping');
 });
@@ -329,9 +371,9 @@ test('the restart button restarts a local agent and starts over with a remote on
     await expect(tab(page, 'claude').locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     await say(page, 'claude', 'still there?');
     await expect(feed(page, 'claude')).toContainText('you said: still there?');
-    await tab(page, 'eva').click();
+    await tab(page, 'relay').click();
     await page.getByRole('button', { name: 'Restart' }).click();
-    await expect(feed(page, 'eva')).toContainText('new conversation');
+    await expect(feed(page, 'relay')).toContainText('new conversation');
 });
 test('a page opened later gets the history', async ({ page }) => {
     await page.goto(`${url}#/claude`);
