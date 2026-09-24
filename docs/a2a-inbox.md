@@ -101,7 +101,11 @@ in `to` to answer it:
 }
 ```
 
-It goes in line with the messages of a person and belongs to the same conversation. The inbox request
+It goes in line with the messages of a person and belongs to the same conversation. What the agent
+answers in the task of that message goes back to the sender by itself — the text of its messages in
+that turn, not its progress lines, and nothing for a cancelled task — so the agent does not have to send
+it with `to`. The sender gets it as a message from this agent that quotes the message answered
+(`In reply to a message from you: …`); an answer gets no answer back by itself. The inbox request
 is told from it by `"action": "subscribe"`, not by the extension URI alone. An agent that does
 not declare this extension gets the sender in the text as well, as `[from reviewer] …`; so does a local
 agent over ACP, which has no place for it otherwise. The dashboard shows the message in the receiver's

@@ -1,5 +1,6 @@
 import { A2AAgent } from './a2a-agent.js';
-import type { AgentEvent, FleetAgent, SendOptions } from './agent-events.js';
+import { AgentAnswers } from './agent-answers.js';
+import type { AgentEvent, FleetAgent, Quote, SendOptions } from './agent-events.js';
 import { HistoryFile } from './agent-history.js';
 import type { AgentSummary, Delivery, Harness } from './dashboard-protocol.js';
 import type { FleetToolsAccess } from './fleet-mcp.js';
@@ -65,6 +66,8 @@ type Member = {
     offset: number;
     /** The history on disk; absent when it is kept in memory only. */
     readonly file: HistoryFile | undefined;
+    /** What the agent answers to a message of another agent, to send back to it. */
+    readonly answers: AgentAnswers;
     unsubscribe: () => void;
     /** The harness the pages were last told the agent has: a change is announced. */
     harness: string | undefined;
@@ -280,6 +283,7 @@ class Supervisor {
             history,
             offset,
             file: historyFile,
+            answers: new AgentAnswers(),
             unsubscribe: () => undefined,
             harness: undefined
         };
@@ -290,7 +294,10 @@ class Supervisor {
         this.listen(member);
         return member;
     }
-    /** Keeps every event of the member's agent, and forwards what it says to another agent. */
+    /**
+     * Keeps every event of the member's agent, forwards what it says to another
+     * agent, and sends its answer to a message of another agent back to that one.
+     */
     private listen(member: Member): void {
         member.unsubscribe = member.running.subscribe((event) => {
             if (event.type === 'status') {
@@ -299,6 +306,10 @@ class Supervisor {
             this.keep(member, event);
             if (event.type === 'message' && event.role === 'agent' && event.to !== undefined) {
                 this.forward(member, event.to, event.text);
+            }
+            const answer = member.answers.take(event);
+            if (answer !== undefined) {
+                this.forward(member, answer.to, answer.text, answer.replyTo);
             }
         });
     }
@@ -393,17 +404,18 @@ class Supervisor {
         }
     }
     /**
-     * Sends on what an agent said to another one. The sender does not wait for
-     * the receiver: a message that cannot be delivered is a line in the tab of
-     * the sender, saying why.
+     * Sends on what an agent said to another one — a message of its own, or,
+     * with `replyTo`, its answer to a message of that one. The sender does not
+     * wait for the receiver: a message that cannot be delivered is a line in
+     * the tab of the sender, saying why.
      */
-    private forward(sender: Member, to: string, text: string): void {
+    private forward(sender: Member, to: string, text: string, replyTo?: Quote): void {
         const from = sender.agent.id;
         const receiver = this.members.get(to);
         const failed = (why: string): void => {
             // Still in the fleet: it may have been removed while the message went.
             if (this.members.get(from) === sender) {
-                this.say(sender, `could not deliver the message to "${to}": ${why}`);
+                this.say(sender, `could not deliver the ${replyTo === undefined ? 'message' : 'answer'} to "${to}": ${why}`);
             }
         };
         if (receiver === undefined) {
@@ -411,7 +423,7 @@ class Supervisor {
         } else if (receiver === sender) {
             failed('an agent does not send messages to itself');
         } else {
-            void this.hand(receiver, text, { from }).then((delivery) => {
+            void this.hand(receiver, text, replyTo === undefined ? { from } : { from, replyTo }).then((delivery) => {
                 if (delivery.result === 'failed') {
                     failed(delivery.error ?? 'the agent did not take it');
                 }

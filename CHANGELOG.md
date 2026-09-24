@@ -14,6 +14,10 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   its published file (`~/.flotti/a2a/<id>.json`) or with the harness extension of its card; the
   header of its tab, `flotti status` and `list_agents` show it instead of `harness unknown`. A name
   flotti does not know is shown as it is (#49).
+- **An answer to another agent reaches it.** When an agent answers, in its turn, a message another agent
+  of the fleet sent it, flotti sends the answer back to the sender as well — "B → A" in the colour of B,
+  quoting the message answered; an A2A agent gets it with `from`, an ACP one as `[from B]`. Only the
+  answer goes, not the progress of the turn, and an answer gets no answer back by itself (#45).
 - **Reply and forward in the chat of an agent.** Any message of a tab can be answered with a reply —
   the agent gets the quoted message above the answer, and the tab shows the quote as a link back to it
   — or forwarded to another agent of the fleet, whose tab shows it under a bar "FORWARDED · AUTHOR" in

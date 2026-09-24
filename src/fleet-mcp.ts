@@ -68,9 +68,10 @@ const TOOLS = [
     },
     {
         name: 'send_message',
-        description: 'Sends a message to another agent of the fleet. It arrives as a message from you, and the agent '
-            + 'answers with this tool too — your own answer to a person does not reach it. Do not answer '
-            + 'acknowledgements: a thank-you needs no thank-you back.',
+        description: 'Sends a message to another agent of the fleet. It arrives as a message from you, and what the '
+            + 'agent answers comes back to you as a message from it. A message another agent sent you is answered '
+            + 'the same way: just answer it, no tool needed. Do not answer acknowledgements: a thank-you needs no '
+            + 'thank-you back.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -83,7 +84,8 @@ const TOOLS = [
     },
     {
         name: 'reply',
-        description: 'Answers the agent whose message came to you last; the answer quotes that message.',
+        description: 'Writes again to the agent whose message came to you last, quoting that message. Your answer '
+            + 'in the turn of its message already reaches it: this is for writing to it later.',
         inputSchema: {
             type: 'object',
             properties: { text: { type: 'string', description: 'The answer.' } },
