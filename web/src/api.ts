@@ -6,6 +6,8 @@ import type {
     Delivery,
     ErrorResponse,
     FleetInfo,
+    MemoryBank,
+    MemoryNote,
     NotificationSettings,
     NotificationSettingsChange,
     NotificationTestResponse,
@@ -43,6 +45,11 @@ const api = {
     stop: (agentId: string): Promise<object> => post(agentPath(agentId, 'stop')),
     answerPermission: (agentId: string, requestId: string, optionId?: string): Promise<object> =>
         post(agentPath(agentId, `permissions/${encodeURIComponent(requestId)}`), optionId === undefined ? {} : { optionId }),
+    /** The notes of the agent's memory bank; with `query`, those that have these words. */
+    memory: (agentId: string, query = ''): Promise<MemoryBank> =>
+        call('GET', `${agentPath(agentId, 'memory')}${query.trim() === '' ? '' : `?q=${encodeURIComponent(query.trim())}`}`),
+    /** One note of the memory bank, its path in one segment of the address. */
+    memoryNote: (agentId: string, path: string): Promise<MemoryNote> => call('GET', agentPath(agentId, `memory/${encodeURIComponent(path)}`)),
     config: (agentId: string): Promise<AgentConfig> => call('GET', agentPath(agentId)),
     addOverSsh: (target: string): Promise<SshAgentsResponse> => post('/api/ssh-agents', { target }),
     create: (config: AgentConfig): Promise<AgentSummary> => post('/api/agents', config),

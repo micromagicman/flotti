@@ -12,6 +12,7 @@ import { ConnectionHealthView } from './ConnectionHealth.js';
 import { Feed } from './Feed.js';
 import type { Jump } from './Feed.js';
 import type { LineActions } from './InLine.js';
+import { MemoryView } from './MemoryView.js';
 import { ReplyPreview } from './Message.js';
 import type { MessageActions } from './Message.js';
 import { StatusBadge } from './StatusBadge.js';
@@ -27,6 +28,8 @@ type AgentPanelProps = {
     readonly jump: Jump | undefined;
 };
 type HeaderProps = { readonly agent: AgentSummary; readonly feed: AgentFeed; readonly color: number | undefined };
+/** What the tab of an agent shows: the chat with it, or its memory bank (#73). */
+type AgentView = 'chat' | 'memory';
 /** Restart and cancel answer at once; what happens next shows in the status. */
 function useAction(): [string | undefined, (action: () => Promise<unknown>) => void] {
     const [error, setError] = useState<string>();
@@ -74,8 +77,15 @@ function AgentActions({ agent, feed, run }: { readonly agent: AgentSummary; read
         </div>
     );
 }
+/** Chat or Memory: two capsules under the title, the one in sight pressed. */
+function ViewSwitch({ view, onView }: { readonly view: AgentView; readonly onView: (view: AgentView) => void }) {
+    const button = (value: AgentView, label: string) => (
+        <button type="button" className="view-tab" aria-pressed={view === value} onClick={() => onView(value)}>{label}</button>
+    );
+    return <div className="views" role="group" aria-label="View">{button('chat', 'Chat')}{button('memory', 'Memory')}</div>;
+}
 /** The header of the tab, with a stripe in the colour of the agent over it: the colour of its envelopes. */
-function AgentHeader({ agent, feed, color }: HeaderProps) {
+function AgentHeader({ agent, feed, color, view, onView }: HeaderProps & { readonly view: AgentView; readonly onView: (view: AgentView) => void }) {
     const [error, run] = useAction();
     return (
         <header className={`agent-header agent-header-colored agent-color-${color ?? 0}`}>
@@ -84,6 +94,7 @@ function AgentHeader({ agent, feed, color }: HeaderProps) {
             {agent.health === undefined ? null : <ConnectionHealthView health={agent.health} />}
             <AgentActions agent={agent} feed={feed} run={run} />
             {error === undefined ? null : <p className="error" role="alert">{error}</p>}
+            <ViewSwitch view={view} onView={onView} />
         </header>
     );
 }
@@ -146,21 +157,30 @@ function AgentComposer({ agent, agents, colors, messaging }: Pick<AgentPanelProp
         />
     );
 }
-function AgentPanel({ agent, feed, agents, colors, dispatch, quotes, jump }: AgentPanelProps) {
-    const messaging = useMessaging(agent.id, quotes);
+/** Answers to a permission request of the agent and to an action of an administrator. */
+function useAnswers(agentId: string, dispatch: Dispatch<FleetAction>) {
     const answer = (requestId: string, optionId?: string): void => {
-        dispatch({ type: 'permission-answered', agentId: agent.id, requestId });
-        void api.answerPermission(agent.id, requestId, optionId).catch(() => undefined);
+        dispatch({ type: 'permission-answered', agentId, requestId });
+        void api.answerPermission(agentId, requestId, optionId).catch(() => undefined);
     };
     const answerAdmin = (actionId: string, allow: boolean): void => {
         dispatch({ type: 'admin-answered', actionId });
         void api.answerAdminAction(actionId, allow).catch(() => undefined);
     };
+    return { answer, answerAdmin };
+}
+function AgentPanel({ agent, feed, agents, colors, dispatch, quotes, jump }: AgentPanelProps) {
+    const messaging = useMessaging(agent.id, quotes);
+    const [view, setView] = useState<AgentView>('chat');
+    const { answer, answerAdmin } = useAnswers(agent.id, dispatch);
     return (
         <section className="agent-panel" aria-label={agent.name}>
-            <AgentHeader agent={agent} feed={feed} color={colors[agent.id]} />
-            <Feed items={feed.items} queue={feed.queue} status={feed.status} line={lineActions(agent.id)} agentId={agent.id} agentName={agent.name} agents={agents} colors={colors} onAnswer={answer} onAdminAnswer={answerAdmin} actions={messaging.actions} jump={jump} />
-            <AgentComposer agent={agent} agents={agents} colors={colors} messaging={messaging} />
+            <AgentHeader agent={agent} feed={feed} color={colors[agent.id]} view={view} onView={setView} />
+            <div className="chat-view" hidden={view !== 'chat'}>
+                <Feed items={feed.items} queue={feed.queue} status={feed.status} line={lineActions(agent.id)} agentId={agent.id} agentName={agent.name} agents={agents} colors={colors} onAnswer={answer} onAdminAnswer={answerAdmin} actions={messaging.actions} jump={jump} />
+                <AgentComposer agent={agent} agents={agents} colors={colors} messaging={messaging} />
+            </div>
+            {view === 'memory' ? <MemoryView agentId={agent.id} /> : null}
         </section>
     );
 }

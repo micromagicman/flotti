@@ -677,3 +677,86 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
 .checks { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
 .check:has(input:disabled) { color: var(--disabled-fg); cursor: not-allowed; }
+/*
+ * Chat | Memory (#73): the two views of the tab of an agent, capsules under
+ * its title. The chat stays mounted while the memory is in sight, so the feed
+ * keeps its place and the field its draft.
+ */
+.views { width: 100%; order: 5; display: flex; gap: 4px; margin-top: 4px; }
+.view-tab { height: var(--ctl-h-sm); padding: 0 14px; border: 0; border-radius: var(--r-ctl); background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: var(--ctl-tr); display: inline-flex; align-items: center; gap: 6px; }
+.view-tab:hover { background: var(--nav-bg-hover); color: var(--text); }
+.view-tab[aria-pressed="true"] { background: var(--nav-bg-selected); color: var(--btn-fg); }
+.view-tab:focus-visible { outline: var(--ring); outline-offset: 2px; }
+.chat-view { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.chat-view[hidden] { display: none; }
+/* The memory bank: the folders and notes on the left, a note on its card on the right. */
+.memory { flex: 1; display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: 0; }
+.memory-list { border-right: 1px solid var(--border); background: var(--panel); padding: 10px 8px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.memory-tools { display: flex; gap: 6px; align-items: center; flex: none; }
+.memory-tools .input { flex: 1; min-width: 0; }
+.memory-note { overflow-y: auto; padding: 16px; min-width: 0; }
+.memory-state { flex: 1; padding: 24px 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; color: var(--muted); }
+.memory-state p { margin: 0; max-width: 640px; }
+.tree { display: flex; flex-direction: column; gap: 1px; }
+.tree details > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: var(--nav-r); font-size: 12px; font-weight: 600; color: var(--muted); }
+.tree details > summary::-webkit-details-marker { display: none; }
+.tree details > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform .16s ease; }
+.tree details[open] > summary::before { transform: rotate(45deg); }
+.tree details > summary:hover { background: var(--nav-bg-hover); color: var(--text); }
+.tree details > summary:focus-visible { outline: var(--ring); outline-offset: -2px; }
+.tree details > .tree { padding-left: 12px; }
+/* A note in the list: the item of the sidebar. */
+.note-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; border: 0; border-radius: var(--nav-r); background: transparent; color: var(--text); font: inherit; text-align: left; padding: 6px 10px; cursor: pointer; transition: var(--ctl-tr); min-width: 0; }
+.note-item:hover { background: var(--nav-bg-hover); }
+.note-item[aria-current="true"] { background: var(--nav-bg-selected); }
+.note-item:focus-visible { outline: var(--ring); outline-offset: -2px; }
+.note-item-title { font-weight: 600; font-size: 13px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-item-meta { font-size: 11px; color: var(--muted); }
+.note-empty { color: var(--muted); font-size: 13px; padding: 12px; margin: 0; }
+/* A note: a card on the soft shadow, its markdown rendered, [[links]] as links. */
+.note-card { background: var(--panel); border: var(--card-edge); border-radius: var(--r-card); box-shadow: var(--card-shadow); padding: 16px 20px; max-width: 760px; }
+.note-card h2 { font-size: 18px; margin: 4px 0 10px; overflow-wrap: anywhere; }
+.note-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.note-path { font-family: var(--mono); font-size: 11px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; overflow-wrap: anywhere; }
+.note-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-left: auto; }
+.back-btn { display: none; }
+.md { font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+.md p { margin: 0 0 8px; }
+.md h3 { font-size: 16px; margin: 14px 0 6px; }
+.md h4 { font-size: 15px; margin: 12px 0 6px; }
+.md h5, .md h6 { font-size: 14px; margin: 10px 0 4px; }
+.md ul, .md ol { margin: 0 0 8px; padding-left: 20px; }
+.md li { margin: 2px 0; }
+.md li.task { list-style: none; margin-left: -20px; display: flex; gap: 8px; align-items: baseline; }
+.md .md-depth-1 { margin-left: 18px; }
+.md .md-depth-2 { margin-left: 36px; }
+.md .md-depth-3 { margin-left: 54px; }
+.md .md-depth-4 { margin-left: 72px; }
+.md li.task.md-depth-1 { margin-left: -2px; }
+.md li.task.md-depth-2 { margin-left: 16px; }
+.md li.task.md-depth-3 { margin-left: 34px; }
+.md li.task.md-depth-4 { margin-left: 52px; }
+.md code { font-family: var(--mono); font-size: 12px; padding: 1px 5px; border-radius: 6px; background: var(--field-bg); }
+.md pre { margin: 0 0 8px; padding: 8px 12px; border-radius: var(--r-field); background: var(--field-bg); overflow-x: auto; }
+.md pre code { padding: 0; background: none; white-space: pre; }
+.md pre.md-properties { color: var(--muted); }
+.md blockquote { margin: 0 0 8px; padding: 2px 12px; border-left: 3px solid var(--border-strong); color: var(--muted); }
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
+.wikilink { display: inline; padding: 0; border: 0; background: none; font: inherit; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; border-radius: 3px; }
+.wikilink:hover { text-decoration-thickness: 2px; }
+.wikilink:focus-visible { outline: var(--ring); outline-offset: 1px; }
+/* A link to a note that is not there: grey, dashed, says so on hover. */
+.wikilink-broken { color: var(--muted); text-decoration-style: dashed; cursor: help; }
+.backlinks { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) {
+    .tree details > summary::before { transition: none; }
+}
+/* On a narrow screen the list first; a note opens over it, with the way back. */
+@media (max-width: 700px) {
+    .memory { grid-template-columns: minmax(0, 1fr); }
+    .memory[data-open="true"] .memory-list, .memory[data-open="false"] .memory-note { display: none; }
+    .memory-list { border-right: 0; }
+    .memory-note { padding: 12px; }
+    .note-card { padding: 12px 14px; }
+    .back-btn { display: inline-flex; margin-bottom: 8px; }
+}

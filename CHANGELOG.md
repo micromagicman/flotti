@@ -6,6 +6,10 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Added
 
+- **The memory bank of an agent in the dashboard.** The header of a local agent's tab switches between
+  Chat and Memory: the folders and notes of its `memory/` on the left, a note on the right as rendered
+  markdown, with `[[links]]` that open the notes they name and the notes that link back. Read-only:
+  nothing is written there, and only `.md` files inside the bank are read (#73).
 - **Logo and icon.** Three sails in a wedge over the waterline, the lead one blue, next to the word
   flotti: in the header of the dashboard, as the favicon (it follows the light or dark theme of the
   browser), on notifications and at the top of the README. The files are in `assets/logo` (#54).
