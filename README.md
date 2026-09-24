@@ -329,6 +329,9 @@ flotti starts `command` with `arguments` in `workdir` as a child process and tal
 
 Pin the adapter version: adapters move and change — both have already changed their package names
 once. Keep `-y`: without it `npx` asks whether to install, and it asks on stdin, which belongs to ACP.
+On Windows `npx`, `codex` and other npm commands are `.cmd` scripts: flotti finds them through `PATH`
+and `PATHEXT` like the shell does and runs them through `cmd.exe`, so `"command": "npx"` works as it
+is, without `.cmd`. `cmd.exe` cannot pass a line break on, so arguments of such a command hold none.
 Log in to Claude Code or Codex the usual way before: flotti keeps no keys, and an agent that wants a
 login stops at once with a message saying so.
 
