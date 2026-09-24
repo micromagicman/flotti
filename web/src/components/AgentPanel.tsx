@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Dispatch } from 'react';
+import type { Forwarded, Quote } from '../../../src/agent-events.js';
 import type { AgentSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import { api } from '../api.js';
@@ -7,6 +8,9 @@ import type { AgentFeed } from '../feed.js';
 import type { FleetAction } from '../fleet-state.js';
 import { Composer } from './Composer.js';
 import { Feed } from './Feed.js';
+import type { Jump } from './Feed.js';
+import { ReplyPreview } from './Message.js';
+import type { MessageActions } from './Message.js';
 import { StatusBadge } from './StatusBadge.js';
 type AgentPanelProps = {
     readonly agent: AgentSummary;
@@ -15,6 +19,9 @@ type AgentPanelProps = {
     readonly agents: readonly AgentSummary[];
     readonly colors: AgentColors;
     readonly dispatch: Dispatch<FleetAction>;
+    /** Where a quote leads: this tab or another one. */
+    readonly quotes: Pick<MessageActions, 'hasQuoted' | 'onOpenQuote'>;
+    readonly jump: Jump | undefined;
 };
 /** Restart and cancel answer at once; what happens next shows in the status. */
 function useAction(): [string | undefined, (action: () => Promise<unknown>) => void] {
@@ -72,15 +79,49 @@ function AgentHeader({ agent, feed }: { readonly agent: AgentSummary; readonly f
         </header>
     );
 }
-/** Sends the message; a queued one says so under the field, a failed one throws. */
-async function sendMessage(agentId: string, text: string): Promise<string | undefined> {
-    const delivery = await api.send(agentId, text);
+/** Sends the message, a reply or a forward; a queued one says so under the field, a failed one throws. */
+async function sendMessage(agentId: string, text: string, extras: { replyTo?: Quote; forwarded?: Forwarded } = {}): Promise<string | undefined> {
+    const delivery = await api.send(agentId, text, extras);
     if (delivery.result === 'failed') {
         throw new Error(delivery.error ?? 'The message did not reach the agent.');
     }
     return delivery.result === 'queued' ? 'The agent is busy: the message waits in line.' : undefined;
 }
-function AgentPanel({ agent, feed, agents, colors, dispatch }: AgentPanelProps) {
+/** The reply being written, if any, and what the messages of the feed can do. */
+function useMessaging(agentId: string, quotes: AgentPanelProps['quotes']) {
+    const [reply, setReply] = useState<Quote>();
+    const actions: MessageActions = {
+        ...quotes,
+        onReply: setReply,
+        onForward: async (to, forwarded) => {
+            await sendMessage(to, '', { forwarded });
+        }
+    };
+    const send = (text: string): Promise<string | undefined> =>
+        sendMessage(agentId, text, reply === undefined ? {} : { replyTo: reply }).then((note) => {
+            setReply(undefined);
+            return note;
+        });
+    return { reply, setReply, actions, send };
+}
+function AgentComposer({ agent, agents, colors, messaging }: Pick<AgentPanelProps, 'agent' | 'agents' | 'colors'> & {
+    readonly messaging: ReturnType<typeof useMessaging>;
+}) {
+    const { reply, setReply, send } = messaging;
+    const cancel = (): void => setReply(undefined);
+    return (
+        <Composer
+            label={reply === undefined ? `Message to ${agent.name}` : `Reply to ${agent.name}`}
+            placeholder={reply === undefined ? `Message ${agent.name}…` : 'Write a reply…'}
+            submitLabel={reply === undefined ? 'Send' : 'Reply'}
+            onSend={send}
+            above={reply === undefined ? undefined : { key: `${reply.agentId}/${reply.messageId}`, node: <ReplyPreview quote={reply} agents={agents} colors={colors} onCancel={cancel} /> }}
+            onEscape={reply === undefined ? undefined : cancel}
+        />
+    );
+}
+function AgentPanel({ agent, feed, agents, colors, dispatch, quotes, jump }: AgentPanelProps) {
+    const messaging = useMessaging(agent.id, quotes);
     const answer = (requestId: string, optionId?: string): void => {
         dispatch({ type: 'permission-answered', agentId: agent.id, requestId });
         void api.answerPermission(agent.id, requestId, optionId).catch(() => undefined);
@@ -88,13 +129,8 @@ function AgentPanel({ agent, feed, agents, colors, dispatch }: AgentPanelProps) 
     return (
         <section className="agent-panel" aria-label={agent.name}>
             <AgentHeader agent={agent} feed={feed} />
-            <Feed items={feed.items} agentId={agent.id} agentName={agent.name} agents={agents} colors={colors} onAnswer={answer} />
-            <Composer
-                label={`Message to ${agent.name}`}
-                placeholder={`Message ${agent.name}…`}
-                submitLabel="Send"
-                onSend={(text) => sendMessage(agent.id, text)}
-            />
+            <Feed items={feed.items} agentId={agent.id} agentName={agent.name} agents={agents} colors={colors} onAnswer={answer} actions={messaging.actions} jump={jump} />
+            <AgentComposer agent={agent} agents={agents} colors={colors} messaging={messaging} />
         </section>
     );
 }

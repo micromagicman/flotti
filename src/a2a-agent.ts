@@ -12,7 +12,7 @@ import {
     withA2AExtensions
 } from '@a2a-js/sdk/client';
 import type { Client } from '@a2a-js/sdk/client';
-import { AgentEvents } from './agent-events.js';
+import { AgentEvents, composeText, messageFields } from './agent-events.js';
 import type { AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
 import type { Environment } from './manifest.js';
 import { SshConnection } from './ssh.js';
@@ -230,7 +230,7 @@ class A2AAgent implements FleetAgent {
             accepted = resolve;
             refused = reject;
         });
-        const turn = this.queue.then(() => this.runTurn(client, text, options.from, signal, accepted, refused));
+        const turn = this.queue.then(() => this.runTurn(client, text, options, signal, accepted, refused));
         this.queue = turn.catch(() => undefined);
         return delivery;
     }
@@ -444,7 +444,7 @@ class A2AAgent implements FleetAgent {
     private async runTurn(
         client: Client,
         text: string,
-        from: string | undefined,
+        options: SendOptions,
         signal: AbortSignal,
         accepted: () => void,
         refused: (error: unknown) => void
@@ -453,21 +453,21 @@ class A2AAgent implements FleetAgent {
             refused(new Error(`Agent ${this.agentId} was stopped before the message was sent.`));
             return;
         }
-        const message = this.userMessage(text, from);
+        const message = this.userMessage(text, options);
         this.answering = message.taskId === '' ? undefined : this.task;
-        const delivery = this.turnDelivery(message, text, from, accepted);
+        const delivery = this.turnDelivery(message, text, options, accepted);
         this.inTurn = true;
         this.setStatus('working');
         await this.workOnTurn(client, message, signal, delivery, refused);
     }
     /** Shows the message of the turn and settles its send once the agent first answers. */
-    private turnDelivery(message: Message, text: string, from: string | undefined, accepted: () => void): TurnDelivery {
+    private turnDelivery(message: Message, text: string, options: SendOptions, accepted: () => void): TurnDelivery {
         let delivered = false;
         return {
             deliver: () => {
                 if (!delivered) {
                     delivered = true;
-                    this.events.emit({ type: 'message', role: 'user', messageId: message.messageId, text, append: false, ...(from === undefined ? {} : { from }) });
+                    this.events.emit({ type: 'message', role: 'user', messageId: message.messageId, text, append: false, ...messageFields(options) });
                     accepted();
                 }
             },
@@ -938,12 +938,14 @@ class A2AAgent implements FleetAgent {
      * A message from a person, or from another agent of the fleet when `from`
      * names it; it answers the task when the task is waiting for one.
      */
-    private userMessage(text: string, from?: string): Message {
+    private userMessage(text: string, options: SendOptions): Message {
         const task = this.task;
         const waiting = task !== undefined && INTERRUPTED_STATES.includes(task.state);
-        const told = from === undefined || this.card?.inbox === true ? text : `[from ${from}] ${text}`;
+        const { from } = options;
+        const body = composeText(text, options, this.agentId);
+        const told = from === undefined || this.card?.inbox === true ? body : `[from ${from}] ${body}`;
         return {
-            messageId: randomUUID(),
+            messageId: options.messageId ?? randomUUID(),
             contextId: this.contextId ?? '',
             taskId: waiting ? task.id : '',
             role: Role.ROLE_USER,

@@ -1,8 +1,12 @@
-import { useLayoutEffect, useRef } from 'react';
-import type { UIEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
+import type { RefObject, UIEvent } from 'react';
 import type { AgentSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import type { FeedItem } from '../feed.js';
+import { Message } from './Message.js';
+import type { MessageActions } from './Message.js';
+/** A message to bring into view: the one a quote points at. `n` tells one ask from the next. */
+type Jump = { readonly agentId: string; readonly seq: number; readonly n: number };
 type FeedProps = {
     readonly items: readonly FeedItem[];
     readonly agentId: string;
@@ -11,6 +15,8 @@ type FeedProps = {
     readonly agents: readonly AgentSummary[];
     readonly colors: AgentColors;
     readonly onAnswer: (requestId: string, optionId?: string) => void;
+    readonly actions: MessageActions;
+    readonly jump?: Jump | undefined;
 };
 function PermissionOptions({ item, onAnswer }: { readonly item: FeedItem & { kind: 'permission' }; readonly onAnswer: FeedProps['onAnswer'] }) {
     return (
@@ -36,44 +42,6 @@ function Permission({ item, onAnswer }: { readonly item: FeedItem & { kind: 'per
             {item.settled
                 ? <div className="muted">answered</div>
                 : <PermissionOptions item={item} onAnswer={onAnswer} />}
-        </div>
-    );
-}
-/**
- * A message one agent sent another, as an envelope: a bar in the colour of
- * the sender says who wrote to whom. In the tab of the receiver it stands on
- * the person's side — it came in as a person's message would — and in the tab
- * of the sender on the agent's.
- */
-function Envelope({ item, peer, agentId, agentName, agents, colors }: {
-    readonly item: FeedItem & { kind: 'message' };
-    readonly peer: string;
-} & Omit<FeedProps, 'items' | 'onAnswer'>) {
-    const nameOf = (id: string): string => agents.find((agent) => agent.id === id)?.name ?? id;
-    const incoming = item.role === 'user';
-    const sender = incoming ? peer : agentId;
-    const from = incoming ? nameOf(peer) : agentName;
-    const to = incoming ? agentName : nameOf(peer);
-    return (
-        <div className={`item message message-${item.role} ${incoming ? 'message-peer' : 'message-sent'} agent-color-${colors[sender] ?? 0}`}>
-            <div className="envelope-bar">
-                <span aria-hidden="true">{from} → {to}</span>
-                <span className="visually-hidden">From {from} to {to}</span>
-            </div>
-            <div className="text">{item.text}</div>
-        </div>
-    );
-}
-function MessageEntry({ item, ...fleet }: { readonly item: FeedItem & { kind: 'message' } } & Omit<FeedProps, 'items' | 'onAnswer'>) {
-    const { agentName } = fleet;
-    const peer = item.role === 'user' ? item.from : item.to;
-    if (peer !== undefined) {
-        return <Envelope item={item} peer={peer} {...fleet} />;
-    }
-    return (
-        <div className={`item message message-${item.role}`}>
-            <div className="item-label">{item.role === 'user' ? 'You' : agentName}</div>
-            <div className="text">{item.text}</div>
         </div>
     );
 }
@@ -104,10 +72,10 @@ function NoteEntry({ item }: { readonly item: Exclude<FeedItem, { kind: 'message
             return <details className="item raw"><summary>{item.protocol.toUpperCase()} message</summary><pre>{JSON.stringify(item.payload, null, 2)}</pre></details>;
     }
 }
-function FeedEntry({ item, onAnswer, ...fleet }: { readonly item: FeedItem } & Omit<FeedProps, 'items'>) {
+function FeedEntry({ item, onAnswer, ...fleet }: { readonly item: FeedItem } & Omit<FeedProps, 'items' | 'jump'>) {
     switch (item.kind) {
         case 'message':
-            return <MessageEntry item={item} {...fleet} />;
+            return <Message item={item} {...fleet} />;
         case 'permission':
             return <Permission item={item} onAnswer={onAnswer} />;
         default:
@@ -130,10 +98,25 @@ function usePinnedScroll(items: readonly FeedItem[]) {
     };
     return { list, onScroll };
 }
+/** Brings the message a quote points at into view, and flashes it so the eye finds it. */
+function useJump(list: RefObject<HTMLDivElement | null>, agentId: string, jump: Jump | undefined) {
+    useEffect(() => {
+        const target = jump?.agentId === agentId ? list.current?.querySelector<HTMLElement>(`[data-seq="${jump.seq}"]`) : undefined;
+        if (target === undefined || target === null) {
+            return;
+        }
+        const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        target.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'center' });
+        target.classList.remove('message-found');
+        void target.offsetWidth;
+        target.classList.add('message-found');
+    }, [list, agentId, jump]);
+}
 /** The agent's output, newest at the bottom; follows new output unless the reader scrolled up. */
-function Feed({ items, onAnswer, ...fleet }: FeedProps) {
-    const { agentName } = fleet;
+function Feed({ items, onAnswer, jump, ...fleet }: FeedProps) {
+    const { agentName, agentId } = fleet;
     const { list, onScroll } = usePinnedScroll(items);
+    useJump(list, agentId, jump);
     return (
         <div
             className="feed"
@@ -148,3 +131,4 @@ function Feed({ items, onAnswer, ...fleet }: FeedProps) {
     );
 }
 export { Feed };
+export type { Jump };
