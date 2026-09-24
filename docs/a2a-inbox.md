@@ -80,6 +80,11 @@ The message may say what it is, under the extension URI in its own metadata:
   agent's tab as sent there. A message that cannot be delivered — no such agent, the agent is stopped —
   is a line in this agent's tab saying why; the agent itself is not told. `to` goes with `kind: message`
   only.
+- `task` — optional, with `to`: the message gives that agent a task, and the outcome comes back — see
+  "Tasks" below. An object; `deadline` in it is an optional ISO 8601 time the task is to be done by. The
+  `messageId` of the message is the id of the task.
+- `cancel` — optional: the id of a task this agent gave, to take it back. The text of such a message is
+  not shown.
 
 Anything else in the metadata is ignored for now.
 
@@ -113,6 +118,40 @@ tab on the person's side, marked with the sender.
 
 Each message needs a `messageId` of its own: flotti shows a message once, and a snapshot of the task —
 after a reconnect — repeats the history.
+
+## Tasks
+
+A message with `to` and `task` gives the other agent a task (#51):
+
+```json
+{
+    "messageId": "task-1",
+    "role": "ROLE_AGENT",
+    "parts": [{"text": "Collect the failing tests and list them"}],
+    "metadata": {
+        "https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md": {"to": "tester", "task": {"deadline": "2026-09-24T18:00:00Z"}}
+    }
+}
+```
+
+The task reaches the other agent as a message from this one, with `task` — `id` and, when given,
+`deadline` — beside `from`, and the text says that what it answers in that turn is the result. How the
+turn ends is how the task ends: a completed task is `completed`, with what the agent answered; a
+cancelled one `canceled`; a failed or rejected one `failed`. A turn that pauses for input goes on with
+the answer. The outcome comes back to this agent by itself, as a message from the other one that quotes
+the task, with `task` — `id` and `state` — under the extension URI:
+
+```json
+"metadata": {
+    "https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md": {"from": "tester", "task": {"id": "task-1", "state": "completed"}}
+}
+```
+
+A task that cannot be given — no such agent, the agent is stopped — comes back `failed` at once, with
+why in the text; so does one not done by its deadline, and the agent working on it is told to stop. To
+take a task back, send a message with `{"cancel": "task-1"}`: the task leaves the line of the other
+agent, or its turn is cancelled, and no outcome comes back for it. The tabs of both agents show the task
+and where it stands.
 
 ## When the stream breaks
 

@@ -18,6 +18,12 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   turn starts. A broadcast to busy agents shows in the tab of each. A message the line lost — Stop or
   Restart of the agent, or a restart of flotti — says "Not delivered" and why, with **Send again**
   (#46).
+- **Tasks agents give one another.** An agent gives another a task — the `delegate` tool for a local
+  agent, `to` with `task` in the inbox for an A2A one — and gets its outcome back by itself: `completed`
+  with what the other agent answered in its turn, `failed` or `canceled` with why. A task to an agent
+  that is not there or is stopped fails at once; the giver can take a task back (`cancel_delegation`, or
+  `cancel` in the inbox), and a task not done by its optional deadline fails. Both tabs show the task as a
+  card: who gave it to whom, where it stands and how it ended (#51).
 - **Conversations of agents.** Every two agents that wrote to each other get a tab under
   "Conversations": one read-only lane of all they sent each other, in order, with quotes and forwards,
   and **Write to …** for either agent. The sidebar names the four newest pairs; the rest, and all of

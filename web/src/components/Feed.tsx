@@ -4,6 +4,7 @@ import type { AgentStatus } from '../../../src/agent-events.js';
 import type { AgentSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import type { FeedItem, QueuedMessage } from '../feed.js';
+import { DelegationCard } from './DelegationCard.js';
 import { NextUp, Undelivered } from './InLine.js';
 import type { LineActions } from './InLine.js';
 import { Message } from './Message.js';
@@ -62,8 +63,8 @@ function ToolEntry({ item }: { readonly item: FeedItem & { kind: 'tool' } }) {
         </div>
     );
 }
-/** Everything in the feed but messages and permission requests. */
-function NoteEntry({ item }: { readonly item: Exclude<FeedItem, { kind: 'message' | 'permission' | 'undelivered' }> }) {
+/** Everything in the feed but messages, tasks and permission requests. */
+function NoteEntry({ item }: { readonly item: Exclude<FeedItem, { kind: 'message' | 'permission' | 'undelivered' | 'delegation' }> }) {
     switch (item.kind) {
         case 'thought':
             return <details className="item thought"><summary>Thinking</summary><div className="text">{item.text}</div></details>;
@@ -89,6 +90,8 @@ function FeedEntry({ item, onAnswer, line, ...fleet }: { readonly item: FeedItem
             return <Undelivered item={item} onSendAgain={line.onSendAgain} {...fleet} />;
         case 'permission':
             return <Permission item={item} onAnswer={onAnswer} />;
+        case 'delegation':
+            return <DelegationCard item={item} agents={fleet.agents} colors={fleet.colors} />;
         default:
             return <NoteEntry item={item} />;
     }

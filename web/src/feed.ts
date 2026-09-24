@@ -3,7 +3,7 @@
  * glued into one message, updates of a tool call folded into one card. Pure
  * functions, no React: the reducer of the page and the tests share them.
  */
-import type { AgentEvent, AgentStatus, Forwarded, PermissionOption, Quote, ToolCallStatus } from '../../src/agent-events.js';
+import type { AgentEvent, AgentStatus, Delegation, Forwarded, PermissionOption, Quote, ToolCallStatus } from '../../src/agent-events.js';
 type FeedItem =
     | {
         readonly kind: 'message';
@@ -42,6 +42,8 @@ type FeedItem =
         /** Answered — here or anywhere else; the buttons go away. */
         readonly settled: boolean;
     }
+    /** A task one agent gave another, where it was given, as it stands now. */
+    | ({ readonly kind: 'delegation'; readonly key: string } & Delegation)
     | { readonly kind: 'turn-end'; readonly key: string; readonly reason: string }
     | { readonly kind: 'status'; readonly key: string; readonly status: AgentStatus; readonly reason: string | undefined }
     | { readonly kind: 'log'; readonly key: string; readonly source: 'agent' | 'flotti'; readonly text: string }
@@ -153,16 +155,46 @@ function withToolCall(items: readonly FeedItem[], event: AgentEvent & { type: 't
     }
     return replaced(items, index, { ...found, title: event.title ?? found.title, status: event.status ?? found.status });
 }
+/** A task shows once, where it was given; what becomes of it changes that one card. */
+function withDelegation(items: readonly FeedItem[], event: AgentEvent & { type: 'delegation' }): readonly FeedItem[] {
+    const { delegationId, from, to, text, state, deadline, result, seq } = event;
+    const delegation: Delegation = {
+        delegationId,
+        from,
+        to,
+        text,
+        state,
+        ...(deadline === undefined ? {} : { deadline }),
+        ...(result === undefined ? {} : { result })
+    };
+    const index = lastIndex(items, (item) => item.kind === 'delegation' && item.delegationId === event.delegationId);
+    const found = items[index];
+    if (found?.kind !== 'delegation') {
+        return [...items, { kind: 'delegation', key: `d${seq}`, ...delegation }];
+    }
+    return replaced(items, index, { kind: 'delegation', key: found.key, ...delegation });
+}
 function withStatus(items: readonly FeedItem[], event: AgentEvent & { type: 'status' }): readonly FeedItem[] {
     const settled = event.status === 'waiting' ? items : settlePermissions(items);
     return isNoteworthy(event.status, event.reason)
         ? [...settled, { kind: 'status', key: `e${event.seq}`, status: event.status, reason: event.reason }]
         : settled;
 }
-/** The events that each add one item of their own. */
-function withItem(items: readonly FeedItem[], event: AgentEvent & { type: 'progress' | 'permission' | 'log' | 'raw' }): readonly FeedItem[] {
+/**
+ * The events that each add one item of their own, and those that add none: the
+ * line of messages is kept apart from the feed (see withLine), and the card of
+ * a task shows what came of it.
+ */
+function withItem(
+    items: readonly FeedItem[],
+    event: AgentEvent & { type: 'progress' | 'permission' | 'log' | 'raw' | 'queued' | 'unqueued' | 'cancel-delegation' }
+): readonly FeedItem[] {
     const key = `e${event.seq}`;
     switch (event.type) {
+        case 'queued':
+        case 'unqueued':
+        case 'cancel-delegation':
+            return items;
         case 'progress':
             return [...items, { kind: 'progress', key, text: event.text }];
         case 'permission':
@@ -185,10 +217,8 @@ function withEvent(items: readonly FeedItem[], event: AgentEvent): readonly Feed
             return [...settlePermissions(items), { kind: 'turn-end', key: `e${event.seq}`, reason: event.reason }];
         case 'status':
             return withStatus(items, event);
-        case 'queued':
-        case 'unqueued':
-            // The line of messages is kept apart from the feed: see withLine.
-            return items;
+        case 'delegation':
+            return withDelegation(items, event);
         default:
             return withItem(items, event);
     }

@@ -4,6 +4,8 @@ import { waitingInLine } from './agent-events.js';
 import type { AgentEvent, AgentEventBody, FleetAgent, Quote, SendOptions } from './agent-events.js';
 import { HistoryFile } from './agent-history.js';
 import type { ConnectionHealth } from './connection-health.js';
+import { Delegations } from './delegations.js';
+import type { DelegationCancel, DelegationFleet, DelegationStart } from './delegations.js';
 import type { AgentSummary, Delivery, Harness } from './dashboard-protocol.js';
 import type { FleetToolsAccess } from './fleet-mcp.js';
 import { LocalAgentProcess } from './local-agent.js';
@@ -113,12 +115,15 @@ class Supervisor {
     private readonly warn: (text: string) => void;
     /** Last number given to an event of each id, kept when the agent goes: numbers of an id only grow. */
     private readonly lastSeq = new Map<string, number>();
+    /** Tasks agents give one another. */
+    private readonly delegations: Delegations;
     constructor(fleet: Fleet, options: SupervisorOptions = {}) {
         this.createAgent = options.createAgent ?? defaultAgent(options.fleetTools);
         this.historyLimit = options.historyLimit ?? 5000;
         this.queuedAfterMs = options.queuedAfterMs ?? 500;
         this.persistHistory = options.persistHistory ?? false;
         this.warn = options.warn ?? ((text) => console.error(text));
+        this.delegations = new Delegations(this.delegationFleet(), this.queuedAfterMs);
         for (const agent of fleet.agents) {
             this.join(agent, []);
         }
@@ -209,6 +214,7 @@ class Supervisor {
     async remove(agentId: string): Promise<void> {
         const member = this.member(agentId);
         this.members.delete(agentId);
+        this.delegations.left(agentId);
         await member.running.stop().catch(() => undefined);
         member.unsubscribe();
         this.announce();
@@ -222,6 +228,7 @@ class Supervisor {
     async load(fleet: Fleet): Promise<void> {
         await this.stop();
         this.members.clear();
+        this.delegations.clear();
         for (const agent of fleet.agents) {
             this.join(agent, []);
         }
@@ -266,6 +273,46 @@ class Supervisor {
      */
     withdraw(agentId: string, messageId: string): boolean {
         return this.member(agentId).running.withdraw(messageId);
+    }
+    /** The fleet as the tasks agents give one another see it. */
+    private delegationFleet(): DelegationFleet {
+        return {
+            status: (agentId) => this.members.get(agentId)?.running.status,
+            send: (agentId, text, sendOptions) => {
+                const member = this.members.get(agentId);
+                return member === undefined
+                    ? Promise.reject(new UnknownAgentError(`There is no agent "${agentId}" in the fleet.`))
+                    : member.running.send(text, sendOptions);
+            },
+            withdraw: (agentId, messageId) => this.members.get(agentId)?.running.withdraw(messageId) ?? false,
+            cancel: (agentId) => this.members.get(agentId)?.running.cancel() ?? Promise.resolve(),
+            note: (agentId, body) => {
+                const member = this.members.get(agentId);
+                if (member !== undefined) {
+                    this.put(member, body);
+                }
+            }
+        };
+    }
+    /**
+     * One agent of the fleet gives another a task: see {@link Delegations}.
+     * Resolves at once with the task failed when it cannot be given, and within
+     * the time a message may take to reach the agent otherwise.
+     *
+     * @param deadline ISO 8601 time the task is to be done by.
+     * @throws UnknownAgentError when the agent that gives it is not in the fleet.
+     */
+    delegate(from: string, to: string, text: string, deadline?: string): Promise<DelegationStart> {
+        this.member(from);
+        return this.delegations.delegate(from, to, text, deadline === undefined ? {} : { deadline });
+    }
+    /**
+     * Takes back a task the agent gave; a task already over stays as it ended.
+     *
+     * @throws UnknownDelegationError when the agent gave no such task.
+     */
+    cancelDelegation(from: string, delegationId: string): DelegationCancel {
+        return this.delegations.cancel(from, delegationId);
     }
     cancel(agentId: string): Promise<void> {
         return this.member(agentId).running.cancel();
@@ -324,19 +371,37 @@ class Supervisor {
     }
     /**
      * Keeps one event of the member's agent, forwards what it says to another
-     * agent, and sends its answer to a message of another agent back to that one.
+     * agent — a message, or a task it gives — follows the tasks it works on, and
+     * sends its answer to a message of another agent back to that one.
      */
     private hear(member: Member, event: AgentEvent): void {
         if (event.type === 'status') {
             this.noticeHarness(member);
         }
         this.keep(member, event);
-        if (event.type === 'message' && event.role === 'agent' && event.to !== undefined) {
-            this.forward(member, event.to, event.text);
-        }
+        this.pass(member, event);
+        this.delegations.take(member.agent.id, event);
         const answer = member.answers.take(event);
         if (answer !== undefined) {
             this.forward(member, answer.to, answer.text, answer.replyTo);
+        }
+    }
+    /** What the agent says to another one goes there: a message, a task, taking a task back. */
+    private pass(member: Member, event: AgentEvent): void {
+        const from = member.agent.id;
+        if (event.type === 'cancel-delegation') {
+            try {
+                this.delegations.cancel(from, event.delegationId);
+            } catch (error) {
+                this.say(member, `could not take back task ${event.delegationId}: ${describeError(error)}`);
+            }
+        } else if (event.type === 'message' && event.role === 'agent' && event.to !== undefined) {
+            if (event.delegation === undefined) {
+                this.forward(member, event.to, event.text);
+            } else {
+                const { id, deadline } = event.delegation;
+                void this.delegations.delegate(from, event.to, event.text, { id, tellFailure: true, ...(deadline === undefined ? {} : { deadline }) });
+            }
         }
     }
     /**
@@ -405,16 +470,18 @@ class Supervisor {
      * it takes the next number, and the agent's events after it move one up.
      */
     private say(member: Member, text: string): void {
+        this.put(member, { type: 'log', source: 'flotti', text });
+    }
+    /** Puts an event of flotti's own into the tab of an agent, the way {@link say} puts a line. */
+    private put(member: Member, body: AgentEventBody): void {
         const agentId = member.agent.id;
         member.offset += 1;
         this.store(member, {
-            type: 'log',
-            source: 'flotti',
-            text,
+            ...body,
             agentId,
             seq: (this.lastSeq.get(agentId) ?? 0) + 1,
             time: new Date().toISOString()
-        });
+        } as AgentEvent);
     }
     private store(member: Member, event: AgentEvent): void {
         this.lastSeq.set(event.agentId, event.seq);
@@ -494,5 +561,6 @@ class Supervisor {
         });
     }
 }
+export { UnknownDelegationError } from './delegations.js';
 export { Supervisor, UnknownAgentError };
 export type { SupervisorListener, SupervisorNotice, SupervisorOptions };
