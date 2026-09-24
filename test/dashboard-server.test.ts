@@ -125,6 +125,19 @@ test('sends a message to one agent and a broadcast to several', async () => {
     deepStrictEqual(some.body, { deliveries: [{ agentId: 'b', result: 'taken' }] });
     deepStrictEqual(fake('a').calls, ['start', 'send hello', 'send ping']);
 });
+test('sends a reply with the message it quotes, and a forward with nothing written above it', async () => {
+    const { dashboard, fake } = await serve('a', 'b');
+    const replyTo = { agentId: 'a', messageId: 'm7', author: 'b', text: 'the build is red' };
+    strictEqual((await call(dashboard.port, 'POST', '/api/agents/a/messages', { text: 'rerun it', replyTo })).status, 200);
+    const forwarded = { author: 'a', text: 'the build is green' };
+    strictEqual((await call(dashboard.port, 'POST', '/api/agents/b/messages', { text: '', forwarded })).status, 200);
+    deepStrictEqual(fake('a').options.at(-1), { replyTo });
+    deepStrictEqual(fake('b').options.at(-1), { forwarded });
+    const { port } = dashboard;
+    strictEqual((await call(port, 'POST', '/api/agents/a/messages', { text: 'hi', replyTo: { text: 'no id' } })).status, 400);
+    strictEqual((await call(port, 'POST', '/api/agents/a/messages', { text: '', forwarded: { text: ' ' } })).status, 400);
+    strictEqual((await call(port, 'POST', '/api/agents/a/messages', { text: '', replyTo })).status, 400, 'a reply says something');
+});
 test('restarts, cancels and answers permission requests', async () => {
     const { dashboard, fake } = await serve('a');
     strictEqual((await call(dashboard.port, 'POST', '/api/agents/a/restart', {})).status, 202);

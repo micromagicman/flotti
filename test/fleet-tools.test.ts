@@ -3,7 +3,8 @@ import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, describe, it } from 'node:test';
-import type { AgentEvent } from '../src/agent-events.js';
+import { composeText } from '../src/agent-events.js';
+import type { AgentEvent, SendOptions } from '../src/agent-events.js';
 import type { AgentSummary, Delivery } from '../src/dashboard-protocol.js';
 import { FleetMcpServer } from '../src/fleet-mcp.js';
 import type { FleetDirectory } from '../src/fleet-mcp.js';
@@ -23,14 +24,17 @@ async function toolsServer(): Promise<FleetMcpServer> {
     servers.push(server);
     return server;
 }
-/** A fleet of names and a record of what was sent through it. */
-function directory(ids: readonly string[]): FleetDirectory & { sent: string[] } {
+/** The fleet, as the tools see it; `sent` is what each receiver reads, `options` what came with it. */
+function directory(ids: readonly string[]): FleetDirectory & { sent: string[]; options: SendOptions[] } {
     const sent: string[] = [];
+    const options: SendOptions[] = [];
     return {
         sent,
+        options,
         agents: (): AgentSummary[] => ids.map((id) => ({ id, name: id, kind: 'local', status: 'idle' })),
-        send: async (agentId: string, text: string, options?: { from?: string }): Promise<Delivery> => {
-            sent.push(`${options?.from ?? '-'} -> ${agentId}: ${text}`);
+        send: async (agentId: string, text: string, given: SendOptions = {}): Promise<Delivery> => {
+            sent.push(`${given.from ?? '-'} -> ${agentId}: ${composeText(text, given, agentId)}`);
+            options.push(given);
             return { agentId, result: 'taken' };
         }
     };
@@ -91,23 +95,6 @@ describe('fleet tools: what they do', () => {
         const listed = JSON.parse((await callTool(server, server.access('bob').token, 'list_agents', {})).text) as Record<string, unknown>[];
         deepStrictEqual(listed.map((agent) => [agent['id'], agent['you'] ?? false]), [['alice', false], ['bob', true]]);
     });
-    it('sends on behalf of the caller, and replies and forwards what came last', async () => {
-        const server = await toolsServer();
-        const fleet = directory(['alice', 'bob', 'carol']);
-        server.serve(fleet);
-        const alice = server.access('alice').token;
-        const bob = server.access('bob').token;
-        const sent = await callTool(server, alice, 'send_message', { to: 'bob', text: 'review #7, please' });
-        strictEqual(sent.isError, false);
-        match(sent.text, /"bob" has it/);
-        await callTool(server, bob, 'reply', { text: 'done, one remark' });
-        await callTool(server, bob, 'forward', { to: 'carol', comment: 'FYI' });
-        deepStrictEqual(fleet.sent, [
-            'alice -> bob: review #7, please',
-            'bob -> alice: done, one remark',
-            'bob -> carol: FYI\n\nForwarded from agent "alice":\n\nreview #7, please'
-        ]);
-    });
     it('says so when the fleet refuses the message', async () => {
         const server = await toolsServer();
         server.serve({
@@ -129,6 +116,40 @@ describe('fleet tools: what they do', () => {
         match((await callTool(server, alice, 'send_message', { to: 'bob' })).text, /text is missing/);
         match((await callTool(server, alice, 'reply', { text: 'hi' })).text, /no agent has written to you yet/);
         ok((await callTool(server, alice, 'reply', { text: 'hi' })).isError);
+    });
+});
+describe('fleet tools: replies and forwards', () => {
+    it('sends on behalf of the caller, and replies and forwards what came last', async () => {
+        const server = await toolsServer();
+        const fleet = directory(['alice', 'bob', 'carol']);
+        server.serve(fleet);
+        const alice = server.access('alice').token;
+        const bob = server.access('bob').token;
+        const sent = await callTool(server, alice, 'send_message', { to: 'bob', text: 'review #7, please' });
+        strictEqual(sent.isError, false);
+        match(sent.text, /"bob" has it/);
+        await callTool(server, bob, 'reply', { text: 'done, one remark' });
+        await callTool(server, bob, 'forward', { to: 'carol', comment: 'FYI' });
+        deepStrictEqual(fleet.sent, [
+            'alice -> bob: review #7, please',
+            'bob -> alice: In reply to a message from you:\n> review #7, please\n\ndone, one remark',
+            'bob -> carol: FYI\n\nForwarded from agent "alice":\n\nreview #7, please'
+        ]);
+        // The same model as a reply and a forward of a person: the tab of each receiver shows the quote and the forward.
+        const [first, reply, forward] = fleet.options;
+        ok(first?.messageId !== undefined);
+        deepStrictEqual(reply?.replyTo, { agentId: 'bob', messageId: first.messageId, author: 'alice', text: 'review #7, please' });
+        deepStrictEqual(forward?.forwarded, { author: 'alice', text: 'review #7, please' });
+    });
+    it('forwards a forward as it was first written, naming who wrote it', async () => {
+        const server = await toolsServer();
+        const fleet = directory(['alice', 'bob', 'carol']);
+        server.serve(fleet);
+        await callTool(server, server.access('alice').token, 'send_message', { to: 'bob', text: 'the build is red' });
+        await callTool(server, server.access('bob').token, 'forward', { to: 'carol' });
+        await callTool(server, server.access('carol').token, 'forward', { to: 'alice' });
+        deepStrictEqual(fleet.options.at(-1)?.forwarded, { author: 'alice', text: 'the build is red' });
+        strictEqual(fleet.sent.at(-1), 'carol -> alice: Forwarded from you:\n\nthe build is red');
     });
 });
 describe('fleet tools: every ACP session gets them', { timeout: 20_000 }, () => {

@@ -6,6 +6,11 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Added
 
+- **Reply and forward in the chat of an agent.** Any message of a tab can be answered with a reply —
+  the agent gets the quoted message above the answer, and the tab shows the quote as a link back to it
+  — or forwarded to another agent of the fleet, whose tab shows it under a bar "FORWARDED · AUTHOR" in
+  the author's colour. The `reply` and `forward` tools of the agents send the same `replyTo` and
+  `forwarded` as the dashboard does (#30).
 - **`flotti start` and `flotti status`.** After `npm install -g flotti` the fleet runs with
   `flotti start`: in the background, giving the terminal back with the address of the dashboard; a
   second `start` of a running fleet says it runs. `flotti stop` stops it, `flotti status` lists the

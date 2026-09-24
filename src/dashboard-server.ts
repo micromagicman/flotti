@@ -15,6 +15,7 @@ import type {
     SendRequest,
     ServerMessage
 } from './dashboard-protocol.js';
+import type { Forwarded, Quote, SendOptions } from './agent-events.js';
 import { ConfigurationError } from './errors.js';
 import type { FleetSettings } from './fleet-settings.js';
 import { UnknownAgentError } from './supervisor.js';
@@ -131,7 +132,10 @@ const ROUTES: readonly Route[] = [
     {
         method: 'POST',
         pattern: /^\/api\/agents\/([^/]+)\/messages$/,
-        handle: async ({ supervisor }, [id], body) => [200, await supervisor.send(id ?? '', messageText(body))]
+        handle: async ({ supervisor }, [id], body) => {
+            const options = messageOptions(body);
+            return [200, await supervisor.send(id ?? '', messageText(body, options.forwarded !== undefined), options)];
+        }
     },
     {
         method: 'POST',
@@ -185,12 +189,51 @@ const ROUTES: readonly Route[] = [
         }
     }
 ];
-function messageText(body: unknown): string {
-    const { text } = (body ?? {}) as Partial<SendRequest>;
-    if (typeof text !== 'string' || text.trim() === '') {
+/** The text of a message; a forwarded one may come without a word above it. */
+function messageText(body: unknown, mayBeEmpty = false): string {
+    const { text = mayBeEmpty ? '' : undefined } = (body ?? {}) as Partial<SendRequest>;
+    if (typeof text !== 'string' || (!mayBeEmpty && text.trim() === '')) {
         throw new HttpError(400, 'The message is empty.');
     }
     return text;
+}
+function optionalString(value: unknown, name: string): string | undefined {
+    if (value !== undefined && typeof value !== 'string') {
+        throw new HttpError(400, `"${name}" must be text.`);
+    }
+    return value;
+}
+function quoteOf(value: unknown): Quote | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+    const { agentId, messageId, seq, author, text } = (value ?? {}) as Partial<Quote>;
+    if (typeof agentId !== 'string' || typeof messageId !== 'string' || typeof text !== 'string') {
+        throw new HttpError(400, '"replyTo" needs the "agentId", "messageId" and "text" of the message it answers.');
+    }
+    if (seq !== undefined && !Number.isInteger(seq)) {
+        throw new HttpError(400, '"replyTo.seq" must be a whole number.');
+    }
+    const by = optionalString(author, 'replyTo.author');
+    return { agentId, messageId, text, ...(seq === undefined ? {} : { seq }), ...(by === undefined ? {} : { author: by }) };
+}
+function forwardedOf(value: unknown): Forwarded | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+    const { author, text } = (value ?? {}) as Partial<Forwarded>;
+    if (typeof text !== 'string' || text.trim() === '') {
+        throw new HttpError(400, '"forwarded" needs the "text" of the message sent on.');
+    }
+    const by = optionalString(author, 'forwarded.author');
+    return { text, ...(by === undefined ? {} : { author: by }) };
+}
+/** What a message of a person answers or sends on; the sender is a person, always. */
+function messageOptions(body: unknown): SendOptions {
+    const request = (body ?? {}) as Partial<SendRequest>;
+    const replyTo = quoteOf(request.replyTo);
+    const forwarded = forwardedOf(request.forwarded);
+    return { ...(replyTo === undefined ? {} : { replyTo }), ...(forwarded === undefined ? {} : { forwarded }) };
 }
 function broadcastTargets(body: unknown): string[] | undefined {
     const { agents } = (body ?? {}) as Partial<SendRequest>;

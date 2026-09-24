@@ -5,6 +5,7 @@ import type {
     Delivery,
     ErrorResponse,
     FleetInfo,
+    SendRequest,
     SshAgentsResponse
 } from '../../src/dashboard-protocol.js';
 async function call<T>(method: string, path: string, body?: object): Promise<T> {
@@ -24,7 +25,9 @@ function agentPath(agentId: string, action?: string): string {
     return `/api/agents/${encodeURIComponent(agentId)}${action === undefined ? '' : `/${action}`}`;
 }
 const api = {
-    send: (agentId: string, text: string): Promise<Delivery> => post(agentPath(agentId, 'messages'), { text }),
+    /** A message to one agent; `extras` make it a reply, or a forward. */
+    send: (agentId: string, text: string, extras: Omit<SendRequest, 'text' | 'agents'> = {}): Promise<Delivery> =>
+        post(agentPath(agentId, 'messages'), { text, ...extras }),
     broadcast: (text: string, agents: readonly string[]): Promise<BroadcastResponse> =>
         post('/api/broadcast', { text, agents }),
     cancel: (agentId: string): Promise<object> => post(agentPath(agentId, 'cancel')),

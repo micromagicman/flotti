@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
+import type { Quote } from '../../src/agent-events.js';
 import type { AgentSummary } from '../../src/dashboard-protocol.js';
 import { AgentPanel } from './components/AgentPanel.js';
+import type { Jump } from './components/Feed.js';
 import { BroadcastPanel } from './components/BroadcastPanel.js';
 import { SettingsPanel } from './components/SettingsPanel.js';
 import { Sidebar } from './components/Sidebar.js';
 import { useFleet } from './connection.js';
+import { quotedMessage } from './feed.js';
+import type { AgentFeed } from './feed.js';
 import type { Link } from './fleet-state.js';
 import { useAgentColors } from './use-agent-colors.js';
 import { useAttention } from './use-attention.js';
@@ -48,6 +52,27 @@ function useSeenSeq(agent: AgentSummary | undefined, shownSeq: number | undefine
     }, [agent, shownSeq]);
     return seenSeq;
 }
+/**
+ * Where the quote of a reply leads: to the quoted message, in this tab or in
+ * the tab of the agent it is in. A jump holds while its tab is open.
+ */
+function useQuotes(feeds: Readonly<Record<string, AgentFeed>>, tab: string, setTab: (tab: string) => void) {
+    const [jump, setJump] = useState<Jump>();
+    useEffect(() => {
+        setJump((last) => (last === undefined || last.agentId === tab ? last : undefined));
+    }, [tab]);
+    const quotes = {
+        hasQuoted: (quote: Quote): boolean => quotedMessage(feeds[quote.agentId], quote) !== undefined,
+        onOpenQuote: (quote: Quote): void => {
+            const target = quotedMessage(feeds[quote.agentId], quote);
+            if (target !== undefined) {
+                setTab(quote.agentId);
+                setJump((last) => ({ agentId: quote.agentId, seq: target.seq, n: (last?.n ?? 0) + 1 }));
+            }
+        }
+    };
+    return { quotes, jump };
+}
 function useAppModel() {
     const [state, dispatch] = useFleet();
     const [tab, setTab] = useTab();
@@ -59,7 +84,8 @@ function useAppModel() {
     const shownSeq = feed?.lastSeq;
     const seenSeq = useSeenSeq(agent, shownSeq);
     const live = state.agents.map((summary) => ({ ...summary, status: state.feeds[summary.id]?.status ?? summary.status }));
-    return { state, dispatch, tab, setTab, attention, colors, seenSeq, agent, feed, live };
+    const { quotes, jump } = useQuotes(state.feeds, tab, setTab);
+    return { state, dispatch, tab, setTab, attention, colors, seenSeq, agent, feed, live, quotes, jump };
 }
 type AppModel = ReturnType<typeof useAppModel>;
 function Topbar({ attention, link }: { readonly attention: ReturnType<typeof useAttention>; readonly link: Link }) {
@@ -74,14 +100,14 @@ function Topbar({ attention, link }: { readonly attention: ReturnType<typeof use
     );
 }
 function Main({ model }: { readonly model: AppModel }) {
-    const { state, dispatch, tab, setTab, colors, agent, feed, live } = model;
+    const { state, dispatch, tab, setTab, colors, agent, feed, live, quotes, jump } = model;
     return (
         <main className="main">
             {tab === SETTINGS
                 ? <SettingsPanel agents={live} />
                 : agent === undefined || feed === undefined
                     ? <BroadcastPanel agents={live} deliveries={state.deliveries} empty={state.agents.length === 0} onSettings={() => setTab(SETTINGS)} />
-                    : <AgentPanel key={agent.id} agent={agent} feed={feed} agents={state.agents} colors={colors} dispatch={dispatch} />}
+                    : <AgentPanel key={agent.id} agent={agent} feed={feed} agents={state.agents} colors={colors} dispatch={dispatch} quotes={quotes} jump={jump} />}
         </main>
     );
 }

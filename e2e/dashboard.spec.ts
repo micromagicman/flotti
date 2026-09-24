@@ -166,6 +166,43 @@ test('an agent writes to another: both tabs show who wrote to whom, apart from w
     await expect(received).toContainText('Please rerun the e2e job');
     await expect(feed(page, 'claude')).toContainText('you said: [from eva] Please rerun the e2e job');
 });
+/** The row of the last message of the tab that says `text`, with its Reply and Forward. */
+const messageRow = (page: Page, name: string, text: string, side: 'user' | 'agent' = 'agent') =>
+    feed(page, name).locator(`.message-row-${side}`).filter({ hasText: text }).last();
+test('a reply quotes the message it answers, the agent reads the quote, and the quote leads back to it', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'codex', 'first words');
+    // The answer by its place in the feed: the answer to the reply will say "you said: first words" too.
+    const seq = await messageRow(page, 'codex', 'you said: first words').getAttribute('data-seq');
+    const answer = feed(page, 'codex').locator(`[data-seq="${seq}"]`);
+    await answer.hover();
+    await answer.getByRole('button', { name: 'Reply' }).click();
+    const field = page.getByRole('textbox', { name: 'Reply to codex' });
+    await expect(field).toBeFocused();
+    await field.fill('and more');
+    await field.press('Enter');
+    const reply = messageRow(page, 'codex', 'and more', 'user');
+    const quote = reply.getByRole('button', { name: 'Reply to codex: jump to the message' });
+    await expect(quote).toContainText('> codex');
+    await expect(quote).toContainText('you said: first words');
+    await expect(feed(page, 'codex')).toContainText(/you said: In reply to a message from you:\s*> you said: first words\s*and more/);
+    await expect(page.getByRole('textbox', { name: 'Message to codex' })).toBeVisible();
+    await quote.click();
+    await expect(answer).toHaveClass(/message-found/);
+});
+test('a message forwarded to another agent says who wrote it, in the tab of the receiver', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'codex', 'forward me');
+    const answer = messageRow(page, 'codex', 'you said: forward me');
+    await answer.hover();
+    await answer.getByRole('button', { name: 'Forward' }).click();
+    await answer.getByRole('group', { name: 'Forward to' }).getByRole('button', { name: 'claude' }).click();
+    await expect(answer.getByRole('status')).toHaveText('Forwarded to claude');
+    await tab(page, 'claude').click();
+    const forwarded = messageRow(page, 'claude', 'forwarded · codex', 'user');
+    await expect(forwarded.locator('.fwd')).toContainText('you said: forward me');
+    await expect(feed(page, 'claude')).toContainText(/you said: Forwarded from agent "codex":\s*you said: forward me/);
+});
 test('a broadcast reaches every agent picked, and each answers in its own tab', async ({ page }) => {
     await page.goto(url);
     await tab(page, 'All agents').click();

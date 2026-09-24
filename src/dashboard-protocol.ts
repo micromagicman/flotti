@@ -7,7 +7,7 @@
  * every action has an answer of its own — a broadcast answers agent by agent —
  * while the socket only carries what the agents do.
  */
-import type { AgentEvent, AgentStatus } from './agent-events.js';
+import type { AgentEvent, AgentStatus, Forwarded, Quote } from './agent-events.js';
 import type { FleetSource, LocalAgentAdapter, RemoteAuth, RemoteSsh, RestartPolicy } from './types.js';
 /**
  * The program that runs the agent. Known only where the manifest says it: the
@@ -45,9 +45,14 @@ type ServerMessage =
     | { readonly type: 'shutdown' };
 /** Body of `POST /api/agents/<id>/messages` and of `POST /api/broadcast`. */
 type SendRequest = {
+    /** May be empty only when a message is forwarded: nothing written above it. */
     readonly text: string;
     /** Broadcast only: which agents get it; every agent of the fleet when absent. */
     readonly agents?: readonly string[];
+    /** One agent only: the message this one answers. */
+    readonly replyTo?: Quote;
+    /** One agent only: a message of this or another tab, sent on as it was. */
+    readonly forwarded?: Forwarded;
 };
 /** Body of `POST /api/agents/<id>/permissions/<requestId>`; no option refuses the request. */
 type PermissionAnswer = {

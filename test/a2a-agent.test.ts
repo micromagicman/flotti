@@ -575,6 +575,20 @@ describe('A2AAgent: keeping the inbox open', () => {
         ok(events.some(event => event.type === 'log' && /cannot stream/.test(event.text)));
     });
 });
+describe('A2AAgent: replies', () => {
+    it('writes out the quoted message of a reply for the agent, and keeps the quote on the event', async () => {
+        const agent = await fake({ script: echo });
+        const { client, events } = connect(agent);
+        await client.start();
+        const replyTo = { agentId: 'remote', messageId: 'm1', text: 'deploy it' };
+        await client.send('which host?', { replyTo });
+        await eventually(() => turnEnds(events).length === 1);
+        deepStrictEqual(events.flatMap(event => event.type === 'message' ? [[event.role, event.text, event.replyTo]] : []), [
+            ['user', 'which host?', replyTo],
+            ['agent', 'echo: In reply to a message from the person:\n> deploy it\n\nwhich host?', undefined]
+        ]);
+    });
+});
 describe('cardLocation', () => {
     it('looks for the card under the address', () => {
         deepStrictEqual(cardLocation('https://eva.example.org/a2a'), {

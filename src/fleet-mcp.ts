@@ -1,8 +1,8 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { SendOptions } from './agent-events.js';
+import type { Forwarded, SendOptions } from './agent-events.js';
 import type { AgentSummary, Delivery } from './dashboard-protocol.js';
 /**
  * The fleet as tools: an MCP server flotti hands to every ACP agent it starts,
@@ -43,7 +43,15 @@ type JsonRpcRequest = {
 type ToolResult = { readonly content: { type: 'text'; text: string }[]; readonly isError?: boolean };
 type ToolArguments = Readonly<Record<string, unknown>>;
 /** The last message one agent got from another through the tools: what `reply` and `forward` act on. */
-type Received = { readonly from: string; readonly text: string };
+type Received = {
+    readonly from: string;
+    /** Its `messageId` in the tab of the agent that got it: a reply quotes it. */
+    readonly messageId: string;
+    readonly text: string;
+    readonly forwarded?: Forwarded;
+};
+/** What one call of a tool sends, besides the receiver and the text. */
+type Extras = Pick<SendOptions, 'replyTo' | 'forwarded'>;
 class RpcError extends Error {
     constructor(readonly code: number, message: string) {
         super(message);
@@ -75,7 +83,7 @@ const TOOLS = [
     },
     {
         name: 'reply',
-        description: 'Answers the agent whose message came to you last.',
+        description: 'Answers the agent whose message came to you last; the answer quotes that message.',
         inputSchema: {
             type: 'object',
             properties: { text: { type: 'string', description: 'The answer.' } },
@@ -260,47 +268,54 @@ class FleetMcpServer {
                 throw new RpcError(-32602, `no tool ${name}`);
         }
     }
-    /** The `reply` tool: to the agent whose message came last. */
+    /** The `reply` tool: to the agent whose message came last, quoting it — as a reply of a person does. */
     private async reply(fleet: FleetDirectory, caller: string, args: ToolArguments): Promise<ToolResult> {
         const last = this.received.get(caller);
         if (last === undefined) {
             return failure('no agent has written to you yet; use send_message and name the agent');
         }
-        return this.send(fleet, caller, last.from, stringArgument(args, 'text'));
+        const quoted = last.text.trim() === '' && last.forwarded !== undefined ? last.forwarded.text : last.text;
+        return this.send(fleet, caller, last.from, stringArgument(args, 'text'), {
+            replyTo: { agentId: caller, messageId: last.messageId, author: last.from, text: quoted }
+        });
     }
-    /** The `forward` tool: the last message, as it was, with a comment before it if one is given. */
+    /**
+     * The `forward` tool: the last message, as it was, with a comment above it
+     * if one is given. A forward forwarded again names who wrote it first.
+     */
     private async forward(fleet: FleetDirectory, caller: string, args: ToolArguments): Promise<ToolResult> {
         const last = this.received.get(caller);
         if (last === undefined) {
             return failure('no agent has written to you yet: there is nothing to forward');
         }
-        const comment = typeof args['comment'] === 'string' && args['comment'].trim() !== ''
-            ? `${args['comment'].trim()}\n\n`
-            : '';
-        return this.send(fleet, caller, stringArgument(args, 'to'),
-            `${comment}Forwarded from agent "${last.from}":\n\n${last.text}`);
+        const comment = typeof args['comment'] === 'string' ? args['comment'].trim() : '';
+        const forwarded = last.text.trim() === '' && last.forwarded !== undefined
+            ? last.forwarded
+            : { author: last.from, text: last.text };
+        return this.send(fleet, caller, stringArgument(args, 'to'), comment, { forwarded });
     }
-    private async send(fleet: FleetDirectory, from: string, to: string, message: string): Promise<ToolResult> {
+    private async send(fleet: FleetDirectory, from: string, to: string, message: string, extras: Extras = {}): Promise<ToolResult> {
         if (to === from) {
             return failure('that is you: name another agent');
         }
         if (!fleet.agents().some((agent) => agent.id === to)) {
             return failure(`there is no agent "${to}" in the fleet; list_agents names them`);
         }
-        const delivery = await deliver(fleet, from, to, message);
+        const messageId = randomUUID();
+        const delivery = await deliver(fleet, to, message, { from, messageId, ...extras });
         if (delivery.result === 'failed') {
             return failure(`"${to}" did not get it: ${delivery.error ?? 'no reason given'}`);
         }
-        this.received.set(to, { from, text: message });
+        this.received.set(to, { from, messageId, text: message, ...(extras.forwarded === undefined ? {} : { forwarded: extras.forwarded }) });
         return text(delivery.result === 'taken'
             ? `"${to}" has it. Its answer comes to you as a message from "${to}".`
             : `"${to}" is busy: the message waits in line and reaches it once it is done.`);
     }
 }
 /** Sends through the fleet; a send that throws is a failed delivery. */
-async function deliver(fleet: FleetDirectory, from: string, to: string, message: string): Promise<Delivery> {
+async function deliver(fleet: FleetDirectory, to: string, message: string, options: SendOptions): Promise<Delivery> {
     try {
-        return await fleet.send(to, message, { from });
+        return await fleet.send(to, message, options);
     } catch (error) {
         // The fleet changed under the call: the sender or the receiver is gone.
         return { agentId: to, result: 'failed', error: error instanceof Error ? error.message : String(error) };

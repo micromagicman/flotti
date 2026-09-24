@@ -87,6 +87,12 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   restart itself or starts a new conversation (see [Lifecycle](#lifecycle) and
   [Talking to a remote agent](#talking-to-a-remote-agent)); **Stop** stops it until **Start** starts it
   again; **Cancel** drops the message in work.
+- **Reply and Forward** sit on the corner of every message, on hover or focus (always, on a touch
+  screen). **Reply** puts the message above the field as a quote; the agent gets the quoted text above
+  your answer, and in the tab the quote leads back to the message it answers — in this tab or another
+  one — until the message is gone from the history. **Forward** sends the message, as it was, to
+  another agent you pick: its tab shows it under a bar "FORWARDED · AUTHOR" in the colour of whoever
+  wrote it, and the agent gets it as `Forwarded from …:` and the text. Escape drops the reply.
 - **All agents** sends one message to every agent you leave ticked. Each gets it on its own, so an
   agent that is down or busy holds nobody up; the page shows, agent by agent, whether the message was
   delivered, waits in line or failed, and the answers come in each agent's tab.
@@ -142,7 +148,7 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | Request                                       | What it does                                           |
 |-----------------------------------------------|--------------------------------------------------------|
 | `GET /api/agents`                             | the agents and their statuses                          |
-| `POST /api/agents/<id>/messages` `{text}`     | a message to one agent: `taken`, `queued` or `failed`  |
+| `POST /api/agents/<id>/messages` `{text, replyTo?, forwarded?}` | a message to one agent: `taken`, `queued` or `failed`; `replyTo` quotes a message, `forwarded` sends one on (`text` may then be empty) |
 | `POST /api/broadcast` `{text, agents?}`       | one message to these agents, or to all; a result each  |
 | `POST /api/agents/<id>/restart`               | restarts the agent; answers at once, the status follows |
 | `POST /api/agents/<id>/cancel`                | drops the message in work                              |
@@ -351,13 +357,15 @@ and `session/load`. A bare Claude Code or Codex sees them as `mcp__flotti__…`:
 |----------------|---------------------------------------------------------------------------------------|
 | `list_agents`  | the agents of the fleet — id, name, description, harness, status; the caller is marked `you` |
 | `send_message` | sends a message to another agent: `to` — its id, `text`                                |
-| `reply`        | answers the agent whose message came last                                             |
+| `reply`        | answers the agent whose message came last, quoting it                                  |
 | `forward`      | forwards the last message another agent sent, as it was, to another agent; `comment` goes before it |
 
 A message sent so reaches the other agent like one from a person, but from that agent: its `message`
 event has `from` — the sender's id — and the agent gets it as `[from <id>] <text>`, the way every
 message from an agent reaches it (#23). What it says in its turn goes to its own tab, not back to the
 sender: an answer to an agent is a `send_message` or a `reply` too.
+A `reply` and a `forward` are the reply and the forward of the dashboard: the `message` event carries
+`replyTo` or `forwarded`, and the tab shows the quote or the forwarded message the same way (#30).
 Messages queue as a person's do; a tool call does not wait for the answer.
 
 The server speaks MCP over HTTP (the streamable transport, with plain JSON answers) on a free port of

@@ -19,7 +19,7 @@ import type {
 import { AcpMessages, acpPermissionEvent, acpUpdateEvents } from './acp-events.js';
 import { prepareHandover } from './acp-adapters.js';
 import type { Handover } from './acp-adapters.js';
-import { AgentEvents } from './agent-events.js';
+import { AgentEvents, composeText, messageFields } from './agent-events.js';
 import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
 import { MCP_PATH, MCP_SERVER_NAME } from './fleet-mcp.js';
 import type { FleetToolsAccess } from './fleet-mcp.js';
@@ -83,13 +83,18 @@ const INVALID_PARAMS = -32602;
 class PermanentFailure extends Error {}
 type Turn = {
     readonly text: string;
-    /** The agent of the fleet that sent the message; absent for a person. */
-    readonly from?: string;
+    /** Who sent it, and what it answers or sends on. */
+    readonly options: SendOptions;
     /** The message went to the agent: {@link LocalAgentProcess.send} resolves. */
     readonly accepted: () => void;
     /** The message never got to the agent: {@link LocalAgentProcess.send} rejects. */
     readonly refused: (error: Error) => void;
 };
+/** What the agent reads for the message of the turn. */
+function promptText(turn: Turn, agentId: string): string {
+    const text = composeText(turn.text, turn.options, agentId);
+    return turn.options.from === undefined ? text : `[from ${turn.options.from}] ${text}`;
+}
 /** What is run to start the agent process, and where. */
 type Invocation = { command: string; arguments: string[]; cwd?: string; env: NodeJS.ProcessEnv };
 /** One life of the agent process, from spawn to exit. */
@@ -239,13 +244,15 @@ class LocalAgentProcess implements FleetAgent {
      *
      * A message from another agent reaches the agent as `[from <id>] <text>`:
      * ACP has no place for a sender, and the id is what the agent answers to.
+     * A reply and a forward reach it as text too, the quoted or forwarded
+     * message written out.
      */
     send(text: string, options: SendOptions = {}): Promise<void> {
         if (this.lifecycle !== 'running' && this.lifecycle !== 'starting' && this.lifecycle !== 'backoff') {
             return Promise.reject(new Error(`agent "${this.agentId}" is ${this.lifecycle}; start it first`));
         }
         return new Promise((resolve, reject) => {
-            this.queue.push({ text, ...(options.from === undefined ? {} : { from: options.from }), accepted: resolve, refused: reject });
+            this.queue.push({ text, options, accepted: resolve, refused: reject });
             this.pump();
         });
     }
@@ -619,17 +626,17 @@ class LocalAgentProcess implements FleetAgent {
         this.emit({
             type: 'message',
             role: 'user',
-            messageId: randomUUID(),
+            messageId: turn.options.messageId ?? randomUUID(),
             text: turn.text,
             append: false,
-            ...(turn.from === undefined ? {} : { from: turn.from })
+            ...messageFields(turn.options)
         });
     }
     /** Sends the message as `session/prompt`; its answer, or its failure, ends the turn. */
     private prompt(run: Run, connection: acp.ClientConnection, sessionId: string, turn: Turn): void {
         connection.agent.request(acp.methods.agent.session.prompt, {
             sessionId,
-            prompt: [{ type: 'text', text: turn.from === undefined ? turn.text : `[from ${turn.from}] ${turn.text}` }]
+            prompt: [{ type: 'text', text: promptText(turn, this.agentId) }]
         }).then(
             (response) => this.endTurn(turn, response.stopReason),
             (error: unknown) => {
