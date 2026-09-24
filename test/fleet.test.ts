@@ -1,20 +1,20 @@
 import { deepStrictEqual, match, ok, strictEqual } from 'node:assert/strict';
 import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { FLEET_PATH_VARIABLE, loadFleet, prepareFleet, resolveFleetLocation } from '../src/fleet.js';
 import { HOME, LOCAL, REMOTE, agent, failure, fleetDirectory, load, workspace } from './fleet-helpers.js';
 describe('resolveFleetLocation: where the path comes from', () => {
     it('falls back to ~/.flotti/agents', () => {
         deepStrictEqual(resolveFleetLocation({ argv: [], env: { HOME } }), {
-            path: '/home/eva/.flotti/agents',
+            path: resolve('/home/eva/.flotti/agents'),
             source: 'default'
         });
     });
     it('takes the path from the environment variable and expands ~ itself', () => {
         deepStrictEqual(
             resolveFleetLocation({ argv: [], env: { HOME, [FLEET_PATH_VARIABLE]: '~/fleets/test' } }),
-            { path: '/home/eva/fleets/test', source: 'environment' }
+            { path: resolve('/home/eva/fleets/test'), source: 'environment' }
         );
     });
     it('prefers the argument over the environment variable', () => {
@@ -23,13 +23,13 @@ describe('resolveFleetLocation: where the path comes from', () => {
                 argv: ['--fleet', '/srv/fleet'],
                 env: { HOME, [FLEET_PATH_VARIABLE]: '~/fleets/test' }
             }),
-            { path: '/srv/fleet', source: 'argument' }
+            { path: resolve('/srv/fleet'), source: 'argument' }
         );
     });
     it('accepts --fleet=<dir> and resolves a relative one against the working directory', () => {
         strictEqual(
             resolveFleetLocation({ argv: ['--fleet=fleet'], env: { HOME }, cwd: '/srv' }).path,
-            '/srv/fleet'
+            resolve('/srv/fleet')
         );
     });
     it('ignores an empty environment variable', () => {

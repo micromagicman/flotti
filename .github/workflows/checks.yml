@@ -1,7 +1,8 @@
 # Checks on every PR and on pushes to main/develop (issue #25).
 #
-# Two jobs, so the list of checks names the cause at a glance: `build` (lint, types, build, unit
-# tests) and `e2e` (a real `flotti run` with pretend agents, driven in Playwright's Chromium).
+# Three jobs, so the list of checks names the cause at a glance: `build` (lint, types, build, unit
+# tests), `windows` (the unit tests on Windows) and `e2e` (a real `flotti run` with pretend agents,
+# driven in Playwright's Chromium).
 # Publishing to npm lives in publish.yml.
 
 name: checks
@@ -31,6 +32,19 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
+      - run: npm test
+
+  # Unit tests on Windows: agents started through `.cmd` scripts, as `npx` and `codex` are
+  # installed there (#57).
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
       - run: npm test
 
   e2e:

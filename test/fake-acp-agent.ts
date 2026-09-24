@@ -51,6 +51,8 @@ if (config.crashStarts !== undefined && config.counter !== undefined) {
 record({
     event: 'started',
     pid: process.pid,
+    ppid: process.ppid,
+    argv: process.argv.slice(2),
     cwd: process.cwd(),
     codexConfig: process.env['CODEX_CONFIG'] ?? null
 });

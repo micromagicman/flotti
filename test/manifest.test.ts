@@ -64,7 +64,7 @@ describe('local manifest: paths', () => {
         const relative = single('local', { ...LOCAL, workdir: 'repo' });
         strictEqual(relative.agent.kind === 'local' && relative.agent.workdir, join(relative.directory, 'repo'));
         const home = single('local', { ...LOCAL, workdir: '~/src' }).agent;
-        strictEqual(home.kind === 'local' && home.workdir, '/home/eva/src');
+        strictEqual(home.kind === 'local' && home.workdir, join('/home/eva', 'src'));
     });
     it('points at system-prompt.md when the agent has one', () => {
         const root = fleetDirectory();

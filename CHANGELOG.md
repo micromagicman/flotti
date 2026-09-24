@@ -58,7 +58,15 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   the sender's tab shows the same envelope, and a line when it could not be delivered. Each agent gets
   a colour of its own, picked at random and kept (#23).
 
-## [0.1.0] — MVP
+### Fixed
+
+- **`npx` and `codex` start on Windows.** A local agent whose `command` is an npm script — `npx`,
+  `codex`, anything installed as a `.cmd` — is found through `PATH` and `PATHEXT` the way the shell
+  finds it and started through `cmd.exe`, its arguments quoted so that spaces, quotes and `&`, `%`,
+  `^`, `|` reach the agent unchanged; an `.exe` starts directly, as before. Stop and restart end
+  `cmd.exe` with the whole tree under it, and a command found nowhere still says `command not found`.
+  The unit tests run on Windows in CI too (#57).
+ — MVP
 
 The first release: a fleet of AI agents and one dashboard to work with them.
 

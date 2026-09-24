@@ -209,7 +209,8 @@ function sshHost(): { ssh: SshOptions; home: string } {
     writeFileSync(config, JSON.stringify({ home, pids: join(place, 'pids'), forwarded: join(place, 'forwarded') }));
     return { ssh: { command: process.execPath, prefix: [FAKE_SSH, config], readyTimeoutMs: 5_000 }, home: realpathSync(home) };
 }
-describe('an agent started on another host over SSH', { timeout: 30_000 }, () => {
+// The pretend host runs the command with `sh`, as a POSIX host does; a Windows runner has no such host.
+describe('an agent started on another host over SSH', { timeout: 30_000, skip: process.platform === 'win32' && 'needs a POSIX sh' }, () => {
     it('runs there, in the home directory, with the manifest\'s environment only', async () => {
         const { ssh, home } = sshHost();
         const harness = new Harness({ remote: true, options: { ssh } });

@@ -21,6 +21,7 @@ import { prepareHandover } from './acp-adapters.js';
 import type { Handover } from './acp-adapters.js';
 import { AgentEvents, composeText, messageFields } from './agent-events.js';
 import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
+import { commandToSpawn } from './command-line.js';
 import { MCP_PATH, MCP_SERVER_NAME } from './fleet-mcp.js';
 import type { FleetToolsAccess } from './fleet-mcp.js';
 import { RemoteStartReader, parseTarget, remoteCommandArguments } from './ssh.js';
@@ -349,14 +350,18 @@ class LocalAgentProcess implements FleetAgent {
     }
     private spawnChild(how: Invocation): ChildProcess {
         const posix = process.platform !== 'win32';
-        return spawn(how.command, how.arguments, {
+        // On Windows `npx` and `codex` are `.cmd` scripts: they go through `cmd.exe`, which
+        // taskkill /T stops together with everything under it.
+        const target = commandToSpawn(how.command, how.arguments, { env: how.env, ...(how.cwd === undefined ? {} : { cwd: how.cwd }) });
+        return spawn(target.command, target.arguments, {
             ...(how.cwd === undefined ? {} : { cwd: how.cwd }),
             env: how.env,
             stdio: ['pipe', 'pipe', 'pipe'],
             // Its own process group, so stopping it reaches what it started: the
             // adapter runs `claude` or `codex`, and those run MCP servers.
             detached: posix,
-            windowsHide: true
+            windowsHide: true,
+            ...(target.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {})
         });
     }
     /** Settles once the process is gone, and hands its end to {@link onExit}. */
