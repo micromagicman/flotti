@@ -171,9 +171,14 @@ const pairTab = (page: Page) => page.getByRole('tab', { name: /^Conversation of 
 test('the conversation of two agents has a tab of its own: one lane, read-only, with the way to write to either', async ({ page }) => {
     await page.goto(url);
     await pairTab(page).click();
-    const envelope = lane(page).locator('.lane-row').filter({ hasText: 'Please rerun the e2e job' });
-    await expect(envelope.locator('.envelope-bar')).toContainText('relay → claude');
-    await expect(envelope).toHaveClass(/lane-first/);
+    // The message of relay, and the answer claude sends back to it (#45): it says the same words.
+    const [message, answer] = [lane(page).locator('.lane-row').nth(0), lane(page).locator('.lane-row').nth(1)];
+    await expect(message.locator('.envelope-bar')).toContainText('relay → claude');
+    await expect(message).toContainText('Please rerun the e2e job');
+    await expect(message).toHaveClass(/lane-first/);
+    await expect(answer.locator('.envelope-bar')).toContainText('claude → relay');
+    await expect(answer).toContainText('you said: [from relay] Please rerun the e2e job');
+    await expect(answer).toHaveClass(/lane-second/);
     await expect(page.getByRole('textbox')).toHaveCount(0);
     await page.getByRole('button', { name: 'Write to claude' }).click();
     await expect(page.getByRole('textbox', { name: 'Message to claude' })).toBeVisible();
