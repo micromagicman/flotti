@@ -2,7 +2,7 @@
  * State of the whole page and how server messages change it. Pure, like
  * feed.ts: the hook in connection.ts only feeds it.
  */
-import type { AgentSummary, Delivery, ServerMessage } from '../../src/dashboard-protocol.js';
+import type { AgentSummary, ConnectionHealth, Delivery, ServerMessage } from '../../src/dashboard-protocol.js';
 import { applyEvent, emptyFeed, settlePermission } from './feed.js';
 import type { AgentFeed } from './feed.js';
 /** Where the socket is: `gone` — the server said it stops, and nothing reconnects. */
@@ -27,6 +27,10 @@ function withFleet(state: FleetState, agents: readonly AgentSummary[]): FleetSta
     }
     return { ...state, agents, feeds };
 }
+/** The agent's connection is as healthy as the server says now. */
+function withHealth(state: FleetState, agentId: string, health: ConnectionHealth): FleetState {
+    return { ...state, agents: state.agents.map((agent) => (agent.id === agentId ? { ...agent, health } : agent)) };
+}
 function fromServer(state: FleetState, message: ServerMessage): FleetState {
     switch (message.type) {
         case 'fleet':
@@ -40,6 +44,8 @@ function fromServer(state: FleetState, message: ServerMessage): FleetState {
         }
         case 'delivery':
             return { ...state, deliveries: [...state.deliveries, message.delivery] };
+        case 'health':
+            return withHealth(state, message.agentId, message.health);
         case 'shutdown':
             return { ...state, link: 'gone' };
     }

@@ -2,6 +2,7 @@ import { deepStrictEqual, rejects, strictEqual, throws } from 'node:assert/stric
 import { test } from 'node:test';
 import { Supervisor, UnknownAgentError } from '../src/supervisor.js';
 import type { SupervisorNotice } from '../src/supervisor.js';
+import type { ConnectionHealth } from '../src/connection-health.js';
 import type { Agent, RemoteAgent } from '../src/types.js';
 import { FakeFleetAgent, fakeFleet } from './fake-fleet-agent.js';
 function supervised(...ids: string[]) {
@@ -226,4 +227,42 @@ test('a message to another agent that cannot be delivered is a line in the tab o
     ]);
     deepStrictEqual(history.map((event) => event.seq), [2, 3, 4, 5, 6, 7, 8], 'the lines take numbers of their own, and the events after them go on');
     deepStrictEqual(a.calls, ['start'], 'the sender is not sent anything');
+});
+test('passes on the health of a connection, in the summary and as it changes', () => {
+    const { fleet, fakes, createAgent } = fakeFleet('relay', 'plain');
+    let current: ConnectionHealth = { reconnects: 0, reconnectsLastHour: 0, poor: [] };
+    const listeners = new Set<(health: ConnectionHealth) => void>();
+    const relay = fake(fakes.get('relay'));
+    Object.defineProperty(relay, 'health', { get: () => current });
+    Object.assign(relay, {
+        onHealth(listener: (health: ConnectionHealth) => void) {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+        }
+    });
+    const supervisor = new Supervisor(fleet, { createAgent });
+    const notices: SupervisorNotice[] = [];
+    supervisor.subscribe((notice) => notices.push(notice));
+    deepStrictEqual(supervisor.agents().map((agent) => [agent.id, agent.health]), [['plain', undefined], ['relay', current]]);
+    current = { latencyMs: 20, reconnects: 1, reconnectsLastHour: 1, poor: [] };
+    for (const listener of listeners) {
+        listener(current);
+    }
+    deepStrictEqual(notices, [{ type: 'health', agentId: 'relay', health: current }]);
+    deepStrictEqual(supervisor.agents()[1]?.health, current);
+    deepStrictEqual(supervisor.history('relay'), [], 'the health is not kept in the history');
+});
+test('stops listening to the health of an agent that is removed', async () => {
+    const { fleet, fakes, createAgent } = fakeFleet('relay');
+    const listeners = new Set<(health: ConnectionHealth) => void>();
+    Object.assign(fake(fakes.get('relay')), {
+        onHealth(listener: (health: ConnectionHealth) => void) {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+        }
+    });
+    const supervisor = new Supervisor(fleet, { createAgent });
+    strictEqual(listeners.size, 1);
+    await supervisor.remove('relay');
+    strictEqual(listeners.size, 0);
 });

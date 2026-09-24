@@ -9,6 +9,7 @@ import { A2AAgent, HARNESS_EXTENSION, INBOX_EXTENSION } from '../src/a2a-agent.j
 import type { AgentEvent, AgentStatus } from '../src/agent-events.js';
 import { SshError, describeFailure, discover, parsePublished, parseTarget, pickPublished } from '../src/ssh.js';
 import type { SshOptions } from '../src/ssh.js';
+import type { ConnectionHealth } from '../src/connection-health.js';
 import type { RemoteAgent } from '../src/types.js';
 import { FakeAgent, agentMessage, said, statusUpdate, task } from './a2a-fake-server.js';
 import type { Script } from './a2a-fake-server.js';
@@ -285,5 +286,97 @@ describe('A2AAgent over SSH: the inbox', () => {
         post('after the drop');
         await eventually(() => said('after the drop'));
         ok(pretend.forwarded() >= 3, 'the inbox went down the tunnel');
+    });
+});
+/** A remote agent reached over SSH, as a manifest with `ssh` makes it. */
+function relay(ssh: SshOptions, extra: { healthIntervalMs?: number } = {}): { client: A2AAgent; events: AgentEvent[] } {
+    const agent: RemoteAgent = {
+        kind: 'remote',
+        id: 'relay',
+        name: 'Relay',
+        directory: '/fleet/remote/relay',
+        manifestPath: '/fleet/remote/relay/agent.json',
+        protocol: 'a2a',
+        ssh: { target: 'ops@example.org' },
+        auth: { type: 'none' }
+    };
+    const client = new A2AAgent(agent, { ssh, reconnectDelayMs: 10, reopenDelayMaxMs: 50, health: { quietMs: 0 }, ...extra });
+    clients.push(client);
+    const events: AgentEvent[] = [];
+    client.subscribe((event) => events.push(event));
+    return { client, events };
+}
+/** An agent that answers every message, published on a pretend host. */
+async function published(token?: string) {
+    const agent = await new FakeAgent({ script: echo }).listen();
+    running.push(agent);
+    const pretend = host();
+    pretend.publish('relay', { url: `${agent.url}/`, ...(token === undefined ? {} : { token }) });
+    return pretend;
+}
+/** Kills the open tunnel and waits until the agent is back. */
+async function dropTunnel(client: A2AAgent, pretend: ReturnType<typeof host>): Promise<void> {
+    const back = reaches(client, 'idle', 'reconnected');
+    process.kill(pretend.tunnels().at(-1) ?? 0);
+    await back;
+}
+describe('A2AAgent over SSH: the health of the connection', () => {
+    it('measures the round trip down the tunnel, and counts the reconnects', async () => {
+        const pretend = await published('published-secret');
+        const { client } = relay(pretend.ssh, { healthIntervalMs: 50 });
+        const told: ConnectionHealth[] = [];
+        client.onHealth((health) => told.push(health));
+        await client.start();
+        await eventually(() => client.health?.latencyMs !== undefined);
+        const first = client.health;
+        deepStrictEqual([first?.reconnects, first?.reconnectsLastHour, first?.upSince !== undefined], [0, 0, true]);
+        await dropTunnel(client, pretend);
+        const health = client.health;
+        deepStrictEqual([health?.reconnects, health?.reconnectsLastHour], [1, 1]);
+        ok(health?.lastReconnectAt !== undefined && health.upSince === health.lastReconnectAt);
+        ok(told.some((each) => each.upSince === undefined), 'the drop was told');
+        strictEqual(told.at(-1)?.reconnects, 1, 'the reconnect was told');
+    });
+    it('marks the last activity when the agent answers', async () => {
+        const pretend = await published();
+        const { client } = relay(pretend.ssh);
+        await client.start();
+        const before = client.health?.lastActivityAt ?? '';
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await client.send('hi');
+        await reaches(client, 'idle');
+        ok((client.health?.lastActivityAt ?? '') > before, `${client.health?.lastActivityAt} after ${before}`);
+    });
+});
+describe('A2AAgent over SSH: the health of the connection, per session and without secrets', () => {
+    it('keeps the token out of the health and out of the tab', async () => {
+        const pretend = await published('published-secret');
+        const { client, events } = relay(pretend.ssh, { healthIntervalMs: 20 });
+        const told: ConnectionHealth[] = [];
+        client.onHealth((health) => told.push(health));
+        await client.start();
+        await eventually(() => client.health?.latencyMs !== undefined);
+        await dropTunnel(client, pretend);
+        const said = JSON.stringify([told, client.health, events]);
+        ok(!said.includes('published-secret'), 'no token in what is told');
+        ok(!/authorization|bearer/i.test(said), 'no header in what is told');
+    });
+    it('starts counting anew after a stop', async () => {
+        const pretend = await published();
+        const { client } = relay(pretend.ssh);
+        await client.start();
+        await dropTunnel(client, pretend);
+        strictEqual(client.health?.reconnects, 1);
+        await client.stop();
+        deepStrictEqual(client.health, { reconnects: 0, reconnectsLastHour: 0, poor: [] });
+        await client.start();
+        strictEqual(client.health?.reconnects, 0);
+    });
+    it('has no health for an agent reached without a connection to keep', () => {
+        const client = new A2AAgent({
+            kind: 'remote', id: 'plain', name: 'plain', directory: '/fleet/remote/plain', manifestPath: '/fleet/remote/plain/agent.json',
+            protocol: 'a2a', url: 'http://127.0.0.1:1/', auth: { type: 'none' }
+        });
+        strictEqual(client.health, undefined);
     });
 });

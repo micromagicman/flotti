@@ -1,5 +1,6 @@
 import type { AgentSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentFeed } from '../feed.js';
+import { PoorConnectionMark } from './ConnectionHealth.js';
 import { StatusBadge } from './StatusBadge.js';
 type SidebarProps = {
     readonly agents: readonly AgentSummary[];
@@ -56,7 +57,7 @@ function AgentTab({ agent, feed, seenSeq, selected, onSelect }: AgentTabProps) {
                 {agent.name}
                 {unread ? <span className="unread" aria-label="new output" /> : null}
             </span>
-            <StatusBadge status={status} />
+            <StatusBadge status={status} /><PoorConnectionMark health={agent.health} />
         </button>
     );
 }

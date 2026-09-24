@@ -14,6 +14,12 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   its published file (`~/.flotti/a2a/<id>.json`) or with the harness extension of its card; the
   header of its tab, `flotti status` and `list_agents` show it instead of `harness unknown`. A name
   flotti does not know is shown as it is (#49).
+- **The health of an SSH connection.** For a remote agent reached over SSH, the header of its tab and
+  its row in Settings show the latency of the tunnel, the reconnects since the start and in the last
+  hour with the time of the last one, the last activity of the agent and the uptime of the tunnel, kept
+  up to date without a reload. A poor connection — 3 or more reconnects in an hour, or a latency of
+  1 s or more — turns red, says why and marks the tab. `flotti status` shows the latency and the
+  reconnects too. No secret goes into the health (#53).
 - **Reply and forward in the chat of an agent.** Any message of a tab can be answered with a reply —
   the agent gets the quoted message above the answer, and the tab shows the quote as a link back to it
   — or forwarded to another agent of the fleet, whose tab shows it under a bar "FORWARDED · AUTHOR" in

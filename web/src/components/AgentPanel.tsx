@@ -7,6 +7,7 @@ import { api } from '../api.js';
 import type { AgentFeed } from '../feed.js';
 import type { FleetAction } from '../fleet-state.js';
 import { Composer } from './Composer.js';
+import { ConnectionHealthView } from './ConnectionHealth.js';
 import { Feed } from './Feed.js';
 import type { Jump } from './Feed.js';
 import { ReplyPreview } from './Message.js';
@@ -75,6 +76,7 @@ function AgentHeader({ agent, feed }: { readonly agent: AgentSummary; readonly f
         <header className="agent-header">
             <AgentTitle agent={agent} feed={feed} />
             {agent.description === undefined ? null : <p className="description">{agent.description}</p>}
+            {agent.health === undefined ? null : <ConnectionHealthView health={agent.health} />}
             <AgentActions agent={agent} feed={feed} run={run} />
             {error === undefined ? null : <p className="error" role="alert">{error}</p>}
         </header>

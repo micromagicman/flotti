@@ -8,6 +8,7 @@
  * while the socket only carries what the agents do.
  */
 import type { AgentEvent, AgentStatus, Forwarded, Quote } from './agent-events.js';
+import type { ConnectionHealth } from './connection-health.js';
 import type { FleetSource, LocalAgentAdapter, RemoteAuth, RemoteSsh, RestartPolicy } from './types.js';
 /**
  * The program that runs the agent: the `adapter` of a local agent, or what a
@@ -25,6 +26,8 @@ type AgentSummary = {
     /** Absent when flotti does not know it; never guessed. */
     readonly harness?: Harness;
     readonly status: AgentStatus;
+    /** Health of the SSH connection of a remote agent reached over one; absent for any other. */
+    readonly health?: ConnectionHealth;
 };
 /**
  * What the page sends over the socket: the last `seq` it has seen of each
@@ -43,6 +46,8 @@ type ServerMessage =
     | { readonly type: 'event'; readonly event: AgentEvent }
     /** How a message that had to wait in line ended up: taken at last, or dropped. */
     | { readonly type: 'delivery'; readonly delivery: Delivery }
+    /** The health of the connection of an agent changed: it came up or dropped, a round trip was measured, the agent was heard from. */
+    | { readonly type: 'health'; readonly agentId: string; readonly health: ConnectionHealth }
     /** The server is going away: `flotti stop`, or Ctrl+C. */
     | { readonly type: 'shutdown' };
 /** Body of `POST /api/agents/<id>/messages` and of `POST /api/broadcast`. */
@@ -154,6 +159,7 @@ type ErrorResponse = {
 };
 export type {
     AgentConfig,
+    ConnectionHealth,
     AgentSummary,
     BroadcastResponse,
     ClientMessage,

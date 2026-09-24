@@ -1,6 +1,7 @@
 import { A2AAgent } from './a2a-agent.js';
 import type { AgentEvent, FleetAgent, SendOptions } from './agent-events.js';
 import { HistoryFile } from './agent-history.js';
+import type { ConnectionHealth } from './connection-health.js';
 import type { AgentSummary, Delivery, Harness } from './dashboard-protocol.js';
 import type { FleetToolsAccess } from './fleet-mcp.js';
 import { LocalAgentProcess } from './local-agent.js';
@@ -28,6 +29,8 @@ function harnessOf(agent: Agent, running: FleetAgent): { readonly harness?: Harn
 type SupervisorNotice =
     | { readonly type: 'event'; readonly event: AgentEvent }
     | { readonly type: 'delivery'; readonly delivery: Delivery }
+    /** The health of the connection of an agent changed. */
+    | { readonly type: 'health'; readonly agentId: string; readonly health: ConnectionHealth }
     /** An agent was added, changed or removed, or the whole fleet was replaced. */
     | { readonly type: 'fleet'; readonly agents: readonly AgentSummary[] };
 type SupervisorListener = (notice: SupervisorNotice) => void;
@@ -126,7 +129,8 @@ class Supervisor {
                 kind: agent.kind,
                 ...(agent.description === undefined ? {} : { description: agent.description }),
                 ...harnessOf(agent, running),
-                status: running.status
+                status: running.status,
+                ...(running.health === undefined ? {} : { health: running.health })
             }));
     }
     /** The agent as its manifest describes it. */
@@ -290,9 +294,14 @@ class Supervisor {
         this.listen(member);
         return member;
     }
-    /** Keeps every event of the member's agent, and forwards what it says to another agent. */
+    /**
+     * Keeps every event of the member's agent, forwards what it says to another
+     * agent, and passes on the health of its connection. The health is not kept
+     * in the history: only the latest one matters, and the summary carries it.
+     */
     private listen(member: Member): void {
-        member.unsubscribe = member.running.subscribe((event) => {
+        const agentId = member.agent.id;
+        const events = member.running.subscribe((event) => {
             if (event.type === 'status') {
                 this.noticeHarness(member);
             }
@@ -301,6 +310,11 @@ class Supervisor {
                 this.forward(member, event.to, event.text);
             }
         });
+        const health = member.running.onHealth?.((changed) => this.notify({ type: 'health', agentId, health: changed }));
+        member.unsubscribe = () => {
+            events();
+            health?.();
+        };
     }
     /**
      * Opens the history file of an agent that has none yet and, when the

@@ -306,6 +306,20 @@ button.danger { color: var(--bad); border-color: var(--bad); }
 .settings-agent-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .settings-agent-name { font-weight: 500; }
 .settings-agent .error { width: 100%; margin: 0; }
+/*
+ * The health of an SSH connection (#53): a quiet line of facts; a poor
+ * connection turns it the colour of an error, with the reason, and marks the tab.
+ */
+.health { width: 100%; order: 4; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; font-size: 12px; color: var(--muted); }
+.settings-agent .health { order: 0; }
+.health-title { font-family: var(--mono); font-size: 11px; padding: 0 5px; border: 1px solid var(--border); border-radius: 4px; }
+.health-label { text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
+.health-fact { color: var(--text); }
+.health-fact .health-label { color: var(--muted); }
+.health-poor { padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--bad) 10%, var(--panel)); box-shadow: inset 3px 0 0 var(--bad); }
+.health-poor .health-title { border-color: var(--bad); color: var(--bad); }
+.health-warning { color: var(--bad); font-weight: 600; }
+.tab-poor { font-size: 11px; font-weight: 600; color: var(--bad); }
 .actions .note { align-self: center; }
 .field { display: flex; flex-direction: column; gap: 4px; flex: 1; }
 .field-label { font-size: 12px; font-weight: 500; }
