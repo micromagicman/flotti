@@ -457,6 +457,54 @@ test('the composer shows the status of the agent and its line, on a narrow scree
     await expect(card.locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     await expect(card.locator('[data-status]')).not.toContainText('in line');
 });
+type Edges = { readonly left: number; readonly right: number };
+async function edges(locator: Locator): Promise<Edges> {
+    const box = await locator.boundingBox();
+    if (box === null) {
+        throw new Error('not on the page');
+    }
+    return { left: box.x, right: box.x + box.width };
+}
+/** Where the content of the feed runs, and how wide its scrollbar is: the composer sits under it, not beside it. */
+function feedEdges(log: Locator): Promise<Edges & { readonly scrollbar: number }> {
+    return log.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        const left = box.left + element.clientLeft + parseFloat(style.paddingLeft);
+        const right = box.left + element.clientLeft + element.clientWidth - parseFloat(style.paddingRight);
+        return { left, right, scrollbar: element.offsetWidth - element.clientWidth - 2 * element.clientLeft };
+    });
+}
+test('on a wide screen the composer and the line waiting in it span the feed, in both themes (#95)', async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1000 });
+    await page.goto(url);
+    for (const colorScheme of ['light', 'dark'] as const) {
+        await page.emulateMedia({ colorScheme });
+        await say(page, 'claude', 'wait');
+        await expect(tab(page, 'claude').locator('[data-status]')).toHaveAttribute('data-status', 'working');
+        await sayInLine(page, 'claude', `queued on a wide screen, ${colorScheme}`);
+        const log = feed(page, 'claude');
+        const content = await feedEdges(log);
+        expect(content.right - content.left, 'the feed is wider than a column of messages').toBeGreaterThan(1200);
+        const card = await edges(composer(page, 'claude').locator('.composer-card'));
+        expect(Math.abs(card.left - content.left), `${colorScheme}: left of the composer`).toBeLessThanOrEqual(1);
+        expect(Math.abs(card.right - content.right), `${colorScheme}: right of the composer`).toBeLessThanOrEqual(content.scrollbar + 1);
+        const line = nextUp(page, 'claude');
+        const block = await edges(line);
+        expect(Math.abs(block.left - content.left), `${colorScheme}: left of the line`).toBeLessThanOrEqual(1);
+        expect(Math.abs(block.right - content.right), `${colorScheme}: right of the line`).toBeLessThanOrEqual(1);
+        const queued = await edges(line.locator('.message-queued'));
+        const mine = await edges(log.locator('.message-user').filter({ hasText: 'wait' }).last());
+        expect(Math.abs(queued.right - mine.right), `${colorScheme}: a queued message stands where the person's messages do`).toBeLessThanOrEqual(1);
+        await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+        await expect(line).toHaveCount(0);
+    }
+    await tab(page, 'All agents').click();
+    const targets = await edges(page.locator('.targets'));
+    const broadcast = await edges(page.locator('.broadcast .composer-card'));
+    expect(Math.abs(broadcast.left - targets.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(broadcast.right - targets.right)).toBeLessThanOrEqual(1);
+});
 /** Sends a message the agent is too busy to take: the field clears once the dashboard says it waits in line. */
 async function sayInLine(page: Page, name: string, text: string): Promise<void> {
     await say(page, name, text);
