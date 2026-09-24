@@ -180,10 +180,21 @@ function withStatus(items: readonly FeedItem[], event: AgentEvent & { type: 'sta
         ? [...settled, { kind: 'status', key: `e${event.seq}`, status: event.status, reason: event.reason }]
         : settled;
 }
-/** The events that each add one item of their own. */
-function withItem(items: readonly FeedItem[], event: AgentEvent & { type: 'progress' | 'permission' | 'log' | 'raw' }): readonly FeedItem[] {
+/**
+ * The events that each add one item of their own, and those that add none: the
+ * line of messages is kept apart from the feed (see withLine), and the card of
+ * a task shows what came of it.
+ */
+function withItem(
+    items: readonly FeedItem[],
+    event: AgentEvent & { type: 'progress' | 'permission' | 'log' | 'raw' | 'queued' | 'unqueued' | 'cancel-delegation' }
+): readonly FeedItem[] {
     const key = `e${event.seq}`;
     switch (event.type) {
+        case 'queued':
+        case 'unqueued':
+        case 'cancel-delegation':
+            return items;
         case 'progress':
             return [...items, { kind: 'progress', key, text: event.text }];
         case 'permission':
@@ -206,15 +217,8 @@ function withEvent(items: readonly FeedItem[], event: AgentEvent): readonly Feed
             return [...settlePermissions(items), { kind: 'turn-end', key: `e${event.seq}`, reason: event.reason }];
         case 'status':
             return withStatus(items, event);
-        case 'queued':
-        case 'unqueued':
-            // The line of messages is kept apart from the feed: see withLine.
-            return items;
         case 'delegation':
             return withDelegation(items, event);
-        case 'cancel-delegation':
-            // The card of the task shows what came of it.
-            return items;
         default:
             return withItem(items, event);
     }
