@@ -72,8 +72,9 @@ function BroadcastComposer({ targets, deliveries, onSent }: { readonly targets: 
         <Composer
             label="Message to all agents"
             placeholder="Message the fleet…"
-            submitLabel={`Send to ${targets.length} agent${targets.length === 1 ? '' : 's'}`}
+            submitLabel="Send"
             disabled={targets.length === 0}
+            state={<span className="badge composer-count">{targets.length} agent{targets.length === 1 ? '' : 's'} selected</span>}
             onSend={async (text) => {
                 const after = deliveries.length;
                 const answer = await api.broadcast(text, targets.map((agent) => agent.id));
