@@ -6,6 +6,8 @@ import type { AgentSummary } from '../src/dashboard-protocol.js';
 import { printAgents } from '../src/run.js';
 import { fleetReducer, initialState } from '../web/src/fleet-state.js';
 import { healthFacts, poorText } from '../web/src/health.js';
+import { en } from '../web/src/i18n/en.js';
+import { ru } from '../web/src/i18n/ru.js';
 const START = Date.parse('2026-01-01T10:00:00.000Z');
 /** A tracker on a clock the test moves by hand. */
 function tracked(quietMs = 1_000) {
@@ -133,17 +135,25 @@ describe('connection health: in words', () => {
             upSince: '2026-01-01T09:58:00.000Z',
             poor: []
         };
-        deepStrictEqual(healthFacts(health, START), [
-            { label: 'latency', value: '38 ms' },
-            { label: 'reconnects', value: '2 · 1 in the last hour · last 2 min 0 s ago' },
-            { label: 'last activity', value: '5 s ago' },
-            { label: 'tunnel up', value: '2 min 0 s' }
+        deepStrictEqual(healthFacts(health, START, en), [
+            { key: 'latency', label: 'latency', value: '38 ms' },
+            { key: 'reconnects', label: 'reconnects', value: '2 · 1 in the last hour · last 2 min 0 s ago' },
+            { key: 'last activity', label: 'last activity', value: '5 s ago' },
+            { key: 'tunnel up', label: 'tunnel up', value: '2 min 0 s' }
         ]);
-        strictEqual(poorText(health), undefined);
-        strictEqual(poorText({ ...health, poor: ['latency 1500 ms'] }), 'Poor connection: latency 1500 ms');
+        strictEqual(poorText(health, en), undefined);
+        strictEqual(poorText({ ...health, latencyMs: 1_500, poor: ['latency 1500 ms'] }, en), 'Poor connection: latency 1,500 ms');
+        strictEqual(poorText({ ...health, poor: ['latency 1500 ms'] }, en), 'Poor connection: latency 1500 ms', 'what the server says, when the numbers do not tell');
+    });
+    it('says the facts of a connection in the language of the page', () => {
+        const health: ConnectionHealth = { latencyMs: 1_200, reconnects: 4, reconnectsLastHour: 3, upSince: '2026-01-01T09:00:00.000Z', poor: ['3 reconnects in the last hour', 'latency 1200 ms'] };
+        deepStrictEqual(healthFacts(health, START, ru).map((fact) => `${fact.label} ${fact.value}`), [
+            'задержка 1\u00a0200 мс', 'переподключения 4 · 3 за последний час', 'активность пока не было', 'туннель работает 1 ч 0 мин'
+        ]);
+        strictEqual(poorText(health, ru), 'Плохое соединение: 3 переподключения за последний час, задержка 1\u00a0200 мс');
     });
     it('says what is not known yet, and a tunnel that is down', () => {
-        const facts = healthFacts({ reconnects: 0, reconnectsLastHour: 0, poor: [] }, START);
+        const facts = healthFacts({ reconnects: 0, reconnectsLastHour: 0, poor: [] }, START, en);
         deepStrictEqual(facts.map((fact) => fact.value), ['not measured yet', '0 · 0 in the last hour', 'none yet', 'down']);
     });
 });

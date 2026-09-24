@@ -3,6 +3,7 @@
  * laid out in their folders, and when each was changed, in words.
  */
 import type { MemoryNoteSummary } from '../../src/dashboard-protocol.js';
+import type { Messages } from './i18n/en.js';
 /** A folder of the bank: its notes, then the folders in it, both by name. */
 type MemoryFolder = {
     readonly name: string;
@@ -35,23 +36,23 @@ function memoryTree(notes: readonly MemoryNoteSummary[]): MemoryFolder {
     return sortFolder(root);
 }
 /** How long ago a note was changed, in words: `just now`, `5 min ago`, `3 h ago`, `yesterday`, `4 days ago`, or the date. */
-function changedAgo(at: number, now: number): string {
+function changedAgo(at: number, now: number, t: Messages): string {
     const minutes = Math.floor((now - at) / 60_000);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
     if (minutes < 1) {
-        return 'just now';
+        return t.memory.justNow;
     }
     if (minutes < 60) {
-        return `${minutes} min ago`;
+        return t.memory.minutesAgo(minutes);
     }
-    const hours = Math.floor(minutes / 60);
     if (hours < 24) {
-        return `${hours} h ago`;
+        return t.memory.hoursAgo(hours);
     }
-    const days = Math.floor(hours / 24);
     if (days < 7) {
-        return days === 1 ? 'yesterday' : `${days} days ago`;
+        return days === 1 ? t.memory.yesterday : t.memory.daysAgo(days);
     }
-    return new Date(at).toISOString().slice(0, 10);
+    return t.memory.date(at);
 }
 /** The note to show first: the home note of the bank when it has one, else the first at its top. */
 function firstNote(notes: readonly MemoryNoteSummary[]): MemoryNoteSummary | undefined {

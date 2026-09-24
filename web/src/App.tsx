@@ -8,6 +8,7 @@ import { Logo } from './components/Logo.js';
 import { SettingsPanel } from './components/SettingsPanel.js';
 import { Sidebar } from './components/Sidebar.js';
 import { useFleet } from './connection.js';
+import { useT } from './i18n/I18n.js';
 import { conversations as conversationsOf, pairOf } from './conversations.js';
 import { quotedMessage } from './feed.js';
 import type { AgentFeed } from './feed.js';
@@ -35,16 +36,11 @@ function useTab(): [string, (tab: string) => void] {
         window.location.hash = `/${encodeURIComponent(next)}`;
     }];
 }
-const LINK_TEXT: Readonly<Record<Link, string>> = {
-    connecting: 'Connecting…',
-    open: 'Connected',
-    closed: 'Connection lost, reconnecting…',
-    gone: 'flotti has stopped'
-};
 /** Offered while the browser has not been told yes or no; a refusal is the person's to undo in the browser. */
 function NotifyButton({ permission, onAsk }: { readonly permission: Permission; readonly onAsk: () => void }) {
+    const t = useT();
     return permission === 'default'
-        ? <button type="button" className="btn btn-sm notify" onClick={onAsk} title="A notification when an agent waits for you and flotti is out of sight">Notify me</button>
+        ? <button type="button" className="btn btn-sm notify" onClick={onAsk} title={t.topbar.notifyHint}>{t.topbar.notify}</button>
         : null;
 }
 /** What the open tab has shown: the last event of an agent, or how many messages of a conversation. */
@@ -93,7 +89,7 @@ function isPanelTab(tab: string, pair: unknown): boolean {
 function useAppModel() {
     const [state, dispatch] = useFleet();
     const [tab, setTab] = useTab();
-    const attention = useAttention(state, setTab);
+    const attention = useAttention(state, setTab, useT());
     const colors = useAgentColors(state.agents.map((summary) => summary.id));
     const conversations = useConversations(state, tab);
     const agent = state.agents.find((candidate) => candidate.id === tab) ?? (isPanelTab(tab, conversations.pair) ? undefined : state.agents[0]);
@@ -105,12 +101,13 @@ function useAppModel() {
 }
 type AppModel = ReturnType<typeof useAppModel>;
 function Topbar({ attention, link }: { readonly attention: ReturnType<typeof useAttention>; readonly link: Link }) {
+    const t = useT();
     return (
         <header className="topbar">
             <Logo />
             <span className="topbar-side">
                 <NotifyButton permission={attention.permission} onAsk={attention.askPermission} />
-                <span className={`link link-${link}`} role="status">{LINK_TEXT[link]}</span>
+                <span className={`link link-${link}`} role="status">{t.link[link]}</span>
             </span>
         </header>
     );

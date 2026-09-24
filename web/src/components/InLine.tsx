@@ -3,6 +3,8 @@ import type { AgentStatus } from '../../../src/agent-events.js';
 import type { FeedItem, MessageItem, QueuedMessage } from '../feed.js';
 import { MessageBody } from './Message.js';
 import type { MessageProps } from './Message.js';
+import { useT } from '../i18n/I18n.js';
+import { errorText } from '../i18n/errors.js';
 /** What the messages of the line can do: be taken back, and — dropped ones — be sent again. */
 type LineActions = {
     /** Takes the message out of the line; rejects saying why it could not. */
@@ -11,12 +13,6 @@ type LineActions = {
     readonly onSendAgain: (item: FeedItem & { kind: 'undelivered' }) => Promise<void>;
 };
 type Shared = Pick<MessageProps, 'agentId' | 'agents' | 'colors' | 'actions'>;
-/** 1st, 2nd, 3rd, 4th … 11th, 12th, 13th … 21st. */
-function ordinal(n: number): string {
-    const tens = n % 100;
-    const suffix = tens >= 11 && tens <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th';
-    return `${n}${suffix}`;
-}
 /** A message of the line as the body of a message shows it: its quote, words and what it forwards. */
 function asMessage(queued: Omit<QueuedMessage, 'seq'>, seq: number): MessageItem {
     return {
@@ -39,6 +35,7 @@ function nameOf(shared: Shared, id: string): string {
 function usePending(): { pending: boolean; error: string | undefined; run: (action: () => Promise<void>) => void } {
     const [pending, setPending] = useState(false);
     const [error, setError] = useState<string>();
+    const t = useT();
     const run = (action: () => Promise<void>): void => {
         setPending(true);
         setError(undefined);
@@ -46,7 +43,7 @@ function usePending(): { pending: boolean; error: string | undefined; run: (acti
             () => setPending(false),
             (reason: unknown) => {
                 setPending(false);
-                setError(reason instanceof Error ? reason.message : String(reason));
+                setError(errorText(reason, t));
             }
         );
     };
@@ -54,16 +51,17 @@ function usePending(): { pending: boolean; error: string | undefined; run: (acti
 }
 /** Takes the message back; says so while the server answers. */
 function WithdrawButton({ place, pending, onClick }: { readonly place: number; readonly pending: boolean; readonly onClick: () => void }) {
+    const t = useT();
     return (
         <button
             type="button"
             className="btn btn-ghost btn-xs queue-cancel"
             disabled={pending}
             aria-busy={pending}
-            aria-label={pending ? undefined : `Cancel queued message ${place}`}
+            aria-label={pending ? undefined : t.line.cancelLabel(place)}
             onClick={onClick}
         >
-            {pending ? 'Cancelling…' : '✕ cancel'}
+            {pending ? t.line.cancelling : t.line.cancel}
         </button>
     );
 }
@@ -76,12 +74,12 @@ function QueuedEnvelope({ queued, place, onWithdraw, ...shared }: Shared & {
     readonly onWithdraw: LineActions['onWithdraw'];
 }) {
     const { pending, error, run } = usePending();
-    const from = queued.from === undefined ? '' : ` · from ${nameOf(shared, queued.from)}`;
+    const { line } = useT();
     return (
         <div className="message-row message-row-user" data-queued={queued.messageId}>
             <div className="item message message-queued">
                 <div className="envelope-bar">
-                    <span>In line · {ordinal(place)}{from}</span>
+                    <span>{line.place} · {line.ordinal(place)}{queued.from === undefined ? '' : ` · ${line.from(nameOf(shared, queued.from))}`}</span>
                     <WithdrawButton place={place} pending={pending} onClick={() => run(() => onWithdraw(queued.messageId))} />
                 </div>
                 <div className="envelope-body"><MessageBody item={asMessage(queued, queued.seq)} {...shared} /></div>
@@ -100,15 +98,16 @@ type NextUpProps = Shared & {
     readonly onWithdraw: LineActions['onWithdraw'];
 };
 function NextUp({ queue, status, onWithdraw, ...shared }: NextUpProps) {
+    const t = useT();
     if (queue.length === 0) {
         return null;
     }
     const busy = status === 'working' || status === 'waiting';
     return (
-        <div className="next-up" role="group" aria-label="Next up">
+        <div className="next-up" role="group" aria-label={t.line.nextUp}>
             <div className="next-up-head">
-                <span>Next up · {queue.length} in line</span>
-                <span>{busy ? 'after the current turn' : 'once the agent is ready'}</span>
+                <span>{t.line.nextUp} · {t.common.inLine(queue.length)}</span>
+                <span>{busy ? t.line.afterTurn : t.line.onceReady}</span>
             </div>
             {queue.map((queued, index) => (
                 <QueuedEnvelope key={queued.messageId} queued={queued} place={index + 1} onWithdraw={onWithdraw} {...shared} />
@@ -121,11 +120,12 @@ function DroppedLine({ item, onSendAgain }: { readonly item: FeedItem & { kind: 
     const { pending, error, run } = usePending();
     // A message of another agent is that agent's to send again, not the person's.
     const again = item.from === undefined && !item.resent;
+    const t = useT();
     return (
         <>
             <div className="dropped-line">
-                <span>Not delivered: {item.reason}{item.resent ? ' · sent again' : ''}</span>
-                {again ? <button type="button" className="btn btn-xs" disabled={pending} aria-busy={pending} onClick={() => run(() => onSendAgain(item))}>{pending ? 'Sending…' : 'Send again'}</button> : null}
+                <span>{t.line.notDelivered(item.reason)}{item.resent ? ` · ${t.line.sentAgain}` : ''}</span>
+                {again ? <button type="button" className="btn btn-xs" disabled={pending} aria-busy={pending} onClick={() => run(() => onSendAgain(item))}>{pending ? t.line.sending : t.line.sendAgain}</button> : null}
             </div>
             <ErrorNote error={error} />
         </>
@@ -136,15 +136,16 @@ function Undelivered({ item, onSendAgain, ...shared }: Shared & {
     readonly item: FeedItem & { kind: 'undelivered' };
     readonly onSendAgain: LineActions['onSendAgain'];
 }) {
+    const t = useT();
     return (
         <div className="message-row message-row-user" data-undelivered={item.messageId}>
             <div className="item message message-user message-dropped">
-                <div className="item-label">{item.from === undefined ? 'You' : `From ${nameOf(shared, item.from)}`}</div>
+                <div className="item-label">{item.from === undefined ? t.common.you : t.line.fromName(nameOf(shared, item.from))}</div>
                 <MessageBody item={asMessage(item, 0)} {...shared} />
             </div>
             <DroppedLine item={item} onSendAgain={onSendAgain} />
         </div>
     );
 }
-export { NextUp, Undelivered, ordinal };
+export { NextUp, Undelivered };
 export type { LineActions };

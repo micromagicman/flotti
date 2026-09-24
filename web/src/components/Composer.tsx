@@ -1,5 +1,8 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent, ReactNode, RefObject } from 'react';
+import { useT } from '../i18n/I18n.js';
+import { errorText } from '../i18n/errors.js';
+import type { Messages } from '../i18n/en.js';
 type ComposerProps = {
     readonly label: string;
     readonly placeholder: string;
@@ -25,9 +28,10 @@ type Setters = {
     readonly setText: (text: string) => void;
     readonly setSending: (sending: boolean) => void;
     readonly setNote: (note: Note | undefined) => void;
+    readonly t: Messages;
 };
 /** Hands the text over; on success the field clears, and either outcome may leave a note. */
-function deliver(text: string, onSend: ComposerProps['onSend'], { setText, setSending, setNote }: Setters): void {
+function deliver(text: string, onSend: ComposerProps['onSend'], { setText, setSending, setNote, t }: Setters): void {
     setSending(true);
     setNote(undefined);
     onSend(text).then(
@@ -35,7 +39,7 @@ function deliver(text: string, onSend: ComposerProps['onSend'], { setText, setSe
             setText('');
             setNote(result === undefined ? undefined : { text: result, error: false });
         },
-        (error: unknown) => setNote({ text: error instanceof Error ? error.message : String(error), error: true })
+        (error: unknown) => setNote({ text: errorText(error, t), error: true })
     ).finally(() => setSending(false));
 }
 /** Enter sends; Shift+Enter and a key that finishes an IME composition do not. Escape calls `onEscape`. */
@@ -54,12 +58,13 @@ function useComposer(onSend: ComposerProps['onSend'], disabled: boolean, onEscap
     const [text, setText] = useState('');
     const [sending, setSending] = useState(false);
     const [note, setNote] = useState<Note>();
+    const t = useT();
     const submit = (event?: FormEvent): void => {
         event?.preventDefault();
         if (text.trim() === '' || sending || disabled) {
             return;
         }
-        deliver(text, onSend, { setText, setSending, setNote });
+        deliver(text, onSend, { setText, setSending, setNote, t });
     };
     return { text, setText, sending, note, submit, onKeyDown: sendOnEnter(submit, onEscape) };
 }
@@ -94,11 +99,12 @@ function SendIcon() {
 }
 /** The keys, always in sight: the field says the same to a screen reader. */
 function KeysHint({ id }: { readonly id: string }) {
+    const t = useT();
     return (
         <span className="composer-hint" id={id}>
-            <span><kbd>Enter</kbd> to send</span>
+            <span><kbd>Enter</kbd> {t.composer.toSend}</span>
             <span aria-hidden="true"> · </span>
-            <span><kbd>Shift</kbd>+<kbd>Enter</kbd> new line</span>
+            <span><kbd>Shift</kbd>+<kbd>Enter</kbd> {t.composer.newLine}</span>
         </span>
     );
 }

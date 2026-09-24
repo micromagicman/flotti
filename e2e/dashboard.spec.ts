@@ -597,6 +597,33 @@ test('a page opened later gets the history', async ({ page }) => {
     await expect(feed(page, 'claude')).toContainText('you said: hello claude');
     await expect(feed(page, 'claude')).toContainText('you said: ping');
 });
+test('the language is picked in the settings: the page speaks it at once, and after a reload', async ({ page }) => {
+    await page.goto(`${url}#/_settings`);
+    await page.getByRole('combobox', { name: 'Language of the dashboard' }).selectOption('ru');
+    await expect(page.getByRole('heading', { name: 'Настройки флота' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: /^Все агенты/ })).toBeVisible();
+    await expect(tab(page, 'claude').locator('[data-status]')).toHaveText(/^(запускается|свободен|работает|ждёт вас|ошибка|остановлен)/);
+    expect(await page.evaluate(() => document.documentElement.lang)).toBe('ru');
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Настройки флота' })).toBeVisible();
+    await tab(page, 'claude').click();
+    await expect(page.getByRole('log', { name: 'Вывод claude' })).toContainText('you said: hello claude');
+    await expect(page.getByRole('textbox', { name: 'Сообщение для claude' })).toBeVisible();
+    await expect(page.getByRole('group', { name: 'Вид' }).getByRole('button', { name: 'Память' })).toBeVisible();
+    await page.getByRole('tab', { name: /^Настройки/ }).click();
+    await page.getByRole('combobox', { name: 'Язык дашборда' }).selectOption('en');
+    await expect(page.getByRole('heading', { name: 'Fleet settings' })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.lang)).toBe('en');
+});
+test.describe('in a browser set to Russian', () => {
+    test.use({ locale: 'ru-RU' });
+    test('the dashboard opens in Russian until another language is picked', async ({ page }) => {
+        await page.goto(`${url}#/all`);
+        await expect(page.getByRole('tab', { name: /^Все агенты/ })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Сообщение всем агентам' })).toBeVisible();
+        await expect(page.getByRole('combobox', { name: 'Язык дашборда' })).toHaveCount(0);
+    });
+});
 const settingsRow = (page: Page, id: string) => page.getByRole('list', { name: 'Agents' }).locator(`[data-agent="${id}"]`);
 const field = (page: Page, label: string) => page.getByLabel(label, { exact: true });
 test('Telegram set up in the settings: a wait is one message, the answer deletes it, the token never comes back', async ({ page }) => {

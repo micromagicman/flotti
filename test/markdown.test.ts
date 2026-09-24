@@ -3,6 +3,8 @@ import { describe, it } from 'node:test';
 import { parseInline, parseMarkdown, plainText } from '../web/src/markdown.js';
 import { changedAgo, firstNote, memoryTree } from '../web/src/memory.js';
 import type { MemoryFolder } from '../web/src/memory.js';
+import { en } from '../web/src/i18n/en.js';
+import { ru } from '../web/src/i18n/ru.js';
 describe('the markdown of a note', () => {
     it('cuts inline markup into pieces: code, strong, emphasis, links and wikilinks', () => {
         deepStrictEqual(parseInline('Run `npm test`, **then [[Deploy checklist|the list]]**, *carefully*: https://example.com'), [
@@ -55,8 +57,12 @@ describe('the notes in the Memory view', () => {
     });
     it('says in words how long ago a note changed', () => {
         const now = Date.UTC(2026, 8, 24, 12);
-        deepStrictEqual([0, 5, 180, 60 * 30, 60 * 72, 60 * 24 * 30].map((minutes) => changedAgo(now - minutes * 60_000, now)), [
-            'just now', '5 min ago', '3 h ago', 'yesterday', '3 days ago', '2026-08-25'
+        const minutes = [0, 5, 180, 60 * 30, 60 * 72, 60 * 24 * 30];
+        deepStrictEqual(minutes.map((ago) => changedAgo(now - ago * 60_000, now, en)), [
+            'just now', '5 min ago', '3 h ago', 'yesterday', '3 days ago', 'Aug 25, 2026'
+        ]);
+        deepStrictEqual(minutes.map((ago) => changedAgo(now - ago * 60_000, now, ru)), [
+            'только что', '5 мин назад', '3 ч назад', 'вчера', '3 дня назад', '25 авг. 2026 г.'
         ]);
     });
 });

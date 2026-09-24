@@ -33,11 +33,11 @@ async function currentSubscription(): Promise<PushSubscription | null> {
  * Asks the person, then subscribes this browser with the key of flotti. A
  * subscription made with another key — of an earlier flotti — is replaced.
  *
- * @throws Error when the person or the browser says no.
+ * @throws Error, saying `refused`, when the person or the browser says no.
  */
-async function subscribePush(publicKey: string): Promise<PushSubscriptionJSON> {
+async function subscribePush(publicKey: string, refused: string): Promise<PushSubscriptionJSON> {
     if (await Notification.requestPermission() !== 'granted') {
-        throw new Error('The browser was not allowed to show notifications.');
+        throw new Error(refused);
     }
     const worker = await registration();
     const key = keyBytes(publicKey);
