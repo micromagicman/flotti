@@ -68,6 +68,37 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   up to date without a reload. A poor connection — 3 or more reconnects in an hour, or a latency of
   1 s or more — turns red, says why and marks the tab. `flotti status` shows the latency and the
   reconnects too. No secret goes into the health (#53).
+
+### Changed
+
+- **A new message field in the chat.** The field is a card in the soft capsules: the reply it answers
+  at the top, the text growing with what you write up to ten lines and scrolling after, and a bar at the
+  foot with the status of the agent and its line ("working · 2 in line"), the keys (Enter to send,
+  Shift+Enter for a new line) and **Send** with an arrow. In a broadcast the bar counts the agents it
+  goes to ("2 agents selected"), and its button is **Send** as well. Both themes, and narrow screens,
+  where the keys take a line of their own (#77).
+- **One look for the controls of the dashboard.** Buttons, fields, checkboxes, status badges, tabs and
+  cards follow one system of soft capsules, its colours, sizes and corners kept as tokens in one place:
+  tinted buttons with the main one in blue, filled fields with a visible edge, a focus ring on every
+  control, a spinner while a button waits. The main button in the dark theme, the amber "waiting for
+  you" and the edges of fields now pass WCAG AA contrast (#61).
+
+### Fixed
+
+- **`npx` and `codex` start on Windows.** A local agent whose `command` is an npm script — `npx`,
+  `codex`, anything installed as a `.cmd` — is found through `PATH` and `PATHEXT` the way the shell
+  finds it and started through `cmd.exe`, its arguments quoted so that spaces, quotes and `&`, `%`,
+  `^`, `|` reach the agent unchanged; an `.exe` starts directly, as before. Stop and restart end
+  `cmd.exe` with the whole tree under it, and a command found nowhere still says `command not found`.
+  The unit tests run on Windows in CI too (#57).
+
+## [0.2.0]
+
+A fleet that lives on: agents that talk to each other and speak first, remote hosts over SSH, a chat
+history that survives restarts, and a global install with `flotti start`.
+
+### Added
+
 - **Reply and forward in the chat of an agent.** Any message of a tab can be answered with a reply —
   the agent gets the quoted message above the answer, and the tab shows the quote as a link back to it
   — or forwarded to another agent of the fleet, whose tab shows it under a bar "FORWARDED · AUTHOR" in
@@ -102,30 +133,18 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   stands on the person's side as an envelope with a bar "SENDER → RECEIVER" in the sender's colour;
   the sender's tab shows the same envelope, and a line when it could not be delivered. Each agent gets
   a colour of its own, picked at random and kept (#23).
+- **Waiting agents get attention.** A tab whose agent waits for an answer is highlighted, the page
+  title counts the waiting agents, and a browser notification tells when one starts to wait (#27).
+- **The harness in the header.** The header of an agent's chat names its harness — `claude`, `codex`
+  — or says it is unknown (#24).
+- **CI.** Checks run on pull requests and on pushes to `main` and `develop`; a `v*` tag publishes the
+  package to npm (#25).
 
 ### Changed
 
-- **A new message field in the chat.** The field is a card in the soft capsules: the reply it answers
-  at the top, the text growing with what you write up to ten lines and scrolling after, and a bar at the
-  foot with the status of the agent and its line ("working · 2 in line"), the keys (Enter to send,
-  Shift+Enter for a new line) and **Send** with an arrow. In a broadcast the bar counts the agents it
-  goes to ("2 agents selected"), and its button is **Send** as well. Both themes, and narrow screens,
-  where the keys take a line of their own (#77).
-- **One look for the controls of the dashboard.** Buttons, fields, checkboxes, status badges, tabs and
-  cards follow one system of soft capsules, its colours, sizes and corners kept as tokens in one place:
-  tinted buttons with the main one in blue, filled fields with a visible edge, a focus ring on every
-  control, a spinner while a button waits. The main button in the dark theme, the amber "waiting for
-  you" and the edges of fields now pass WCAG AA contrast (#61).
+- The linter limits functions in `src` and `web` to 20 lines; tests are exempt (#39).
 
-### Fixed
-
-- **`npx` and `codex` start on Windows.** A local agent whose `command` is an npm script — `npx`,
-  `codex`, anything installed as a `.cmd` — is found through `PATH` and `PATHEXT` the way the shell
-  finds it and started through `cmd.exe`, its arguments quoted so that spaces, quotes and `&`, `%`,
-  `^`, `|` reach the agent unchanged; an `.exe` starts directly, as before. Stop and restart end
-  `cmd.exe` with the whole tree under it, and a command found nowhere still says `command not found`.
-  The unit tests run on Windows in CI too (#57).
- — MVP
+## [0.1.0] — MVP
 
 The first release: a fleet of AI agents and one dashboard to work with them.
 
@@ -161,4 +180,5 @@ The first release: a fleet of AI agents and one dashboard to work with them.
   ([micromagicman/eva#266](https://github.com/micromagicman/eva/issues/266)).
 - The A2A adapter of Cutie, on the same contract as Eva's (owners/quanthread-ai-hub#218, !194).
 
+[0.2.0]: https://github.com/micromagicman/flotti/releases/tag/v0.2.0
 [0.1.0]: https://github.com/micromagicman/flotti/releases/tag/v0.1.0
