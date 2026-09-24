@@ -141,7 +141,7 @@ function useMessaging(agentId: string, quotes: AgentPanelProps['quotes']) {
         });
     return { reply, setReply, actions, send };
 }
-function AgentComposer({ agent, agents, colors, messaging }: Pick<AgentPanelProps, 'agent' | 'agents' | 'colors'> & {
+function AgentComposer({ agent, feed, agents, colors, messaging }: Pick<AgentPanelProps, 'agent' | 'feed' | 'agents' | 'colors'> & {
     readonly messaging: ReturnType<typeof useMessaging>;
 }) {
     const { reply, setReply, send } = messaging;
@@ -154,6 +154,7 @@ function AgentComposer({ agent, agents, colors, messaging }: Pick<AgentPanelProp
             onSend={send}
             above={reply === undefined ? undefined : { key: `${reply.agentId}/${reply.messageId}`, node: <ReplyPreview quote={reply} agents={agents} colors={colors} onCancel={cancel} /> }}
             onEscape={reply === undefined ? undefined : cancel}
+            state={<StatusBadge status={feed.status} detail={feed.queue.length === 0 ? undefined : `${feed.queue.length} in line`} />}
         />
     );
 }
@@ -178,7 +179,7 @@ function AgentPanel({ agent, feed, agents, colors, dispatch, quotes, jump }: Age
             <AgentHeader agent={agent} feed={feed} color={colors[agent.id]} view={view} onView={setView} />
             <div className="chat-view" hidden={view !== 'chat'}>
                 <Feed items={feed.items} queue={feed.queue} status={feed.status} line={lineActions(agent.id)} agentId={agent.id} agentName={agent.name} agents={agents} colors={colors} onAnswer={answer} onAdminAnswer={answerAdmin} actions={messaging.actions} jump={jump} />
-                <AgentComposer agent={agent} agents={agents} colors={colors} messaging={messaging} />
+                <AgentComposer agent={agent} feed={feed} agents={agents} colors={colors} messaging={messaging} />
             </div>
             {view === 'memory' ? <MemoryView agentId={agent.id} /> : null}
         </section>

@@ -98,6 +98,12 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Changed
 
+- **A new message field in the chat.** The field is a card in the soft capsules: the reply it answers
+  at the top, the text growing with what you write up to ten lines and scrolling after, and a bar at the
+  foot with the status of the agent and its line ("working · 2 in line"), the keys (Enter to send,
+  Shift+Enter for a new line) and **Send** with an arrow. In a broadcast the bar counts the agents it
+  goes to ("2 agents selected"), and its button is **Send** as well. Both themes, and narrow screens,
+  where the keys take a line of their own (#77).
 - **One look for the controls of the dashboard.** Buttons, fields, checkboxes, status badges, tabs and
   cards follow one system of soft capsules, its colours, sizes and corners kept as tokens in one place:
   tinted buttons with the main one in blue, filled fields with a visible edge, a focus ring on every

@@ -394,8 +394,9 @@ test('a broadcast reaches every agent picked, and each answers in its own tab', 
     await tab(page, 'All agents').click();
     await page.getByRole('checkbox', { name: 'codex' }).uncheck();
     const field = page.getByRole('textbox', { name: 'Message to all agents' });
+    await expect(page.locator('.composer-count')).toHaveText('2 agents selected');
     await field.fill('ping');
-    await page.getByRole('button', { name: 'Send to 2 agents' }).click();
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
     const deliveries = page.getByRole('list', { name: 'Delivery' }).getByRole('listitem');
     await expect(deliveries).toHaveText([/claude\s*delivered/, /relay\s*delivered/]);
     await tab(page, 'claude').click();
@@ -404,6 +405,57 @@ test('a broadcast reaches every agent picked, and each answers in its own tab', 
     await expect(feed(page, 'relay')).toContainText('echo: ping');
     await tab(page, 'codex').click();
     await expect(feed(page, 'codex')).not.toContainText('ping');
+});
+/** The composer of the tab of `name`: the card with the field, the chip of the status, the keys and Send. */
+const composer = (page: Page, name: string) => page.locator('.composer').filter({ has: page.getByRole('textbox', { name: `Message to ${name}` }) });
+test('the composer: Enter sends, Shift+Enter makes a new line, the field grows with the text and then scrolls', async ({ page }) => {
+    await page.goto(url);
+    await tab(page, 'claude').click();
+    const card = composer(page, 'claude');
+    const field = card.getByRole('textbox');
+    await expect(card.locator('[data-status]')).toHaveAttribute('data-status', 'idle');
+    await expect(card).toContainText('Enter to send');
+    await expect(card).toContainText('Shift+Enter new line');
+    await expect(field).toHaveAccessibleDescription(/Enter to send/);
+    const send = card.getByRole('button', { name: 'Send', exact: true });
+    await expect(send).toBeDisabled();
+    const low = (await field.boundingBox())?.height ?? 0;
+    await field.fill('first line');
+    await field.press('Shift+Enter');
+    await field.pressSequentially('second line');
+    await expect(field).toHaveValue('first line\nsecond line');
+    for (let line = 3; line <= 6; line++) {
+        await field.press('Shift+Enter');
+        await field.pressSequentially(`line ${line}`);
+    }
+    const grown = (await field.boundingBox())?.height ?? 0;
+    expect(grown).toBeGreaterThan(low + 40);
+    await field.fill(Array.from({ length: 30 }, (_, index) => `line ${index + 1}`).join('\n'));
+    const tall = (await field.boundingBox())?.height ?? 0;
+    expect(tall).toBeLessThan(320);
+    expect(await field.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    await field.fill('first line');
+    await field.press('Shift+Enter');
+    await field.pressSequentially('second line');
+    await field.press('Enter');
+    await expect(field).toHaveValue('');
+    await expect(feed(page, 'claude')).toContainText(/you said: first line\s*second line/);
+    expect(Math.abs(((await field.boundingBox())?.height ?? 0) - low)).toBeLessThan(2);
+});
+test('the composer shows the status of the agent and its line, on a narrow screen as well', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(url);
+    await say(page, 'codex', 'wait');
+    const card = composer(page, 'codex');
+    await expect(card.locator('[data-status]')).toHaveAttribute('data-status', 'working');
+    await sayInLine(page, 'codex', 'queued from a phone');
+    await expect(card.locator('[data-status]')).toContainText(/working\s*· 1 in line/);
+    await expect(card).toContainText('Enter to send');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(feed(page, 'codex')).toContainText('you said: queued from a phone');
+    await expect(card.locator('[data-status]')).toHaveAttribute('data-status', 'idle');
+    await expect(card.locator('[data-status]')).not.toContainText('in line');
 });
 /** Sends a message the agent is too busy to take: the field clears once the dashboard says it waits in line. */
 async function sayInLine(page: Page, name: string, text: string): Promise<void> {
@@ -441,7 +493,7 @@ test('a broadcast to busy agents waits in line in the tab of each', async ({ pag
     await tab(page, 'All agents').click();
     await page.getByRole('checkbox', { name: 'relay' }).uncheck();
     await page.getByRole('textbox', { name: 'Message to all agents' }).fill('when you can');
-    await page.getByRole('button', { name: 'Send to 2 agents' }).click();
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
     for (const name of ['claude', 'codex']) {
         await expect(tab(page, name)).toContainText('1 in line');
         await tab(page, name).click();
