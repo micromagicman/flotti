@@ -4,6 +4,7 @@ import type { AgentSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import { forwardOf, quoteOf } from '../feed.js';
 import type { MessageItem } from '../feed.js';
+import { LinkedText } from './LinkedText.js';
 /** What a message can do besides being read: be answered, sent on, and lead to the message it answers. */
 type MessageActions = {
     readonly onReply: (quote: Quote) => void;
@@ -35,7 +36,9 @@ function authorName(agents: readonly AgentSummary[], author: string | undefined)
 }
 /**
  * The message a reply answers, above the reply: a link to it while it is in
- * its feed — in this tab or another — and a note once it is gone.
+ * its feed — in this tab or another — and a note once it is gone. The jump is
+ * a button laid over the whole quote, not around it: links of the quoted text
+ * cannot sit inside a button, so they sit above it.
  */
 function QuoteLink({ quote, agents, colors, actions }: { readonly quote: Quote; readonly actions: MessageActions } & Names) {
     const who = authorName(agents, quote.author);
@@ -49,10 +52,11 @@ function QuoteLink({ quote, agents, colors, actions }: { readonly quote: Quote; 
         );
     }
     return (
-        <button type="button" className={className} onClick={() => actions.onOpenQuote(quote)} aria-label={`Reply to ${who}: jump to the message`}>
+        <div className={`${className} quote-link`}>
+            <button type="button" className="quote-jump" onClick={() => actions.onOpenQuote(quote)} aria-label={`Reply to ${who}: jump to the message`} />
             <span className="quote-who">&gt; {who}</span>
-            <span className="quote-text">{quote.text}</span>
-        </button>
+            <span className="quote-text"><LinkedText text={quote.text} /></span>
+        </div>
     );
 }
 /** The message a reply being written answers, above the field; Cancel drops the reply, not the words. */
@@ -62,7 +66,7 @@ function ReplyPreview({ quote, agents, colors, onCancel }: { readonly quote: Quo
         <div className="composer-reply">
             <div className={`quote ${quote.author === undefined ? '' : 'quote-agent'} ${colorOf(colors, quote.author)}`}>
                 <span className="quote-who">&gt; {who}</span>
-                <span className="quote-text">{quote.text}</span>
+                <span className="quote-text"><LinkedText text={quote.text} /></span>
             </div>
             <button type="button" className="message-action" onClick={onCancel} aria-label={`Cancel the reply to ${who}`}>Cancel</button>
         </div>
@@ -77,7 +81,7 @@ function ForwardedBlock({ forwarded, agents, colors }: { readonly forwarded: For
                 <span aria-hidden="true">forwarded · {who}</span>
                 <span className="visually-hidden">Forwarded from {who}</span>
             </div>
-            <div className="text">{forwarded.text}</div>
+            <div className="text"><LinkedText text={forwarded.text} /></div>
         </div>
     );
 }
@@ -86,7 +90,7 @@ function MessageBody({ item, agents, colors, actions }: Omit<MessageProps, 'agen
     return (
         <>
             {item.replyTo === undefined ? null : <QuoteLink quote={item.replyTo} agents={agents} colors={colors} actions={actions} />}
-            {item.text === '' && item.forwarded !== undefined ? null : <div className="text">{item.text}</div>}
+            {item.text === '' && item.forwarded !== undefined ? null : <div className="text"><LinkedText text={item.text} /></div>}
             {item.forwarded === undefined ? null : <ForwardedBlock forwarded={item.forwarded} agents={agents} colors={colors} />}
         </>
     );

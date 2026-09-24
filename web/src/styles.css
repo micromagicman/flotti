@@ -152,6 +152,10 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .item { max-width: 900px; }
 .item-label { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
 .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A link in a message (#47): in the accent of the dashboard, underlined so it reads as a link without colour too. */
+.message-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.message-link:hover { text-decoration-thickness: 2px; }
+.message-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
 .message { padding: 8px 12px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); }
 .message-user { background: var(--user); align-self: flex-end; }
 /* A message one agent sent another: an envelope with a bar in the sender's colour (#23). */
@@ -230,9 +234,13 @@ button.forward-target:hover:not(:disabled) { border-color: var(--agent-color); b
     max-width: 100%;
 }
 .quote-agent { --q: var(--agent-color); }
-button.quote:hover:not(:disabled) { border-color: var(--q); background: color-mix(in srgb, var(--q) 16%, transparent); }
-button.quote:active:not(:disabled) { background: color-mix(in srgb, var(--q) 24%, transparent); }
-.quote:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The jump to the quoted message: a button over the whole quote, under its links (#47). */
+.quote-link { position: relative; }
+button.quote-jump { position: absolute; inset: 0; width: 100%; padding: 0; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
+button.quote-jump:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.quote-link:has(> .quote-jump:hover) { background: color-mix(in srgb, var(--q) 16%, transparent); }
+.quote-link:has(> .quote-jump:active) { background: color-mix(in srgb, var(--q) 24%, transparent); }
+.quote-link .message-link { position: relative; z-index: 1; }
 .quote-gone { cursor: default; opacity: .6; }
 /* The colour of the author, toward the text: dark enough on the light panel, light enough on the dark one. */
 .quote-who { display: block; font-weight: 600; color: color-mix(in srgb, var(--q) 70%, var(--text)); }

@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { TaskState } from '@a2a-js/sdk';
 // The compiled helpers of the unit tests: `npm run test:e2e` builds them first.
 import { FakeAgent, agentMessage, said, statusUpdate, task } from '../build-test/test/a2a-fake-server.js';
@@ -182,12 +182,12 @@ test('a reply quotes the message it answers, the agent reads the quote, and the 
     await field.fill('and more');
     await field.press('Enter');
     const reply = messageRow(page, 'codex', 'and more', 'user');
-    const quote = reply.getByRole('button', { name: 'Reply to codex: jump to the message' });
+    const quote = reply.locator('.quote');
     await expect(quote).toContainText('> codex');
     await expect(quote).toContainText('you said: first words');
     await expect(feed(page, 'codex')).toContainText(/you said: In reply to a message from you:\s*> you said: first words\s*and more/);
     await expect(page.getByRole('textbox', { name: 'Message to codex' })).toBeVisible();
-    await quote.click();
+    await quote.getByRole('button', { name: 'Reply to codex: jump to the message' }).click();
     await expect(answer).toHaveClass(/message-found/);
 });
 test('a message forwarded to another agent says who wrote it, in the tab of the receiver', async ({ page }) => {
@@ -202,6 +202,50 @@ test('a message forwarded to another agent says who wrote it, in the tab of the 
     const forwarded = messageRow(page, 'claude', 'forwarded · codex', 'user');
     await expect(forwarded.locator('.fwd')).toContainText('you said: forward me');
     await expect(feed(page, 'claude')).toContainText(/you said: Forwarded from agent "codex":\s*you said: forward me/);
+});
+/** Clicks a link of the chat and waits for the tab it opens; the address it opened, with the tab closed again. */
+async function openLink(page: Page, link: Locator): Promise<string> {
+    await expect(link).toHaveAttribute('target', '_blank');
+    await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    const [opened] = await Promise.all([page.waitForEvent('popup'), link.click()]);
+    await opened.waitForLoadState();
+    const address = opened.url();
+    await opened.close();
+    return address;
+}
+test('links in messages open in a new tab, and markup in a message stays text', async ({ page }) => {
+    await page.goto(url);
+    const address = new URL('/?from=chat', url).href;
+    await say(page, 'codex', `look at ${address}. Or [the guide](${address}) <img src=x onerror="window.markupRan=1">`);
+    const asked = messageRow(page, 'codex', 'look at', 'user');
+    const answer = messageRow(page, 'codex', 'you said: look at');
+    await expect(asked.getByRole('link', { name: address, exact: true })).toBeVisible();
+    expect(await openLink(page, answer.getByRole('link', { name: address, exact: true }))).toBe(address);
+    expect(await openLink(page, asked.getByRole('link', { name: 'the guide' }))).toBe(address);
+    await expect(answer.locator('.text')).toContainText('<img src=x onerror="window.markupRan=1">');
+    await expect(answer.locator('img')).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as { markupRan?: number }).markupRan)).toBeUndefined();
+});
+test('a link opens from the quote of a reply and from a forwarded message', async ({ page }) => {
+    await page.goto(url);
+    const address = new URL('/?from=quote', url).href;
+    await say(page, 'codex', `quote ${address}`);
+    // By its place in the feed: the answer to the reply quotes the same words.
+    const seq = await messageRow(page, 'codex', `you said: quote ${address}`).getAttribute('data-seq');
+    const answer = feed(page, 'codex').locator(`[data-seq="${seq}"]`);
+    await answer.hover();
+    await answer.getByRole('button', { name: 'Reply' }).click();
+    await page.getByRole('textbox', { name: 'Reply to codex' }).fill('seen it');
+    await page.getByRole('textbox', { name: 'Reply to codex' }).press('Enter');
+    const reply = messageRow(page, 'codex', 'seen it', 'user');
+    expect(await openLink(page, reply.locator('.quote').getByRole('link', { name: address }))).toBe(address);
+    await answer.hover();
+    await answer.getByRole('button', { name: 'Forward' }).click();
+    await answer.getByRole('group', { name: 'Forward to' }).getByRole('button', { name: 'claude' }).click();
+    await expect(answer.getByRole('status')).toHaveText('Forwarded to claude');
+    await tab(page, 'claude').click();
+    const forwarded = messageRow(page, 'claude', `you said: quote ${address}`, 'user');
+    expect(await openLink(page, forwarded.locator('.fwd').getByRole('link', { name: address }))).toBe(address);
 });
 test('a broadcast reaches every agent picked, and each answers in its own tab', async ({ page }) => {
     await page.goto(url);
