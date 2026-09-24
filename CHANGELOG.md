@@ -2,6 +2,15 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **The composer and the messages in line span the chat on a wide window.** The card of the message
+  field and the Next up block no longer stop in a 900 px column: they run the width of the feed, and a
+  message in line stands at its right edge, where the messages of the person do. A narrow screen and
+  the broadcast look as before (#95).
+
 ## [0.3.0]
 
 A fleet that works as a team: agents give one another tasks and answer back, their conversations

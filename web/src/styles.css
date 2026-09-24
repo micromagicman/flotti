@@ -543,12 +543,13 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
  * The composer (#77): a card with a bar at its foot, in the soft capsules of
  * #61 — the panel on a soft shadow, the thin edge of a field that holds 3:1,
  * the focus ring of the system around the whole card. The field grows with
- * the text up to ten lines (Composer sets its height), then scrolls.
+ * the text up to ten lines (Composer sets its height), then scrolls. The
+ * card spans the feed above it, whose messages of the person reach its right
+ * edge (#95): no column of its own.
  */
 .composer { flex-shrink: 0; padding: 8px 16px 16px; }
 .composer-card {
     --composer-lines: 10;
-    max-width: 900px;
     display: flex;
     flex-direction: column;
     border-radius: var(--r-card);
@@ -611,7 +612,6 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
 }
 .broadcast { padding: 16px; gap: 12px; overflow-y: auto; }
 .broadcast .composer { padding: 0; }
-.broadcast .composer-card { max-width: none; }
 .targets { margin: 0; border: var(--card-edge); border-radius: var(--r-card); background: var(--panel); box-shadow: var(--card-shadow); display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; }
 /* The legend inside the card, not astride its edge. */
 .targets legend { float: left; width: 100%; padding: 0; margin-bottom: 2px; font-size: 12px; font-weight: 600; }
@@ -705,8 +705,10 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
 /*
  * Messages waiting in line for the agent (#46): after the feed, cut off by a
  * dashed amber line, each an envelope with an amber bar and its place in line.
+ * The block spans the feed, so a message in line stands at its right edge,
+ * where the messages of the person do (#95).
  */
-.next-up { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; border-top: 2px dashed var(--wait); padding-top: 8px; margin-top: 4px; flex-shrink: 0; max-width: 900px; width: 100%; }
+.next-up { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; border-top: 2px dashed var(--wait); padding-top: 8px; margin-top: 4px; flex-shrink: 0; width: 100%; }
 .next-up-head { align-self: stretch; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-family: var(--mono); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: color-mix(in srgb, var(--wait) 75%, var(--text)); }
 .message-queued { padding: 0; overflow: hidden; flex-shrink: 0; border: 1px solid var(--wait); background: color-mix(in srgb, var(--wait) 6%, var(--panel)); }
 .message-queued .envelope-bar { display: flex; justify-content: space-between; gap: 8px; align-items: center; background: color-mix(in srgb, var(--wait) 22%, var(--panel)); color: color-mix(in srgb, var(--wait) 45%, var(--text)); }
