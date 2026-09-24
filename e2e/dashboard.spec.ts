@@ -16,12 +16,15 @@ import { TaskState } from '@a2a-js/sdk';
 // The compiled helpers of the unit tests: `npm run test:e2e` builds them first.
 import { FakeAgent, agentMessage, said, statusUpdate, task } from '../build-test/test/a2a-fake-server.js';
 import { INBOX_EXTENSION } from '../build-test/src/a2a-agent.js';
+import { FakeTelegram } from '../build-test/test/fake-telegram.js';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CLI = join(ROOT, 'build', 'index.js');
 const FAKE_ACP = join(ROOT, 'build-test', 'test', 'fake-acp-agent.js');
 const workspace = mkdtempSync(join(tmpdir(), 'flotti-e2e-'));
 let flotti: ChildProcess | undefined;
 let remote: InstanceType<typeof FakeAgent> | undefined;
+/** A pretend Telegram Bot API: flotti is pointed at it, no real bot or chat is used. */
+let telegram: FakeTelegram | undefined;
 let url = '';
 function localAgent(fleet: string, id: string, adapter?: string): void {
     const directory = join(fleet, 'local', id);
@@ -76,7 +79,7 @@ function startFlotti(fleet: string): Promise<string> {
     // A home of its own: the settings page saves the fleet directory in ~/.flotti/settings.json.
     flotti = spawn(process.execPath, [CLI, 'run', '--fleet', fleet, '--port', '0'], {
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, HOME: workspace, USERPROFILE: workspace }
+        env: { ...process.env, HOME: workspace, USERPROFILE: workspace, FLOTTI_TELEGRAM_API: telegram?.url ?? 'http://127.0.0.1:1' }
     });
     let output = '';
     return new Promise((resolve, reject) => {
@@ -101,6 +104,7 @@ test.beforeAll(async () => {
     localAgent(fleet, 'claude', 'claude-code');
     localAgent(fleet, 'codex', 'codex');
     await remoteAgent(fleet, 'relay');
+    telegram = await FakeTelegram.start();
     url = await startFlotti(fleet);
 });
 test.afterAll(async () => {
@@ -108,6 +112,7 @@ test.afterAll(async () => {
     flotti?.kill('SIGTERM');
     await exited;
     await remote?.close();
+    await telegram?.close();
     rmSync(workspace, { recursive: true, force: true });
 });
 const tab = (page: Page, name: string) => page.getByRole('tab', { name: new RegExp(`^${name}`) });
@@ -452,6 +457,35 @@ test('a page opened later gets the history', async ({ page }) => {
 });
 const settingsRow = (page: Page, id: string) => page.getByRole('list', { name: 'Agents' }).locator(`[data-agent="${id}"]`);
 const field = (page: Page, label: string) => page.getByLabel(label, { exact: true });
+test('Telegram set up in the settings: a wait is one message, the answer deletes it, the token never comes back', async ({ page }) => {
+    const bot = telegram as FakeTelegram;
+    bot.calls.length = 0;
+    await page.goto(`${url}#/_settings`);
+    const section = page.getByRole('form', { name: 'Notifications' });
+    await section.getByLabel('Bot token').fill(bot.token);
+    await section.getByLabel('Chat id').fill('4242');
+    await section.getByRole('checkbox', { name: 'Telegram' }).check();
+    await section.getByRole('button', { name: 'Save' }).click();
+    await expect(section.getByRole('status').filter({ hasText: 'Saved.' })).toBeVisible();
+    await expect(section.getByLabel('Bot token')).toHaveValue('');
+    await expect(section.getByLabel('Bot token')).toHaveAttribute('placeholder', 'saved');
+    const shown = await page.evaluate(() => fetch('/api/notifications').then((response) => response.text()));
+    expect(shown).not.toContain(bot.token);
+    await section.getByRole('button', { name: 'Send a test' }).click();
+    await expect(section.getByRole('status').filter({ hasText: 'telegram: sent' })).toBeVisible();
+    await say(page, 'codex', 'permission');
+    await expect.poll(() => bot.of('sendMessage').map((call) => String(call.body['text']).split('\n')[0])).toContain('codex is waiting for you');
+    const waiting = bot.of('sendMessage').filter((call) => String(call.body['text']).startsWith('codex is waiting'));
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]?.body['chat_id']).toBe('4242');
+    expect(String(waiting[0]?.body['text'])).toContain(`${url}#/codex`);
+    await feed(page, 'codex').getByRole('button', { name: 'Allow' }).click();
+    await expect.poll(() => bot.of('deleteMessage').length).toBe(1);
+    await page.goto(`${url}#/_settings`);
+    await section.getByRole('checkbox', { name: 'Telegram' }).uncheck();
+    await section.getByRole('button', { name: 'Save' }).click();
+    await expect(section.getByRole('status').filter({ hasText: 'Saved.' })).toBeVisible();
+});
 test('adds a local agent in the settings, with no file edited by hand, and it answers in its tab', async ({ page }) => {
     await page.goto(url);
     await tab(page, 'Settings').click();

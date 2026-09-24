@@ -157,6 +157,64 @@ type SshAgentsResponse = {
  * (a change), and the answer to `GET /api/agents/<id>`.
  */
 type AgentConfig = LocalAgentConfig | RemoteAgentConfig;
+/** Which moments earn a notification outside the browser; each is switched on its own. */
+type NotificationEvents = {
+    /** An agent waits for a person: an answer, a permission. */
+    readonly waiting: boolean;
+    /** An agent failed, or its process fell. */
+    readonly error: boolean;
+    /** The SSH connection to an agent is lost. */
+    readonly connection: boolean;
+};
+/**
+ * The notifications outside the browser as the page sees them:
+ * `GET /api/notifications`, and the answer to `PUT` there. Secrets never come
+ * back to the page: it learns whether a bot token is saved, not the token.
+ */
+type NotificationSettings = {
+    readonly events: NotificationEvents;
+    /** Minutes before a person is told again that an agent still waits; 0 tells once. */
+    readonly repeatMinutes: number;
+    /** Address the notifications link to; the address of this dashboard when absent. */
+    readonly dashboardUrl?: string;
+    readonly telegram: {
+        readonly enabled: boolean;
+        readonly chatId?: string;
+        /** Whether a bot token is saved; the token itself stays on the server. */
+        readonly botTokenSet: boolean;
+    };
+    readonly webPush: {
+        readonly enabled: boolean;
+        /** The public key browsers subscribe with (VAPID, base64url). */
+        readonly publicKey: string;
+        /** How many browsers are subscribed. */
+        readonly subscriptions: number;
+    };
+};
+/**
+ * Body of `PUT /api/notifications`: what to change, the rest is kept. A bot
+ * token left out keeps the saved one; an empty one removes it.
+ */
+type NotificationSettingsChange = {
+    readonly events?: Partial<NotificationEvents>;
+    readonly repeatMinutes?: number;
+    /** An empty one goes back to the address of this dashboard. */
+    readonly dashboardUrl?: string;
+    readonly telegram?: { readonly enabled?: boolean; readonly chatId?: string; readonly botToken?: string };
+    readonly webPush?: { readonly enabled?: boolean };
+};
+/**
+ * Body of `POST /api/notifications/subscriptions` (a browser subscribes) and
+ * of `DELETE` there (it stops): the `PushSubscription` of the browser as JSON.
+ */
+type PushSubscriptionBody = {
+    readonly endpoint: string;
+    readonly keys?: { readonly p256dh: string; readonly auth: string };
+};
+/** Answer to `POST /api/notifications/test`: how the test notification went over each channel switched on. */
+type NotificationTestResponse = {
+    readonly results: readonly { readonly channel: string; readonly ok: boolean; readonly error?: string }[];
+};
 /** Answer to any request that went wrong. */
 type ErrorResponse = {
     readonly error: string;
@@ -173,7 +231,12 @@ export type {
     FleetSwitch,
     Harness,
     LocalAgentConfig,
+    NotificationEvents,
+    NotificationSettings,
+    NotificationSettingsChange,
+    NotificationTestResponse,
     PermissionAnswer,
+    PushSubscriptionBody,
     RemoteAgentConfig,
     SendRequest,
     ServerMessage,

@@ -5,6 +5,9 @@ import type {
     Delivery,
     ErrorResponse,
     FleetInfo,
+    NotificationSettings,
+    NotificationSettingsChange,
+    NotificationTestResponse,
     SendRequest,
     SshAgentsResponse
 } from '../../src/dashboard-protocol.js';
@@ -45,6 +48,11 @@ const api = {
     update: (config: AgentConfig): Promise<AgentSummary> => call('PUT', agentPath(config.id), config),
     remove: (agentId: string): Promise<{ readonly trash?: string }> => call('DELETE', agentPath(agentId)),
     fleet: (): Promise<FleetInfo> => call('GET', '/api/fleet'),
-    switchFleet: (path: string): Promise<FleetInfo> => call('PUT', '/api/fleet', { path })
+    switchFleet: (path: string): Promise<FleetInfo> => call('PUT', '/api/fleet', { path }),
+    notifications: (): Promise<NotificationSettings> => call('GET', '/api/notifications'),
+    changeNotifications: (change: NotificationSettingsChange): Promise<NotificationSettings> => call('PUT', '/api/notifications', change),
+    subscribe: (subscription: PushSubscriptionJSON): Promise<NotificationSettings> => post('/api/notifications/subscriptions', subscription),
+    unsubscribe: (endpoint: string): Promise<NotificationSettings> => call('DELETE', '/api/notifications/subscriptions', { endpoint }),
+    testNotifications: (): Promise<NotificationTestResponse> => post('/api/notifications/test')
 };
 export { api };

@@ -141,6 +141,38 @@ same files: the fleet stays directories a person can read and edit by hand.
   `.flotti-run.json` moves along so `flotti stop` still finds the run. A directory that is not there
   yet is created — that is how a new fleet begins; one with a broken manifest is refused, and nothing
   changes. The choice is saved in `~/.flotti/settings.json`, and the next `flotti run` opens it.
+- **Notifications.** For when you are away from the dashboard; see
+  [Notifications outside the browser](#notifications-outside-the-browser).
+
+### Notifications outside the browser
+
+The tab of the dashboard tells you when an agent waits — but only while it is open. Set up a channel on
+the settings page and flotti tells you wherever you are. Nothing is set up at first, and then nothing
+is sent.
+
+- **When.** Each switched on its own: an agent **waits** for an answer or a permission, an agent
+  **fails** or its process falls, the **SSH connection** to an agent is lost. One notification per
+  wait, failure or lost connection, however long it lasts. When the agent gets its answer, the
+  notification of the wait is taken back. **Remind every** tells again, every so many minutes, that an
+  agent still waits; `0` tells once.
+- **Telegram.** A bot of your own: its token from [@BotFather](https://t.me/BotFather) and the chat it
+  writes to — your id, or a group the bot is in. The message says who waits and why, with a link to
+  the tab of the agent; the answer deletes it (or, where Telegram no longer lets the bot, marks it
+  *Answered.*). `FLOTTI_TELEGRAM_API` points flotti at another Bot API server.
+- **Web Push.** **Notify this browser** registers the service worker of the dashboard and subscribes
+  the browser: notifications then come with the dashboard closed, as long as the browser runs. flotti
+  sends them itself — signed with a key of its own (VAPID) and encrypted for that browser — through
+  the push service of the browser, which sees neither the text nor the agents. While a page of the
+  dashboard is in front of you, it tells you itself.
+- **Link to the dashboard.** The links lead to this dashboard on `127.0.0.1`; if you reach it another
+  way — a tunnel, another name — put that address here.
+- **Send a test** sends one over every channel switched on, and says how each went.
+
+Everything is saved under `notifications` in `~/.flotti/settings.json`, which only its owner may
+read. The bot token and the private key never go back to the page — it learns only that a token is
+saved — and never into a log: a failed notification is reported on standard error without them.
+Types for any other channel are in `src/notifier.ts`: a channel sends a notification and takes back
+those of a key.
 
 The server is the one source of truth and the page only follows it: every event of an agent has a
 number, and a page that connects — or reconnects after losing the connection — says which it has seen
@@ -176,6 +208,9 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `DELETE /api/agents/<id>`                     | stops the agent and moves its directory to `.trash/`    |
 | `GET /api/fleet`, `PUT /api/fleet` `{path}`   | the fleet directory; switches to another one            |
 | `POST /api/agents/<id>/permissions/<request>` `{optionId?}` | answers a permission request; no option refuses it |
+| `GET /api/notifications`, `PUT /api/notifications` `{events?, repeatMinutes?, dashboardUrl?, telegram?, webPush?}` | the notification settings, without secrets; a change of them |
+| `POST /api/notifications/subscriptions`, `DELETE …` `{endpoint, keys}` | a browser subscribes to Web Push, or stops |
+| `POST /api/notifications/test`                | a test notification over every channel switched on      |
 | `/ws`                                         | `fleet` first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and gets the events after them, then live ones; `health` whenever the health of the SSH connection of an agent changes |
 
 With no login, the server guards against other web pages rather than against people: it answers only

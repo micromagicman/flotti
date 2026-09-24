@@ -232,4 +232,4 @@ function AgentForm({ initial, isNew, onSave, onCancel }: AgentFormProps) {
         </form>
     );
 }
-export { AgentForm };
+export { AgentForm, Field };

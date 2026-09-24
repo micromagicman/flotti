@@ -18,6 +18,7 @@ import type {
 import type { Forwarded, Quote, SendOptions } from './agent-events.js';
 import { ConfigurationError } from './errors.js';
 import type { FleetSettings } from './fleet-settings.js';
+import type { NotificationService } from './notifications.js';
 import { UnknownAgentError } from './supervisor.js';
 import type { Supervisor, SupervisorNotice } from './supervisor.js';
 /** Port the dashboard listens on unless told otherwise. */
@@ -51,6 +52,8 @@ type DashboardOptions = {
     readonly shutdown?: { readonly token: string; readonly onRequest: () => void };
     /** What the settings page changes; without it the page can only look at the fleet, not change it. */
     readonly settings?: FleetSettings;
+    /** The notifications outside the browser; without them the page has no such settings. */
+    readonly notifications?: NotificationService;
 };
 /** A running dashboard. */
 type Dashboard = {
@@ -67,8 +70,12 @@ class HttpError extends Error {
     }
 }
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
-/** What a route works with: the running fleet and, when there is one, the settings of it. */
-type Context = { readonly supervisor: Supervisor; readonly settings: FleetSettings | undefined };
+/** What a route works with: the running fleet and, when there are, the settings of it and its notifications. */
+type Context = {
+    readonly supervisor: Supervisor;
+    readonly settings: FleetSettings | undefined;
+    readonly notifications?: NotificationService | undefined;
+};
 type Route = {
     readonly method: Method;
     readonly pattern: RegExp;
@@ -80,6 +87,40 @@ function requireSettings(context: Context): FleetSettings {
     }
     return context.settings;
 }
+function requireNotifications(context: Context): NotificationService {
+    if (context.notifications === undefined) {
+        throw new HttpError(404, 'This dashboard has no notifications to set up.');
+    }
+    return context.notifications;
+}
+/** The notification settings: seen and changed, browsers subscribed, a test sent. */
+const NOTIFICATION_ROUTES: readonly Route[] = [
+    {
+        method: 'GET',
+        pattern: /^\/api\/notifications$/,
+        handle: async (context) => [200, requireNotifications(context).view()]
+    },
+    {
+        method: 'PUT',
+        pattern: /^\/api\/notifications$/,
+        handle: async (context, _match, body) => [200, requireNotifications(context).change(body)]
+    },
+    {
+        method: 'POST',
+        pattern: /^\/api\/notifications\/subscriptions$/,
+        handle: async (context, _match, body) => [201, requireNotifications(context).subscribe(body)]
+    },
+    {
+        method: 'DELETE',
+        pattern: /^\/api\/notifications\/subscriptions$/,
+        handle: async (context, _match, body) => [200, requireNotifications(context).unsubscribe(body)]
+    },
+    {
+        method: 'POST',
+        pattern: /^\/api\/notifications\/test$/,
+        handle: async (context) => [200, await requireNotifications(context).test()]
+    }
+];
 /**
  * Every action of the page. A start or a restart answers at once: it may
  * take a minute for a remote agent, and the page follows it by the status
@@ -306,7 +347,7 @@ function collectChunks(request: IncomingMessage, reject: (reason: unknown) => vo
     return chunks;
 }
 async function handleApi(context: Context, request: IncomingMessage, path: string): Promise<[number, unknown]> {
-    const matching = ROUTES.map((candidate) => ({ candidate, match: candidate.pattern.exec(path) }))
+    const matching = [...ROUTES, ...NOTIFICATION_ROUTES].map((candidate) => ({ candidate, match: candidate.pattern.exec(path) }))
         .filter(({ match }) => match !== null);
     if (matching.length === 0) {
         throw new HttpError(404, `Nothing at ${path}.`);
@@ -389,7 +430,7 @@ function requestHandler(supervisor: Supervisor, hosts: Set<string>, options: Das
             void serveStatic(webRoot, path, response);
             return;
         }
-        answerApi({ supervisor, settings: options.settings }, request, path, response);
+        answerApi({ supervisor, settings: options.settings, notifications: options.notifications }, request, path, response);
     };
 }
 /** Answers an API request with what its route gives, or with the error it fails with. */
