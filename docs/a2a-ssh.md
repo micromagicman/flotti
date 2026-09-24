@@ -65,6 +65,11 @@ when the host publishes several):
    the reason of the failed attempt and "trying again in N s" between attempts; the pauses grow from
    1 s to 30 s. A host that cannot be reached when flotti starts is tried again the same way.
 
+While the tunnel is up, flotti asks the agent for its card — `GET` of the card path, with no token —
+right after the tunnel comes up and every 15 s after, to measure the round trip: the dashboard and
+`flotti status` show it with the reconnects and the uptime of the tunnel (README, "The health of the
+connection"). An agent needs nothing for that beyond serving its card.
+
 Everything goes through the `ssh` of the flotti machine, so `~/.ssh/config` (ports, jump hosts, which
 key), the SSH agent and the known hosts are the person's own.
 

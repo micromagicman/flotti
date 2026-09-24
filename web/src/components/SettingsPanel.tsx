@@ -5,6 +5,7 @@ import { fromConfig, newDraft } from '../agent-draft.js';
 import type { Draft } from '../agent-draft.js';
 import { api } from '../api.js';
 import { AgentForm } from './AgentForm.js';
+import { ConnectionHealthView } from './ConnectionHealth.js';
 import { StatusBadge } from './StatusBadge.js';
 type SettingsPanelProps = {
     /** The fleet as the socket says it, with live statuses. */
@@ -170,6 +171,7 @@ function AgentRow({ agent, onEdit }: { readonly agent: AgentSummary; readonly on
     return (
         <li className="settings-agent" data-agent={agent.id} aria-label={agent.name}>
             <AgentRowTitle agent={agent} />
+            {agent.health === undefined ? null : <ConnectionHealthView health={agent.health} />}
             {confirming
                 ? <ConfirmDelete agent={agent} run={run} onKeep={() => setConfirming(false)} />
                 : <AgentActions agent={agent} run={run} onEdit={onEdit} onDelete={() => setConfirming(true)} />}

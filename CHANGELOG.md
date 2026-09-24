@@ -23,6 +23,12 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   of the fleet sent it, flotti sends the answer back to the sender as well — "B → A" in the colour of B,
   quoting the message answered; an A2A agent gets it with `from`, an ACP one as `[from B]`. Only the
   answer goes, not the progress of the turn, and an answer gets no answer back by itself (#45).
+- **The health of an SSH connection.** For a remote agent reached over SSH, the header of its tab and
+  its row in Settings show the latency of the tunnel, the reconnects since the start and in the last
+  hour with the time of the last one, the last activity of the agent and the uptime of the tunnel, kept
+  up to date without a reload. A poor connection — 3 or more reconnects in an hour, or a latency of
+  1 s or more — turns red, says why and marks the tab. `flotti status` shows the latency and the
+  reconnects too. No secret goes into the health (#53).
 - **Reply and forward in the chat of an agent.** Any message of a tab can be answered with a reply —
   the agent gets the quoted message above the answer, and the tab shows the quote as a link back to it
   — or forwarded to another agent of the fleet, whose tab shows it under a bar "FORWARDED · AUTHOR" in

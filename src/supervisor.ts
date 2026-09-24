@@ -2,6 +2,7 @@ import { A2AAgent } from './a2a-agent.js';
 import { AgentAnswers } from './agent-answers.js';
 import type { AgentEvent, FleetAgent, Quote, SendOptions } from './agent-events.js';
 import { HistoryFile } from './agent-history.js';
+import type { ConnectionHealth } from './connection-health.js';
 import type { AgentSummary, Delivery, Harness } from './dashboard-protocol.js';
 import type { FleetToolsAccess } from './fleet-mcp.js';
 import { LocalAgentProcess } from './local-agent.js';
@@ -29,6 +30,8 @@ function harnessOf(agent: Agent, running: FleetAgent): { readonly harness?: Harn
 type SupervisorNotice =
     | { readonly type: 'event'; readonly event: AgentEvent }
     | { readonly type: 'delivery'; readonly delivery: Delivery }
+    /** The health of the connection of an agent changed. */
+    | { readonly type: 'health'; readonly agentId: string; readonly health: ConnectionHealth }
     /** An agent was added, changed or removed, or the whole fleet was replaced. */
     | { readonly type: 'fleet'; readonly agents: readonly AgentSummary[] };
 type SupervisorListener = (notice: SupervisorNotice) => void;
@@ -129,7 +132,8 @@ class Supervisor {
                 kind: agent.kind,
                 ...(agent.description === undefined ? {} : { description: agent.description }),
                 ...harnessOf(agent, running),
-                status: running.status
+                status: running.status,
+                ...(running.health === undefined ? {} : { health: running.health })
             }));
     }
     /** The agent as its manifest describes it. */
@@ -295,23 +299,35 @@ class Supervisor {
         return member;
     }
     /**
-     * Keeps every event of the member's agent, forwards what it says to another
-     * agent, and sends its answer to a message of another agent back to that one.
+     * Hears every event of the member's agent and passes on the health of its
+     * connection. The health is not kept in the history: only the latest one
+     * matters, and the summary carries it.
      */
     private listen(member: Member): void {
-        member.unsubscribe = member.running.subscribe((event) => {
-            if (event.type === 'status') {
-                this.noticeHarness(member);
-            }
-            this.keep(member, event);
-            if (event.type === 'message' && event.role === 'agent' && event.to !== undefined) {
-                this.forward(member, event.to, event.text);
-            }
-            const answer = member.answers.take(event);
-            if (answer !== undefined) {
-                this.forward(member, answer.to, answer.text, answer.replyTo);
-            }
-        });
+        const agentId = member.agent.id;
+        const events = member.running.subscribe((event) => this.hear(member, event));
+        const health = member.running.onHealth?.((changed) => this.notify({ type: 'health', agentId, health: changed }));
+        member.unsubscribe = () => {
+            events();
+            health?.();
+        };
+    }
+    /**
+     * Keeps one event of the member's agent, forwards what it says to another
+     * agent, and sends its answer to a message of another agent back to that one.
+     */
+    private hear(member: Member, event: AgentEvent): void {
+        if (event.type === 'status') {
+            this.noticeHarness(member);
+        }
+        this.keep(member, event);
+        if (event.type === 'message' && event.role === 'agent' && event.to !== undefined) {
+            this.forward(member, event.to, event.text);
+        }
+        const answer = member.answers.take(event);
+        if (answer !== undefined) {
+            this.forward(member, answer.to, answer.text, answer.replyTo);
+        }
     }
     /**
      * Opens the history file of an agent that has none yet and, when the

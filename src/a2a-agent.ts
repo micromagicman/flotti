@@ -15,6 +15,8 @@ import type { Client } from '@a2a-js/sdk/client';
 import { AgentEvents, composeText, messageFields } from './agent-events.js';
 import type { AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
 import type { Environment } from './manifest.js';
+import { HealthTracker } from './connection-health.js';
+import type { ConnectionHealth, HealthListener, HealthTrackerOptions } from './connection-health.js';
 import { SshConnection } from './ssh.js';
 import type { RemoteConnection, RemoteEndpoint, SshOptions } from './ssh.js';
 import type { RemoteAgent, RemoteAuth } from './types.js';
@@ -60,7 +62,13 @@ type A2AAgentOptions = {
     readonly ssh?: SshOptions;
     /** Longest pause between attempts to open a connection that dropped. 30 s by default. */
     readonly reopenDelayMaxMs?: number;
+    /** How often the round trip to an agent behind a connection is measured; 15 s by default. */
+    readonly healthIntervalMs?: number;
+    /** The clock and the pace of the health of the connection; tests put their own in. */
+    readonly health?: HealthTrackerOptions;
 };
+/** A round trip that takes longer than this is not measured: the connection says itself when it is gone. */
+const PROBE_TIMEOUT_MS = 10_000;
 /** What the agent card told about the agent, for the dashboard. */
 type A2AAgentInfo = {
     readonly name: string;
@@ -151,6 +159,13 @@ class A2AAgent implements FleetAgent {
     private endpoint: RemoteEndpoint | undefined;
     /** Session of the attempts to open again a connection that dropped, or never opened. */
     private retrying: AbortSignal | undefined;
+    /** Health of the connection, when there is one to keep open. */
+    private readonly tracker: HealthTracker | undefined;
+    /** Session the round trip is being measured in. */
+    private probing: AbortSignal | undefined;
+    private readonly healthIntervalMs: number;
+    /** HTTP client with nothing added: measures the round trip without counting it as the agent's activity. */
+    private readonly plainFetch: typeof fetch;
     private readonly events: AgentEvents;
     private currentStatus: AgentStatus = 'stopped';
     private currentReason: string | undefined;
@@ -177,7 +192,8 @@ class A2AAgent implements FleetAgent {
         this.agent = agent;
         this.events = new AgentEvents(agent.id);
         this.env = options.env ?? process.env;
-        this.fetch = this.authenticatingFetch(options.fetch ?? globalThis.fetch);
+        this.plainFetch = options.fetch ?? globalThis.fetch;
+        this.fetch = this.authenticatingFetch(this.plainFetch);
         this.cardFetch = cachingCardFetch(this.fetch);
         this.pollIntervalMs = options.pollIntervalMs ?? 2_000;
         this.reconnectAttempts = options.reconnectAttempts ?? 5;
@@ -188,9 +204,18 @@ class A2AAgent implements FleetAgent {
         this.connection = options.connection
             ?? (agent.ssh === undefined ? undefined : new SshConnection(agent.ssh, options.ssh));
         this.connection?.onDrop((reason: string) => this.dropped(reason));
+        this.tracker = this.connection === undefined ? undefined : new HealthTracker(options.health);
+        this.healthIntervalMs = options.healthIntervalMs ?? 15_000;
     }
     get status(): AgentStatus {
         return this.currentStatus;
+    }
+    /** Health of the connection to the agent; absent when there is no connection to keep open. */
+    get health(): ConnectionHealth | undefined {
+        return this.tracker?.snapshot();
+    }
+    onHealth(listener: HealthListener): () => void {
+        return this.tracker?.onChange(listener) ?? (() => undefined);
     }
     /** What the card said; absent until the agent is connected to. */
     get info(): A2AAgentInfo | undefined {
@@ -318,10 +343,15 @@ class A2AAgent implements FleetAgent {
         this.setStatus('stopped');
         this.endpoint = undefined;
         await this.connection?.close();
+        // The next start is another session: its reconnects are counted anew.
+        this.tracker?.reset();
     }
     /** The HTTP client that proves flotti to the agent and routes requests down the tunnel. */
     private authenticatingFetch(base: typeof fetch): typeof fetch {
-        const routed: typeof fetch = (input, init) => base(this.route(input), init);
+        const routed: typeof fetch = (input, init) => base(this.route(input), init).then((response) => {
+            this.tracker?.activity();
+            return response;
+        });
         return createAuthenticatingFetchWithRetry(routed, {
             headers: async () => this.endpoint?.headers === undefined
                 ? authHeaders(this.agent.auth, this.env)
@@ -345,6 +375,7 @@ class A2AAgent implements FleetAgent {
     }
     /** The connection broke by itself: what was in work is lost, and the way is opened again. */
     private dropped(reason: string): void {
+        this.tracker?.down();
         if (this.currentStatus === 'stopped' || this.currentStatus === 'starting' || this.reopening) {
             return;
         }
@@ -409,11 +440,7 @@ class A2AAgent implements FleetAgent {
         return this.retrying !== undefined && !this.retrying.aborted;
     }
     private async connect(): Promise<void> {
-        let url = this.agent.url;
-        if (this.connection !== undefined) {
-            this.endpoint = await this.connection.open(this.session.signal);
-            url = this.endpoint.url;
-        }
+        const url = await this.openConnection() ?? this.agent.url;
         if (this.endpoint?.headers === undefined) {
             authHeaders(this.agent.auth, this.env);
         }
@@ -428,6 +455,53 @@ class A2AAgent implements FleetAgent {
         this.client = client;
         this.card = describeCard(card, client.protocolVersion);
         this.toldHarness = this.endpoint?.harness ?? this.card.harness;
+        this.measureRoundTrips();
+    }
+    /** Opens the connection, when there is one: the address it gives, or nothing without one. */
+    private async openConnection(): Promise<string | undefined> {
+        if (this.connection === undefined) {
+            return undefined;
+        }
+        this.endpoint = await this.connection.open(this.session.signal);
+        this.tracker?.up();
+        return this.endpoint.url;
+    }
+    /**
+     * Measures the round trip to an agent behind a connection now and every
+     * `healthIntervalMs`, for as long as the session lasts, by asking for its
+     * card: the one request every agent answers without a secret.
+     */
+    private measureRoundTrips(): void {
+        const signal = this.session.signal;
+        if (this.tracker === undefined || this.probing === signal) {
+            return;
+        }
+        this.probing = signal;
+        void (async () => {
+            while (!signal.aborted) {
+                await this.measureRoundTrip(signal);
+                await pause(this.healthIntervalMs, signal);
+            }
+        })();
+    }
+    /** One round trip to the agent; a failed one tells nothing: a dropped connection says so itself. */
+    private async measureRoundTrip(signal: AbortSignal): Promise<void> {
+        const endpoint = this.endpoint;
+        if (endpoint === undefined) {
+            return;
+        }
+        const location = cardLocation(endpoint.url);
+        const card = location.path === '' ? location.base : new URL(location.path, location.base).href;
+        const started = performance.now();
+        try {
+            const response = await this.plainFetch(this.route(card), { signal: AbortSignal.any([signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]) });
+            await response.body?.cancel();
+            if (response.ok && !signal.aborted) {
+                this.tracker?.latency(performance.now() - started);
+            }
+        } catch {
+            // Timed out, refused or cut off: the next round trip, or the drop, will say more.
+        }
     }
     /** Makes clients for either transport the card may offer, A2A 0.3 agents included. */
     private clientFactory(): ClientFactory {
@@ -708,6 +782,7 @@ class A2AAgent implements FleetAgent {
     }
     /** Turns one A2A event into dashboard events; tells whether the turn is over. */
     private apply(event: StreamResponse): boolean {
+        this.tracker?.activity();
         const payload = event.payload;
         switch (payload?.$case) {
             case 'message':
@@ -831,6 +906,7 @@ class A2AAgent implements FleetAgent {
                 this.log('the inbox is back');
             }
             progress.failures = 0;
+            this.tracker?.activity();
             this.applyInbox(event, progress);
         }
     }
