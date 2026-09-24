@@ -72,7 +72,10 @@ test('with Telegram on, a wait is one message, and the answer deletes it', async
     const saved = JSON.parse(readFileSync(file, 'utf8')) as { fleet: string; notifications: { telegram: { botToken: string } } };
     strictEqual(saved.fleet, '/somewhere', 'the rest of the settings is kept');
     strictEqual(saved.notifications.telegram.botToken, telegram.token);
-    strictEqual(statSync(file).mode & 0o777, 0o600, 'only the owner reads the file with the token');
+    if (process.platform !== 'win32') {
+        // Windows has no POSIX modes: stat reports 0o666 or 0o444 whatever chmod asked.
+        strictEqual(statSync(file).mode & 0o777, 0o600, 'only the owner reads the file with the token');
+    }
     await stop();
 });
 test('the page never sees the bot token, and keeps it by leaving it out', async () => {
