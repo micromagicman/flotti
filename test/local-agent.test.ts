@@ -3,6 +3,8 @@ import { readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { AgentEvent } from '../src/agent-events.js';
+import { Supervisor } from '../src/supervisor.js';
+import { fakeFleet } from './fake-fleet-agent.js';
 import { Harness, eventually, isAlive } from './local-agent-helpers.js';
 /** Events without the fields that change from run to run. */
 function shape(events: readonly AgentEvent[]): unknown[] {
@@ -380,5 +382,24 @@ describe('LocalAgentProcess: what Codex and adapterless agents get', { timeout: 
         const harness = new Harness({ systemPrompt: 'Be brief.' });
         await harness.agent.start();
         await harness.next((event) => event.type === 'log' && /system-prompt.md is not passed on/.test(event.text));
+    });
+});
+describe('LocalAgentProcess: answering another agent of the fleet', { timeout: 20_000 }, () => {
+    it('sends what it answers to a message of another agent back to that agent, from itself', async () => {
+        const { fleet, fakes, createAgent } = fakeFleet('a');
+        const receiver = new Harness({ manifest: { id: 'b' } });
+        const agents = [...fleet.agents, { ...fleet.agents[0]!, id: 'b', name: 'B' }];
+        const supervisor = new Supervisor({ ...fleet, agents }, {
+            createAgent: (agent) => agent.id === 'b' ? receiver.agent : createAgent(agent)
+        });
+        await supervisor.start();
+        await supervisor.send('b', 'rerun the tests', { from: 'a' });
+        const sender = fakes.get('a');
+        await eventually(() => (sender?.calls.length ?? 0) > 1);
+        deepStrictEqual(sender?.calls, ['start', 'send you said: [from a] rerun the tests from b']);
+        deepStrictEqual(sender?.options.map((options) => options.replyTo?.text), ['rerun the tests']);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        deepStrictEqual(receiver.recorded('session/prompt').length, 1, 'the answer to the answer does not come back');
+        await supervisor.stop();
     });
 });

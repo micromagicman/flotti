@@ -201,7 +201,57 @@ test('what an agent says to another agent is sent on to it, from the sender', as
     deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send rerun the tests from a']);
     const received = supervisor.history('b').find((event) => event.type === 'message' && event.role === 'user');
     deepStrictEqual(received?.type === 'message' ? [received.text, received.from] : undefined, ['rerun the tests', 'a']);
-    deepStrictEqual(supervisor.history('a').map((event) => event.type), ['status', 'message'], 'the sender sees its message, and nothing else');
+    deepStrictEqual(supervisor.history('a').map((event) => event.type).slice(0, 2), ['status', 'message'], 'the sender sees its message');
+});
+test('the answer to a message from another agent goes back to the sender, quoting the message', async () => {
+    const { supervisor, fakes } = supervised('a', 'b');
+    await supervisor.start();
+    await supervisor.send('b', 'rerun the tests', { from: 'a' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(fake(fakes.get('a')).calls, ['start', 'send you said: rerun the tests from b']);
+    deepStrictEqual(fake(fakes.get('a')).options, [{
+        from: 'b',
+        replyTo: { agentId: 'b', messageId: 'u-rerun the tests', author: 'a', text: 'rerun the tests' }
+    }]);
+    const answer = supervisor.history('a').find((event) => event.type === 'message' && event.role === 'user');
+    deepStrictEqual(answer?.type === 'message' ? [answer.text, answer.from] : undefined, ['you said: rerun the tests', 'b']);
+    deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send rerun the tests from a'], 'the answer to the answer goes nowhere');
+    deepStrictEqual(supervisor.history('b').map((event) => event.type), ['status', 'message', 'message', 'turn-end'], 'the tab of the receiver is as before');
+});
+test('a message of a person, and a message that answers one, get no answer sent anywhere', async () => {
+    const { supervisor, fakes } = supervised('a', 'b');
+    await supervisor.start();
+    await supervisor.send('b', 'hi');
+    await supervisor.send('b', 'thanks', { from: 'a', replyTo: { agentId: 'a', messageId: 'm1', author: 'b', text: 'done' } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(fake(fakes.get('a')).calls, ['start']);
+});
+test('the answer is what the agent said in its messages of the turn; a cancelled turn and progress send nothing', async () => {
+    const { supervisor, fakes } = supervised('a', 'b');
+    await supervisor.start();
+    const b = fake(fakes.get('b'));
+    b.emit({ type: 'message', role: 'user', messageId: 'q1', text: 'status?', append: false, from: 'a' });
+    b.emit({ type: 'progress', text: 'looking' });
+    b.emit({ type: 'message', role: 'agent', messageId: 'r1', text: 'all ', append: false });
+    b.emit({ type: 'message', role: 'agent', messageId: 'r1', text: 'green', append: true });
+    b.emit({ type: 'message', role: 'agent', messageId: 'r2', text: 'rerun c', append: false, to: 'c' });
+    b.emit({ type: 'message', role: 'agent', messageId: 'r3', text: 'the build is ready', append: false });
+    b.emit({ type: 'turn-end', reason: 'end_turn' });
+    b.emit({ type: 'message', role: 'user', messageId: 'q2', text: 'and now?', append: false, from: 'a' });
+    b.emit({ type: 'message', role: 'agent', messageId: 'r4', text: 'wait', append: false });
+    b.emit({ type: 'turn-end', reason: 'cancelled' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(fake(fakes.get('a')).calls, ['start', 'send all green\n\nthe build is ready from b']);
+});
+test('an answer that cannot be delivered is a line in the tab of the one who answers', async () => {
+    const { fleet, fakes, createAgent } = fakeFleet('a', 'b');
+    const supervisor = new Supervisor(fleet, { createAgent });
+    await supervisor.start();
+    fake(fakes.get('a')).broken = true;
+    await supervisor.send('b', 'hi', { from: 'a' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const lines = supervisor.history('b').flatMap((event) => event.type === 'log' ? [event.text] : []);
+    deepStrictEqual(lines, ['could not deliver the answer to "a": a is broken']);
 });
 test('a message to another agent that cannot be delivered is a line in the tab of the sender', async () => {
     const { fleet, fakes, createAgent } = fakeFleet('a', 'b');

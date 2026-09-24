@@ -364,8 +364,10 @@ and `session/load`. A bare Claude Code or Codex sees them as `mcp__flotti__…`:
 
 A message sent so reaches the other agent like one from a person, but from that agent: its `message`
 event has `from` — the sender's id — and the agent gets it as `[from <id>] <text>`, the way every
-message from an agent reaches it (#23). What it says in its turn goes to its own tab, not back to the
-sender: an answer to an agent is a `send_message` or a `reply` too.
+message from an agent reaches it (#23). What it answers in its turn stays in its own tab and goes back
+to the sender as well, as a message from it that quotes the message answered — the same way for A2A and
+ACP agents, on both sides. An answer gets no answer back by itself, so two agents do not answer each
+other for ever; only the answer goes, not the progress of the turn, and a cancelled turn sends nothing (#45).
 A `reply` and a `forward` are the reply and the forward of the dashboard: the `message` event carries
 `replyTo` or `forwarded`, and the tab shows the quote or the forwarded message the same way (#30).
 Messages queue as a person's do; a tool call does not wait for the answer.

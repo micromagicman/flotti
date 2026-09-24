@@ -6,6 +6,7 @@ import type { ExecutionEventBus, RequestContext } from '@a2a-js/sdk/server';
 import { A2AAgent, HARNESS_EXTENSION, INBOX_EXTENSION, RESTART_EXTENSION, cardLocation } from '../src/a2a-agent.js';
 import type { A2AAgentOptions } from '../src/a2a-agent.js';
 import type { AgentEvent as DashboardEvent, AgentStatus } from '../src/agent-events.js';
+import { Supervisor } from '../src/supervisor.js';
 import type { RemoteAgent, RemoteAuth } from '../src/types.js';
 import { FakeAgent, agentMessage, artifact, gate, said, statusUpdate, task } from './a2a-fake-server.js';
 import type { FakeAgentOptions, Script } from './a2a-fake-server.js';
@@ -615,6 +616,38 @@ describe('A2AAgent: replies', () => {
             ['user', 'which host?', replyTo],
             ['agent', 'echo: In reply to a message from the person:\n> deploy it\n\nwhich host?', undefined]
         ]);
+    });
+});
+/** The messages the agent got, the inbox request left out, with the metadata of the inbox extension. */
+function conversation(agent: FakeAgent): [string | undefined, unknown][] {
+    return agent.received.flatMap(request => {
+        const message = request.params['message'] as { parts?: { text?: string }[]; metadata?: Record<string, unknown> } | undefined;
+        const inbox = message?.metadata?.[INBOX_EXTENSION] as { action?: string } | undefined;
+        return message === undefined || inbox?.action === 'subscribe' ? [] : [[message.parts?.[0]?.text, inbox]];
+    });
+}
+describe('A2AAgent: answering another agent of the fleet', () => {
+    it('sends what the receiver answers in its task back to the sender, from the receiver, once', async () => {
+        const sender = await inboxAgent();
+        const receiver = await inboxAgent();
+        const agents = [{ ...manifest(sender.agent.url), id: 'a' }, { ...manifest(receiver.agent.url), id: 'b' }];
+        const running = new Map(agents.map(agent => [agent.id, new A2AAgent(agent, { reconnectDelayMs: 10, pollIntervalMs: 10 })]));
+        clients.push(...running.values());
+        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents }, {
+            createAgent: agent => running.get(agent.id) as A2AAgent
+        });
+        await supervisor.start();
+        await eventually(() => sender.isOpen() && receiver.isOpen());
+        sender.post('Please rerun the e2e job', 'to-1', { [INBOX_EXTENSION]: { to: 'b' } });
+        await eventually(() => conversation(sender.agent).length === 1);
+        deepStrictEqual(conversation(sender.agent), [
+            ['In reply to a message from you:\n> Please rerun the e2e job\n\necho: Please rerun the e2e job', { from: 'b' }]
+        ]);
+        await eventually(() => supervisor.history('a').some(event => event.type === 'turn-end'));
+        await new Promise(resolve => setTimeout(resolve, 50));
+        deepStrictEqual(conversation(receiver.agent), [['Please rerun the e2e job', { from: 'a' }]], 'the answer to the answer does not come back');
+        const answer = supervisor.history('a').find(event => event.type === 'message' && event.role === 'user');
+        deepStrictEqual(answer?.type === 'message' ? [answer.from, answer.replyTo?.text] : undefined, ['b', 'Please rerun the e2e job']);
     });
 });
 describe('cardLocation', () => {
