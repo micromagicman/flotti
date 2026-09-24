@@ -13,6 +13,8 @@ class FakeFleetAgent implements FleetAgent {
     readonly options: SendOptions[] = [];
     busy = false;
     broken = false;
+    /** What the agent says runs it, as a remote agent tells once connected to. */
+    harness: string | undefined;
     private readonly events: AgentEvents;
     private current: AgentStatus = 'stopped';
     private held: (() => void)[] = [];

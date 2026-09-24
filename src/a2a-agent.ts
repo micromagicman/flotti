@@ -30,6 +30,12 @@ const RESTART_EXTENSION = 'https://github.com/micromagicman/flotti/blob/main/doc
  * dashboard. The contract is in docs/a2a-inbox.md.
  */
 const INBOX_EXTENSION = 'https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md';
+/**
+ * A2A extension through which a remote agent names the program that runs it,
+ * in `params.harness` of the extension in its card. The contract is in
+ * docs/a2a-ssh.md, "Which harness runs the agent".
+ */
+const HARNESS_EXTENSION = 'https://github.com/micromagicman/flotti/blob/main/docs/a2a-ssh.md#which-harness-runs-the-agent';
 type A2AAgentOptions = {
     /** Where the secrets named by `auth` are read from; defaults to `process.env`. */
     readonly env?: Environment;
@@ -69,6 +75,8 @@ type A2AAgentInfo = {
     readonly restart: boolean;
     /** Whether the agent says things of its own through the flotti inbox extension. */
     readonly inbox: boolean;
+    /** The program that runs the agent, as the harness extension of the card names it. */
+    readonly harness?: string;
     /** Whether the card carries a signature. It is not verified: see README, "Talking to a remote agent". */
     readonly signed: boolean;
     /** Names of the security schemes the card declares. */
@@ -148,6 +156,8 @@ class A2AAgent implements FleetAgent {
     private currentReason: string | undefined;
     private client: Client | undefined;
     private card: A2AAgentInfo | undefined;
+    /** What the agent last said runs it; kept while it is stopped, as the manifest of a local one is. */
+    private toldHarness: string | undefined;
     /** Aborted by stop and restart: ends the streams and drops the queued messages. */
     private session = new AbortController();
     /** Messages wait here while the agent is busy with the previous one. */
@@ -185,6 +195,14 @@ class A2AAgent implements FleetAgent {
     /** What the card said; absent until the agent is connected to. */
     get info(): A2AAgentInfo | undefined {
         return this.card;
+    }
+    /**
+     * The program that runs the agent, as the agent itself says: its published
+     * file (over SSH) first, then its card. Absent until it is connected to,
+     * and when it says nothing.
+     */
+    get harness(): string | undefined {
+        return this.toldHarness;
     }
     subscribe(listener: AgentEventListener): () => void {
         return this.events.subscribe(listener);
@@ -409,6 +427,7 @@ class A2AAgent implements FleetAgent {
         const card = await client.getAgentCard({ signal: this.session.signal });
         this.client = client;
         this.card = describeCard(card, client.protocolVersion);
+        this.toldHarness = this.endpoint?.harness ?? this.card.harness;
     }
     /** Makes clients for either transport the card may offer, A2A 0.3 agents included. */
     private clientFactory(): ClientFactory {
@@ -1065,6 +1084,7 @@ function freshFor(cacheControl: string | null): number {
     return maxAge === null ? 0 : Number(maxAge[1]) * 1_000;
 }
 function describeCard(card: AgentCard, protocolVersion: string): A2AAgentInfo {
+    const harness = cardHarness(card);
     return {
         name: card.name,
         description: card.description,
@@ -1073,10 +1093,17 @@ function describeCard(card: AgentCard, protocolVersion: string): A2AAgentInfo {
         streaming: card.capabilities?.streaming === true,
         restart: (card.capabilities?.extensions ?? []).some(extension => extension.uri === RESTART_EXTENSION),
         inbox: (card.capabilities?.extensions ?? []).some(extension => extension.uri === INBOX_EXTENSION),
+        ...(harness === undefined ? {} : { harness }),
         signed: (card.signatures ?? []).length > 0,
         security: Object.keys(card.securitySchemes ?? {}),
         skills: (card.skills ?? []).map(skill => ({ id: skill.id, name: skill.name, description: skill.description }))
     };
+}
+/** The harness the card names in the harness extension; a missing or empty name is no name. */
+function cardHarness(card: AgentCard): string | undefined {
+    const extension = (card.capabilities?.extensions ?? []).find(item => item.uri === HARNESS_EXTENSION);
+    const harness: unknown = extension?.params?.['harness'];
+    return typeof harness === 'string' && harness.trim() !== '' ? harness : undefined;
 }
 /**
  * Asks the agent to restart itself through the restart extension. Any answer
@@ -1198,5 +1225,5 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
         signal.addEventListener('abort', done, { once: true });
     });
 }
-export { A2AAgent, INBOX_EXTENSION, RESTART_EXTENSION, cardLocation };
+export { A2AAgent, HARNESS_EXTENSION, INBOX_EXTENSION, RESTART_EXTENSION, cardLocation };
 export type { A2AAgentInfo, A2AAgentOptions };

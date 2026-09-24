@@ -195,6 +195,11 @@ interface FleetAgent {
     readonly agentId: string;
     /** The status the last `status` event reported. */
     readonly status: AgentStatus;
+    /**
+     * The program that runs the agent, when the agent says it itself — a remote
+     * one does once connected to. Absent for an agent whose manifest tells it.
+     */
+    readonly harness?: string;
     /** Calls the listener with every event from now on; returns the way to stop. */
     subscribe(listener: AgentEventListener): () => void;
     /** Starts the agent, or connects to it; resolves once it can take messages. */

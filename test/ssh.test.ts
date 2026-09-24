@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, afterEach, describe, it } from 'node:test';
 import { TaskState } from '@a2a-js/sdk';
-import { A2AAgent, INBOX_EXTENSION } from '../src/a2a-agent.js';
+import { A2AAgent, HARNESS_EXTENSION, INBOX_EXTENSION } from '../src/a2a-agent.js';
 import type { AgentEvent, AgentStatus } from '../src/agent-events.js';
 import { SshError, describeFailure, discover, parsePublished, parseTarget, pickPublished } from '../src/ssh.js';
 import type { SshOptions } from '../src/ssh.js';
@@ -66,6 +66,14 @@ describe('ssh: what a host publishes', () => {
             { id: 'cutie', url: 'http://127.0.0.1:18742/' },
             { id: 'eva', name: 'Eva', url: 'http://127.0.0.1:18741/', token: 't0ken' }
         ]);
+    });
+    it('reads the harness an agent publishes, whatever its name', () => {
+        deepStrictEqual(parsePublished(TARGET, '\u001eworker.json\n{"url": "http://127.0.0.1:1/", "harness": "codex"}'), [
+            { id: 'worker', url: 'http://127.0.0.1:1/', harness: 'codex' }
+        ]);
+        deepStrictEqual(parsePublished(TARGET, '\u001eworker.json\n{"url": "http://127.0.0.1:1/", "harness": "home-made"}')[0]?.harness, 'home-made');
+        deepStrictEqual(Object.keys(parsePublished(TARGET, '\u001eworker.json\n{"url": "http://127.0.0.1:1/"}')[0] ?? {}), ['id', 'url']);
+        throws(() => parsePublished(TARGET, '\u001eworker.json\n{"url": "http://127.0.0.1:1/", "harness": 7}'), /worker\.json on [^:]+: harness must be a non-empty string/);
     });
     it('finds nothing on a host that publishes nothing', async () => {
         deepStrictEqual(await discover(TARGET, host().ssh), []);
@@ -163,6 +171,33 @@ describe('A2AAgent over SSH', () => {
         for (const request of agent.received) {
             strictEqual(request.headers.authorization, 'Bearer published-secret');
         }
+    });
+});
+describe('A2AAgent over SSH: the harness', () => {
+    it('takes the harness from the published file, over what the card says', async () => {
+        const agent = await new FakeAgent({
+            script: echo,
+            extensions: [HARNESS_EXTENSION],
+            extensionParams: { [HARNESS_EXTENSION]: { harness: 'claude' } }
+        }).listen();
+        running.push(agent);
+        const pretend = host();
+        pretend.publish('worker', { url: `${agent.url}/`, harness: 'codex' });
+        const { client } = overSsh(pretend.ssh);
+        strictEqual(client.harness, undefined, 'not known before it is connected to');
+        await client.start();
+        strictEqual(client.harness, 'codex');
+        await client.stop();
+        strictEqual(client.harness, 'codex', 'still known while it is stopped');
+    });
+    it('knows no harness when the file and the card say nothing', async () => {
+        const agent = await new FakeAgent({ script: echo }).listen();
+        running.push(agent);
+        const pretend = host();
+        pretend.publish('worker', { url: `${agent.url}/` });
+        const { client } = overSsh(pretend.ssh);
+        await client.start();
+        strictEqual(client.harness, undefined);
     });
 });
 describe('A2AAgent over SSH: keeping the tunnel up', () => {

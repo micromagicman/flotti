@@ -20,6 +20,8 @@ type FakeAgentOptions = {
     readonly streaming?: boolean;
     /** URIs of the extensions the card declares. */
     readonly extensions?: readonly string[];
+    /** `params` of the declared extensions, by URI; none when absent. */
+    readonly extensionParams?: Readonly<Record<string, Record<string, unknown>>>;
     /** `Cache-Control` of the card; `no-cache` by default. */
     readonly cardCacheControl?: string;
     /** Path of the card and the endpoint under the server root, e.g. `/a2a`. */
@@ -94,7 +96,7 @@ class FakeAgent {
             provider: undefined,
             capabilities: {
                 streaming: this.options.streaming ?? true,
-                extensions: (this.options.extensions ?? []).map(uri => ({ uri, description: '', required: false, params: undefined })),
+                extensions: (this.options.extensions ?? []).map(uri => ({ uri, description: '', required: false, params: this.options.extensionParams?.[uri] })),
                 extendedAgentCard: false
             },
             securitySchemes: {},

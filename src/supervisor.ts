@@ -6,13 +6,14 @@ import type { FleetToolsAccess } from './fleet-mcp.js';
 import { LocalAgentProcess } from './local-agent.js';
 import type { Agent, Fleet } from './types.js';
 /**
- * The harness of an agent, as far as its manifest tells: the adapter of a local
- * one. A plain ACP agent and a remote A2A one say nothing about it, and the
- * summary leaves the field out rather than guess.
+ * The harness of an agent: the adapter of a local one, as its manifest tells,
+ * and what a remote one says of itself once connected to. A plain ACP agent
+ * and a remote one that says nothing get no harness: the summary leaves the
+ * field out rather than guess.
  */
-function harnessOf(agent: Agent): { readonly harness?: Harness } {
+function harnessOf(agent: Agent, running: FleetAgent): { readonly harness?: Harness } {
     if (agent.kind !== 'local') {
-        return {};
+        return running.harness === undefined ? {} : { harness: running.harness };
     }
     switch (agent.adapter) {
         case 'claude-code':
@@ -65,6 +66,8 @@ type Member = {
     /** The history on disk; absent when it is kept in memory only. */
     readonly file: HistoryFile | undefined;
     unsubscribe: () => void;
+    /** The harness the pages were last told the agent has: a change is announced. */
+    harness: string | undefined;
 };
 /** An agent the request names that is not in the fleet. */
 class UnknownAgentError extends Error {}
@@ -122,7 +125,7 @@ class Supervisor {
                 name: agent.name,
                 kind: agent.kind,
                 ...(agent.description === undefined ? {} : { description: agent.description }),
-                ...harnessOf(agent),
+                ...harnessOf(agent, running),
                 status: running.status
             }));
     }
@@ -277,7 +280,8 @@ class Supervisor {
             history,
             offset,
             file: historyFile,
-            unsubscribe: () => undefined
+            unsubscribe: () => undefined,
+            harness: undefined
         };
         this.members.set(agent.id, member);
         if (restoredAny) {
@@ -289,6 +293,9 @@ class Supervisor {
     /** Keeps every event of the member's agent, and forwards what it says to another agent. */
     private listen(member: Member): void {
         member.unsubscribe = member.running.subscribe((event) => {
+            if (event.type === 'status') {
+                this.noticeHarness(member);
+            }
             this.keep(member, event);
             if (event.type === 'message' && event.role === 'agent' && event.to !== undefined) {
                 this.forward(member, event.to, event.text);
@@ -330,6 +337,20 @@ class Supervisor {
             time: new Date().toISOString()
         });
         member.offset += 1;
+    }
+    /**
+     * A remote agent tells its harness once connected to, which it says with a
+     * status: the pages learn it with the fleet, and only when it changed.
+     */
+    private noticeHarness(member: Member): void {
+        const harness = member.running.harness;
+        if (harness === member.harness) {
+            return;
+        }
+        member.harness = harness;
+        if (this.members.get(member.agent.id) === member) {
+            this.announce();
+        }
     }
     private announce(): void {
         this.notify({ type: 'fleet', agents: this.agents() });

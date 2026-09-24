@@ -32,15 +32,16 @@ function useAction(): [string | undefined, (action: () => Promise<unknown>) => v
     }];
 }
 /**
- * What runs the agent: claude or codex, from the adapter of its manifest. A
- * plain ACP agent and a remote one do not say, and the badge says so too.
+ * What runs the agent: claude or codex from the adapter of its manifest, or
+ * whatever a remote agent names itself, shown as it is. A plain ACP agent and
+ * a remote one that says nothing do not tell, and the badge says so too.
  */
 function HarnessBadge({ agent }: { readonly agent: AgentSummary }) {
     if (agent.harness !== undefined) {
         return <span className="harness" data-harness={agent.harness} title="Harness">{agent.harness}</span>;
     }
     const why = agent.kind === 'remote'
-        ? 'A remote agent does not tell which harness runs it.'
+        ? 'The remote agent does not say which harness runs it.'
         : 'The manifest names no adapter, so the harness is not known.';
     return <span className="harness harness-unknown" data-harness="unknown" title={why}>harness unknown</span>;
 }
