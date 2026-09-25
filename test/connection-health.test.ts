@@ -5,7 +5,7 @@ import type { ConnectionHealth } from '../src/connection-health.js';
 import type { AgentSummary } from '../src/dashboard-protocol.js';
 import { printAgents } from '../src/run.js';
 import { fleetReducer, initialState } from '../web/src/fleet-state.js';
-import { healthFacts, poorText } from '../web/src/health.js';
+import { healthFacts, poorMark, poorText } from '../web/src/health.js';
 import { en } from '../web/src/i18n/en.js';
 import { ru } from '../web/src/i18n/ru.js';
 const START = Date.parse('2026-01-01T10:00:00.000Z');
@@ -120,6 +120,19 @@ describe('connection health: poor', () => {
         }
         deepStrictEqual(tracker.snapshot().poor, ['3 reconnects in the last hour']);
     });
+    it('is poor while a connection that was up is down, and not before it came up or after a stop', () => {
+        const { tracker, clock } = tracked();
+        deepStrictEqual(tracker.snapshot().poor, [], 'not up yet is not a lost connection');
+        tracker.up();
+        clock.now += 1_000;
+        tracker.down();
+        deepStrictEqual(tracker.snapshot().poor, ['connection down']);
+        tracker.up();
+        deepStrictEqual(tracker.snapshot().poor, [], 'back up');
+        tracker.down();
+        tracker.reset();
+        deepStrictEqual(tracker.snapshot().poor, [], 'a stopped agent has no connection to lose');
+    });
 });
 describe('connection health: in words', () => {
     it('writes durations the way a person reads them', () => {
@@ -151,6 +164,18 @@ describe('connection health: in words', () => {
             'задержка 1\u00a0200 мс', 'переподключения 4 · 3 за последний час', 'активность пока не было', 'туннель работает 1 ч 0 мин'
         ]);
         strictEqual(poorText(health, ru), 'Плохое соединение: 3 переподключения за последний час, задержка 1\u00a0200 мс');
+    });
+    it('says a lost connection first, and marks it apart from a poor one', () => {
+        const down: ConnectionHealth = { reconnects: 1, reconnectsLastHour: 1, poor: ['connection down'] };
+        strictEqual(poorText(down, en), 'No connection: the tunnel is down');
+        strictEqual(poorText(down, ru), 'Нет связи: туннель не работает');
+        strictEqual(poorMark(down, en), 'no connection');
+        strictEqual(poorMark(down, ru), 'нет связи');
+        const worse: ConnectionHealth = { reconnects: 4, reconnectsLastHour: 3, poor: ['connection down', '3 reconnects in the last hour'] };
+        strictEqual(poorText(worse, en), 'No connection: the tunnel is down, 3 reconnects in the last hour');
+        const poor: ConnectionHealth = { latencyMs: 1_500, reconnects: 0, reconnectsLastHour: 0, upSince: '2026-01-01T09:00:00.000Z', poor: ['latency 1500 ms'] };
+        strictEqual(poorMark(poor, en), 'poor connection');
+        strictEqual(poorMark({ ...poor, latencyMs: 40, poor: [] }, en), undefined);
     });
     it('says what is not known yet, and a tunnel that is down', () => {
         const facts = healthFacts({ reconnects: 0, reconnectsLastHour: 0, poor: [] }, START, en);

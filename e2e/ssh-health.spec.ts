@@ -99,15 +99,25 @@ test.afterAll(async () => {
     rmSync(workspace, { recursive: true, force: true });
 });
 const tab = (page: Page) => page.getByRole('tab', { name: /^relay/ });
-const health = (page: Page) => page.locator('.agent-header').getByRole('group', { name: 'SSH connection' });
+/** The details of relay, where the health went from the header (#102). */
+const details = (page: Page) => page.getByRole('complementary', { name: 'Details of relay' });
+const health = (page: Page) => details(page).getByRole('group', { name: 'SSH connection' });
 const fact = (page: Page, name: string) => health(page).locator(`[data-fact="${name}"]`);
-test('the tab of an agent over SSH shows the health of its connection', async ({ page }) => {
+/** The trouble with the connection, under the header, seen without opening the details. */
+const alarm = (page: Page) => page.locator('.health-strip');
+async function openRelay(page: Page): Promise<void> {
     await page.goto(url);
     await tab(page).click();
+    await page.getByRole('button', { name: 'Details of relay' }).click();
+}
+test('the details of an agent over SSH show the health of its connection', async ({ page }) => {
+    await openRelay(page);
+    await expect(page.locator('.agent-header')).not.toContainText('latency');
     await expect(fact(page, 'latency')).toHaveText(/^latency \d+ ms$/);
     await expect(fact(page, 'reconnects')).toHaveText('reconnects 0 · 0 in the last hour');
     await expect(fact(page, 'tunnel up')).toHaveText(/^tunnel up \d+ s$/);
     await expect(health(page)).toHaveAttribute('data-poor', 'false');
+    await expect(alarm(page)).toHaveCount(0);
     const field = page.getByRole('textbox', { name: 'Message to relay' });
     await field.fill('ping');
     await field.press('Enter');
@@ -115,8 +125,7 @@ test('the tab of an agent over SSH shows the health of its connection', async ({
     await expect(fact(page, 'last activity')).toHaveText(/^last activity \d+ s ago$/);
 });
 test('reconnects count live, and frequent ones stand out as a poor connection', async ({ page }) => {
-    await page.goto(url);
-    await tab(page).click();
+    await openRelay(page);
     await expect(fact(page, 'reconnects')).toHaveText(/^reconnects 0 /);
     for (const count of [1, 2, 3]) {
         killTunnel();
@@ -124,6 +133,11 @@ test('reconnects count live, and frequent ones stand out as a poor connection', 
     }
     await expect(health(page)).toHaveAttribute('data-poor', 'true');
     await expect(health(page)).toContainText('Poor connection: 3 reconnects in the last hour');
+    await expect(alarm(page)).toContainText('Poor connection: 3 reconnects in the last hour');
+    await page.keyboard.press('Escape');
+    await expect(details(page)).toHaveCount(0);
+    await alarm(page).getByRole('button', { name: 'Details' }).click();
+    await expect(health(page)).toHaveAttribute('data-poor', 'true');
     await expect(tab(page).locator('.tab-poor')).toHaveText('poor connection');
     await page.getByRole('tab', { name: /^Settings/ }).click();
     const row = page.getByRole('listitem', { name: 'relay' });
@@ -136,4 +150,19 @@ test('flotti status shows the latency and the reconnects, and no secret', async 
     expect(output).not.toContain('e2e-published-token');
     expect(logged).not.toContain('e2e-published-token');
     expect(readFileSync(join(fleet, 'remote', 'relay', '.flotti-history.jsonl'), 'utf8')).not.toContain('e2e-published-token');
+});
+test('a tunnel that is down and does not come back is a lost connection, under the header and on the tab', async ({ page }) => {
+    const config = join(workspace, 'ssh.json');
+    const works = readFileSync(config, 'utf8');
+    await page.goto(url);
+    await tab(page).click();
+    writeFileSync(config, JSON.stringify({ ...JSON.parse(works) as object, refuse: 'ssh: connect to host example.org port 22: Connection refused' }));
+    try {
+        killTunnel();
+        await expect(alarm(page)).toContainText('No connection: the tunnel is down');
+        await expect(tab(page).locator('.tab-poor')).toHaveText('no connection');
+    } finally {
+        writeFileSync(config, works);
+    }
+    await expect(alarm(page)).not.toContainText('No connection', { timeout: 30_000 });
 });

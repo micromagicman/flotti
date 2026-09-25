@@ -418,16 +418,63 @@ input[type="checkbox"]:disabled { cursor: not-allowed; }
     .tab.tab-waiting { animation: none; }
 }
 .unread { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
-.main { min-width: 0; min-height: 0; display: flex; }
+.main { min-width: 0; min-height: 0; display: flex; position: relative; }
 .agent-panel, .broadcast { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-.agent-header { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--panel); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
-.agent-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; flex: 1; }
+.agent-header { padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+/*
+ * The header of an agent is one line (#102): the name and the state take what
+ * is left, the rest keeps its size. What left it lives in the details.
+ */
+.agent-title { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; }
+.agent-title > * { flex: none; }
+.agent-title > h1 { flex: 0 1 auto; min-width: 0; }
 .agent-title h1, .broadcast h1 { font-size: 18px; margin: 0; }
+.agent-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-title .reason { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kind, .reason, .muted, .description { color: var(--muted); font-size: 12px; }
 .harness { font-family: var(--mono); font-size: 12px; padding: 0 6px; border: 1px solid var(--border); border-radius: 4px; }
-.harness-unknown { font-family: inherit; color: var(--muted); border-style: dashed; }
-.description { margin: 0; width: 100%; order: 3; }
+.harness-unknown { color: var(--muted); }
+.description { margin: 0; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.header-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+/* A round button of an icon: the details, the menu of actions. */
+.icon-btn { width: var(--ctl-h-sm); padding: 0; }
+.icon-btn svg { width: 16px; height: 16px; }
+.icon-btn[aria-expanded="true"] { background: var(--nav-bg-selected); color: var(--text); }
+/* On a wide screen the actions are buttons; on a phone they go behind «⋯». */
+.actions-menu { position: relative; display: none; }
+.menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 6; min-width: 180px; padding: 4px; background: var(--panel); border: var(--pop-edge); border-radius: var(--r-pop); box-shadow: var(--pop-shadow); display: flex; flex-direction: column; }
+.menu [role="menuitem"] { text-align: left; border: 0; background: transparent; font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 10px; cursor: pointer; color: var(--text); }
+.menu [role="menuitem"]:hover { background: var(--nav-bg-hover); }
+.menu [role="menuitem"]:focus-visible { outline: var(--ring); outline-offset: -2px; }
+.header-error { margin: 0; padding: 6px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+/*
+ * A lost or poor connection, under the header (#102): the whole width, in the
+ * muted brick of the palette; the grey of --bad is too close to the text for it.
+ */
+.health-strip { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-size: 12px; color: var(--bad-text); background: color-mix(in srgb, var(--dot-bad) 10%, var(--panel)); border-bottom: 1px solid color-mix(in srgb, var(--dot-bad) 35%, var(--border)); box-shadow: inset 3px 0 0 var(--dot-bad); }
+.health-strip-text { flex: 1; min-width: 0; font-weight: 600; }
+.health-strip .btn { --b-fg: var(--bad-text); flex: none; }
+.warn-icon { flex: none; color: var(--dot-bad); }
+/* The details of an agent: a panel on the right of the chat, over it on a phone. */
+.agent-details { width: 320px; flex: none; border-left: 1px solid var(--border); background: var(--panel); padding: 14px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+.agent-details-head { display: flex; align-items: center; justify-content: space-between; }
+.agent-details-head h2 { font-size: 14px; margin: 0; }
+.details-section { display: flex; flex-direction: column; gap: 10px; }
+.details-section + .details-section { border-top: 1px solid var(--border); padding-top: 14px; }
+.details-section h3 { font-size: 13px; margin: 0; display: flex; align-items: center; gap: 8px; }
+.details-section .description { font-size: 13px; color: var(--text); }
+.health-fine { color: var(--muted); font-size: 12px; font-weight: 500; }
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 13px; }
+.facts dt { color: var(--muted); font-size: 12px; }
+.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+    .agent-header { padding: 8px 12px; }
+    .header-actions .actions { display: none; }
+    .actions-menu { display: block; }
+    .agent-header .views { order: 5; width: 100%; }
+    .agent-details { position: absolute; inset: 0; width: auto; border-left: 0; z-index: 5; }
+}
 .error { color: var(--bad-text); font-size: 12px; }
 .note { color: var(--muted); font-size: 12px; }
 .feed { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
@@ -745,15 +792,21 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
  * The health of an SSH connection (#53): a quiet line of facts; a poor
  * connection turns it the colour of an error, with the reason, and marks the tab.
  */
-.health { width: 100%; order: 4; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; font-size: 12px; color: var(--muted); }
+.health { width: 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; font-size: 12px; color: var(--muted); }
 .settings-agent .health { order: 0; }
 .health-title { font-family: var(--mono); font-size: 11px; padding: 0 5px; border: 1px solid var(--border); border-radius: 4px; }
 .health-label { text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
 .health-fact { color: var(--text); }
 .health-fact .health-label { color: var(--muted); }
-.health-poor { padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--bad) 10%, var(--panel)); box-shadow: inset 3px 0 0 var(--bad); }
-.health-poor .health-title { border-color: var(--bad); color: var(--bad-text); }
+.health-poor { padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--dot-bad) 10%, var(--panel)); box-shadow: inset 3px 0 0 var(--dot-bad); }
+.health-poor .health-title { border-color: var(--dot-bad); color: var(--bad-text); }
 .health-warning { color: var(--bad-text); font-weight: 600; }
+/* In the details: a column of label and value, the warning over them. */
+.health-column { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; align-items: baseline; font-size: 13px; }
+.health-column.health-poor { padding: 0; background: none; box-shadow: none; }
+.health-column .health-fact { display: contents; }
+.health-column .health-label { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.health-column .health-warning { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; margin-bottom: 2px; padding: 6px 10px; border-radius: var(--r-field); font-size: 12px; background: color-mix(in srgb, var(--dot-bad) 10%, var(--panel)); box-shadow: inset 3px 0 0 var(--dot-bad); }
 .tab-poor { font-size: 11px; font-weight: 600; color: var(--bad-text); }
 .actions .note { align-self: center; }
 .field { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 0; }
@@ -788,7 +841,7 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
  * its title. The chat stays mounted while the memory is in sight, so the feed
  * keeps its place and the field its draft.
  */
-.views { width: 100%; order: 5; display: flex; gap: 4px; margin-top: 4px; }
+.views { display: flex; gap: 4px; flex: none; }
 .view-tab { height: var(--ctl-h-sm); padding: 0 14px; border: 0; border-radius: var(--r-ctl); background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: var(--ctl-tr); display: inline-flex; align-items: center; gap: 6px; }
 .view-tab:hover { background: var(--nav-bg-hover); color: var(--text); }
 .view-tab[aria-pressed="true"] { background: var(--nav-bg-selected); color: var(--btn-fg); }

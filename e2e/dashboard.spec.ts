@@ -164,12 +164,34 @@ test('the page carries the flotti logo in its header and the icon in its tab', a
         expect(response.headers()['content-type'], icon).toMatch(/^image\//);
     }
 });
-test('the header of an agent names its harness, and says when it is not known', async ({ page }) => {
+test('the header of an agent is one line; its harness and type are in the details, which say when it is not known', async ({ page }) => {
     await page.goto(url);
-    for (const [name, harness] of [['claude', 'claude'], ['codex', 'codex'], ['relay', 'harness unknown']] as const) {
+    for (const [name, harness] of [['claude', 'claude'], ['codex', 'codex'], ['relay', 'not known']] as const) {
         await tab(page, name).click();
-        await expect(page.locator('.agent-header [data-harness]')).toHaveText(harness);
+        await expect(page.locator('.agent-header [data-harness]')).toHaveCount(0);
+        const header = await page.locator('.agent-header').boundingBox();
+        expect(header?.height ?? 0).toBeLessThan(60);
+        await page.getByRole('button', { name: `Details of ${name}` }).click();
+        const details = page.getByRole('complementary', { name: `Details of ${name}` });
+        await expect(details.locator('[data-harness]')).toHaveText(harness);
+        await expect(details).toContainText(name === 'relay' ? 'remote · A2A' : 'local · ACP');
+        await details.getByRole('button', { name: 'Close' }).click();
+        await expect(details).toHaveCount(0);
     }
+});
+test('on a phone the actions of an agent are behind a menu, and the details cover the chat', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(url);
+    await tab(page, 'claude').click();
+    await expect(page.locator('.agent-header .actions')).toBeHidden();
+    await page.getByRole('button', { name: 'Actions' }).click();
+    const menu = page.getByRole('menu', { name: 'Actions' });
+    await expect(menu.getByRole('menuitem')).toHaveText(['Stop', 'Restart']);
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await page.getByRole('button', { name: 'Details of claude' }).click();
+    const details = await page.getByRole('complementary', { name: 'Details of claude' }).boundingBox();
+    expect(details?.width ?? 0).toBeGreaterThan(300);
 });
 test('writes to one agent, and the answer stays in its tab', async ({ page }) => {
     await page.goto(url);
@@ -790,7 +812,8 @@ test('makes an agent an administrator in the settings; its action waits for a pe
     const settings = () => JSON.parse(readFileSync(join(workspace, '.flotti', 'settings.json'), 'utf8')) as Record<string, unknown>;
     await expect.poll(() => settings()['confirmAdminActions']).toBe(true);
     await say(page, 'relay', 'clear codex');
-    await expect(page.locator('.admin-badge')).toHaveText('admin');
+    await page.getByRole('button', { name: 'Details of relay' }).click();
+    await expect(page.getByRole('complementary', { name: 'Details of relay' }).locator('.admin-badge')).toHaveText('admin');
     const request = feed(page, 'relay').locator('.admin-request');
     await expect(request).toContainText('relay asks to clear the context of codex');
     await request.getByRole('button', { name: 'Allow' }).click();
