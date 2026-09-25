@@ -50,14 +50,17 @@ function updateNotifications(refs: Refs, waiting: ReturnType<typeof waitingAgent
     if (permission === 'granted' && outOfSight()) {
         notifyNewlyWaiting(refs, waiting, feeds);
     }
-    // Answered, here or elsewhere: its notification is old news.
+    closeAnswered(refs, now);
+    refs.wasWaiting.current = now;
+}
+/** Answered, here or elsewhere: the notification of an agent no longer waiting is old news. */
+function closeAnswered(refs: Refs, waiting: ReadonlySet<string>): void {
     for (const [id, notification] of refs.shown.current) {
-        if (!now.has(id)) {
+        if (!waiting.has(id)) {
             notification.close();
             refs.shown.current.delete(id);
         }
     }
-    refs.wasWaiting.current = now;
 }
 function askPermission(setPermission: (permission: Permission) => void): void {
     if (typeof Notification !== 'undefined') {

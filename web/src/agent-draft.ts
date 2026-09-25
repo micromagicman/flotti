@@ -83,28 +83,46 @@ function withAdapter(draft: Draft, adapter: LocalAgentAdapter | ''): Draft {
     return { ...draft, adapter, command: PRESETS[adapter].command, arguments: PRESETS[adapter].arguments.join('\n') };
 }
 function fromRemoteConfig(common: Draft, config: RemoteAgentConfig): Draft {
-    const auth = config.auth ?? { type: 'none' };
     return {
         ...common,
-        sshTarget: config.ssh?.target ?? '',
-        sshAgent: config.ssh?.agent ?? '',
+        ...sshFields(config.ssh),
         url: config.url ?? '',
+        ...authFields(config.auth ?? { type: 'none' })
+    };
+}
+function sshFields(ssh: RemoteAgentConfig['ssh']): Pick<Draft, 'sshTarget' | 'sshAgent'> {
+    return ssh === undefined ? { sshTarget: '', sshAgent: '' } : { sshTarget: ssh.target, sshAgent: ssh.agent ?? '' };
+}
+function authFields(auth: RemoteAuth): Pick<Draft, 'authType' | 'tokenEnv' | 'header' | 'valueEnv'> {
+    return {
         authType: auth.type,
         tokenEnv: auth.type === 'bearer' ? auth.tokenEnv : '',
-        header: auth.type === 'api-key' ? auth.header : '',
-        valueEnv: auth.type === 'api-key' ? auth.valueEnv : ''
+        ...(auth.type === 'api-key' ? { header: auth.header, valueEnv: auth.valueEnv } : { header: '', valueEnv: '' })
     };
 }
 function fromLocalConfig(common: Draft, config: LocalAgentConfig): Draft {
+    return { ...common, ...commandFields(config), ...placeFields(config), ...runFields(config) };
+}
+/** What starts a local agent. */
+function commandFields(config: LocalAgentConfig): Pick<Draft, 'adapter' | 'model' | 'command' | 'arguments'> {
     return {
-        ...common,
         adapter: config.adapter ?? '',
         model: config.model ?? '',
         command: config.command,
-        arguments: (config.arguments ?? []).join('\n'),
+        arguments: (config.arguments ?? []).join('\n')
+    };
+}
+/** Where a local agent runs, and with what environment. */
+function placeFields(config: LocalAgentConfig): Pick<Draft, 'workdir' | 'sshTarget' | 'env'> {
+    return {
         workdir: config.workdir ?? '',
         sshTarget: config.ssh ?? '',
-        env: Object.entries(config.env ?? {}).map(([name, value]) => `${name}=${value}`).join('\n'),
+        env: Object.entries(config.env ?? {}).map(([name, value]) => `${name}=${value}`).join('\n')
+    };
+}
+/** How a local agent is kept running, and what it is told. */
+function runFields(config: LocalAgentConfig): Pick<Draft, 'restart' | 'heartbeatTimeoutSec' | 'systemPrompt'> {
+    return {
         restart: config.restart ?? '',
         heartbeatTimeoutSec: config.heartbeatTimeoutSec === undefined ? '' : String(config.heartbeatTimeoutSec),
         systemPrompt: config.systemPrompt ?? ''

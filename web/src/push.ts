@@ -39,16 +39,21 @@ async function subscribePush(publicKey: string, refused: string): Promise<PushSu
     if (await Notification.requestPermission() !== 'granted') {
         throw new Error(refused);
     }
-    const worker = await registration();
-    const key = keyBytes(publicKey);
-    const existing = await worker.pushManager.getSubscription();
-    const sameKey = existing?.options.applicationServerKey !== undefined && existing.options.applicationServerKey !== null
-        && new Uint8Array(existing.options.applicationServerKey).join() === key.join();
-    if (existing !== null && !sameKey) {
-        await existing.unsubscribe();
-    }
-    const subscription = sameKey && existing !== null ? existing : await worker.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    const subscription = await subscriptionWith(await registration(), keyBytes(publicKey));
     return subscription.toJSON();
+}
+/** The subscription of this browser made with `key`: the one there is, or a new one in place of any other. */
+async function subscriptionWith(worker: ServiceWorkerRegistration, key: Uint8Array<ArrayBuffer>): Promise<PushSubscription> {
+    const existing = await worker.pushManager.getSubscription();
+    if (existing !== null && hasKey(existing, key)) {
+        return existing;
+    }
+    await existing?.unsubscribe();
+    return worker.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+}
+function hasKey(subscription: PushSubscription, key: Uint8Array): boolean {
+    const own = subscription.options.applicationServerKey;
+    return own !== undefined && own !== null && new Uint8Array(own).join() === key.join();
 }
 /** Stops Web Push on this browser; the endpoint it had, for flotti to forget. */
 async function unsubscribePush(): Promise<string | undefined> {

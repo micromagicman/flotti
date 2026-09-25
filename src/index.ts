@@ -53,7 +53,7 @@ async function run(argv: readonly string[]): Promise<number> {
 }
 async function main(argv: readonly string[]): Promise<number> {
     const [command] = argv;
-    if (argv.includes('--help') || argv.includes('-h') || command === undefined) {
+    if (command === undefined || wantsHelp(argv)) {
         console.log(HELP);
         return 0;
     }
@@ -63,21 +63,27 @@ async function main(argv: readonly string[]): Promise<number> {
         return reportFailure(error);
     }
 }
+function wantsHelp(argv: readonly string[]): boolean {
+    return argv.includes('--help') || argv.includes('-h');
+}
+function exitCode(ok: boolean): number {
+    return ok ? 0 : 1;
+}
+/** The commands of the CLI, each with the exit code it ends with. */
+const COMMANDS = new Map<string, (args: readonly string[]) => Promise<number>>([
+    ['run', run],
+    ['start', async (args) => exitCode(await startFleet({ argv: args, entry: ENTRY }))],
+    ['stop', async (args) => exitCode(await stopFleet({ argv: args }))],
+    ['status', async (args) => exitCode(await fleetStatus({ argv: args }))]
+]);
 /** Runs one command of the CLI with the arguments that follow it. */
 async function runCommand(command: string, args: readonly string[]): Promise<number> {
-    switch (command) {
-        case 'run':
-            return await run(args);
-        case 'start':
-            return (await startFleet({ argv: args, entry: ENTRY })) ? 0 : 1;
-        case 'stop':
-            return (await stopFleet({ argv: args })) ? 0 : 1;
-        case 'status':
-            return (await fleetStatus({ argv: args })) ? 0 : 1;
-        default:
-            console.error(`Unknown command "${command}".\n\n${HELP}`);
-            return 1;
+    const commandRun = COMMANDS.get(command);
+    if (commandRun === undefined) {
+        console.error(`Unknown command "${command}".\n\n${HELP}`);
+        return 1;
     }
+    return await commandRun(args);
 }
 /** A configuration error is told to the person and ends with 1; anything else is thrown on. */
 function reportFailure(error: unknown): number {

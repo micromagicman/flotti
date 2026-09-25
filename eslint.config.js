@@ -37,6 +37,52 @@ export default tseslint.config(
         },
     },
     {
+        // A function of the product code has at most four paths through it (#119).
+        files: [ 'src/**/*.ts', 'web/src/**/*.{ts,tsx}' ],
+        rules: {
+            complexity: [
+                'error',
+                {
+                    max: 4
+                }
+            ],
+        },
+    },
+    {
+        // Not under the limit yet (#119): a file leaves this list once its functions are split.
+        files: [
+            'src/a2a-agent.ts',
+            'src/agent-events.ts',
+            'src/dashboard-server.ts',
+            'src/delegations.ts',
+            'src/fleet-mcp.ts',
+            'src/fleet-settings.ts',
+            'src/fleet.ts',
+            'src/local-agent.ts',
+            'src/manifest.ts',
+            'src/memory-bank.ts',
+            'src/memory-store.ts',
+            'src/notifications.ts',
+            'src/notifier.ts',
+            'src/run.ts',
+            'src/settings.ts',
+            'src/ssh.ts',
+            'src/supervisor.ts',
+            'web/src/App.tsx',
+            'web/src/components/Feed.tsx',
+            'web/src/components/NotificationSettings.tsx',
+            'web/src/components/SettingsPanel.tsx',
+            'web/src/components/Sidebar.tsx',
+            'web/src/feed.ts',
+            'web/src/i18n/en.ts',
+            'web/src/i18n/ru.ts',
+            'web/src/markdown.ts'
+        ],
+        rules: {
+            complexity: 'off'
+        },
+    },
+    {
         // The words of the dashboard come from its languages, web/src/i18n (#86).
         files: [ 'web/src/**/*.ts', 'web/src/**/*.tsx' ],
         ignores: [ 'web/src/i18n/**' ],

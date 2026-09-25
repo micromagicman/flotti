@@ -16,6 +16,7 @@ import {
 } from 'node:crypto';
 import type { KeyObject } from 'node:crypto';
 import type { PushSubscriptionBody } from './dashboard-protocol.js';
+import { describeError } from './describe-error.js';
 import type { Notice, NotificationChannel } from './notifier.js';
 /** The key pair flotti signs its pushes with; both halves base64url, the public one as the raw point. */
 type VapidKeys = { readonly publicKey: string; readonly privateKey: string };
@@ -39,6 +40,8 @@ const RECORD_SIZE = 4096;
 /** How long a push service keeps a push for a browser that is offline. */
 const TTL_SECONDS = 24 * 60 * 60;
 const TIMEOUT_MS = 10_000;
+/** The protocols a push endpoint may have. */
+const WEB_PROTOCOLS: ReadonlySet<string> = new Set(['https:', 'http:']);
 const DEFAULT_SUBJECT = 'https://github.com/micromagicman/flotti';
 function base64url(bytes: Uint8Array): string {
     return Buffer.from(bytes).toString('base64url');
@@ -95,17 +98,26 @@ function encrypt(payload: string, subscription: PushSubscription, salt = randomB
 /** A subscription out of what a page sent; throws when it is not one. */
 function subscriptionOf(body: unknown): PushSubscription {
     const { endpoint, keys } = (body ?? {}) as Partial<PushSubscriptionBody>;
-    let url: URL | undefined;
-    try {
-        url = new URL(String(endpoint));
-    } catch {
-        url = undefined;
-    }
-    if (url === undefined || (url.protocol !== 'https:' && url.protocol !== 'http:')
-        || typeof keys?.p256dh !== 'string' || typeof keys.auth !== 'string') {
+    const url = webUrl(endpoint);
+    if (url === undefined || !hasKeys(keys)) {
         throw new Error('A push subscription needs an http(s) endpoint and the p256dh and auth keys.');
     }
     return { endpoint: url.href, keys: { p256dh: keys.p256dh, auth: keys.auth } };
+}
+/** The endpoint as an http(s) address; nothing when it is not one. */
+function webUrl(endpoint: unknown): URL | undefined {
+    const url = parsedUrl(String(endpoint));
+    return url !== undefined && WEB_PROTOCOLS.has(url.protocol) ? url : undefined;
+}
+function parsedUrl(text: string): URL | undefined {
+    try {
+        return new URL(text);
+    } catch {
+        return undefined;
+    }
+}
+function hasKeys(keys: PushSubscriptionBody['keys']): keys is PushSubscription['keys'] {
+    return typeof keys?.p256dh === 'string' && typeof keys.auth === 'string';
 }
 class WebPushChannel implements NotificationChannel {
     readonly name = 'web-push';
@@ -136,13 +148,17 @@ class WebPushChannel implements NotificationChannel {
                 body: new Uint8Array(encrypt(JSON.stringify(payload), subscription)),
                 signal: AbortSignal.timeout(TIMEOUT_MS)
             });
-            if (response.status === 404 || response.status === 410) {
-                this.options.onGone(subscription.endpoint);
-            }
-            return response.ok ? undefined : `the push service answered ${response.status}`;
+            return this.answered(subscription, response);
         } catch (error) {
-            return error instanceof Error ? error.message : String(error);
+            return describeError(error);
         }
+    }
+    /** What the push service answered: why it failed, or nothing; a subscription it no longer knows is gone. */
+    private answered(subscription: PushSubscription, response: Response): string | undefined {
+        if (response.status === 404 || response.status === 410) {
+            this.options.onGone(subscription.endpoint);
+        }
+        return response.ok ? undefined : `the push service answered ${response.status}`;
     }
     private headers(subscription: PushSubscription): Record<string, string> {
         return {

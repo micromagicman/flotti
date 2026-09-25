@@ -91,12 +91,16 @@ function ForwardedBlock({ forwarded, agents, colors }: { readonly forwarded: For
         </div>
     );
 }
+/** A forward with nothing written above it shows only what it forwards. */
+function showsText(item: MessageItem): boolean {
+    return item.text !== '' || item.forwarded === undefined;
+}
 /** The quote a reply answers, the words of the message, and what it forwards, in that order. */
 function MessageBody({ item, agents, colors, actions }: { readonly item: MessageItem; readonly actions: QuoteActions } & Names) {
     return (
         <>
             {item.replyTo === undefined ? null : <QuoteLink quote={item.replyTo} agents={agents} colors={colors} actions={actions} />}
-            {item.text === '' && item.forwarded !== undefined ? null : <div className="text"><LinkedText text={item.text} /></div>}
+            {showsText(item) ? <div className="text"><LinkedText text={item.text} /></div> : null}
             {item.forwarded === undefined ? null : <ForwardedBlock forwarded={item.forwarded} agents={agents} colors={colors} />}
         </>
     );
@@ -110,11 +114,10 @@ function MessageBody({ item, agents, colors, actions }: { readonly item: Message
 function Envelope({ peer, ...props }: MessageProps & { readonly peer: string }) {
     const { item, agentId, agentName, agents, colors } = props;
     const incoming = item.role === 'user';
-    const from = incoming ? nameOf(agents, peer) : agentName;
-    const to = incoming ? agentName : nameOf(agents, peer);
+    const [from, to] = incoming ? [nameOf(agents, peer), agentName] : [agentName, nameOf(agents, peer)];
     const t = useT();
     return (
-        <div className={`item message message-${item.role} ${incoming ? 'message-peer' : 'message-sent'} agent-color-${colors[incoming ? peer : agentId] ?? 0}`}>
+        <div className={envelopeClass(item.role, incoming, colors[incoming ? peer : agentId])}>
             <div className="envelope-bar">
                 <span aria-hidden="true">{from} → {to}</span>
                 <span className="visually-hidden">{t.common.fromTo(from, to)}</span>
@@ -122,6 +125,10 @@ function Envelope({ peer, ...props }: MessageProps & { readonly peer: string }) 
             <div className="envelope-body"><MessageBody {...props} /></div>
         </div>
     );
+}
+/** The look of an envelope: which side it stands on, in the colour of the one who wrote it. */
+function envelopeClass(role: MessageItem['role'], incoming: boolean, color: number | undefined): string {
+    return `item message message-${role} ${incoming ? 'message-peer' : 'message-sent'} agent-color-${color ?? 0}`;
 }
 function Bubble(props: MessageProps) {
     const { item, agentName } = props;
@@ -187,9 +194,16 @@ function MessageToolbar({ item, agentId, agents, colors, actions }: MessageProps
                 <button type="button" className="btn btn-ghost btn-xs message-action" aria-expanded={picking} onClick={() => setPicking(!picking)}>{t.message.forward}</button>
             </div>
             {picking ? <ForwardPicker agentId={agentId} agents={agents} colors={colors} onPick={forward} onClose={() => setPicking(false)} /> : null}
-            {outcome === undefined ? null : <span className={`message-outcome ${outcome.error ? 'error' : 'note'}`} role={outcome.error ? 'alert' : 'status'}>{outcome.text}</span>}
+            <ForwardOutcome outcome={outcome} />
         </>
     );
+}
+/** How the last forward went, once there was one. */
+function ForwardOutcome({ outcome }: { readonly outcome: Outcome | undefined }) {
+    if (outcome === undefined) {
+        return null;
+    }
+    return <span className={`message-outcome ${outcome.error ? 'error' : 'note'}`} role={outcome.error ? 'alert' : 'status'}>{outcome.text}</span>;
 }
 /** One message of the feed with what can be done with it. */
 function Message(props: MessageProps) {

@@ -2,6 +2,14 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Simpler functions.** `npm run lint` holds every function of `src/` and `web/src/` to a cyclomatic
+  complexity of at most 4. The files not under the limit yet are listed in `eslint.config.js` and leave
+  the list a module at a time; 36 of them are there already. Nothing changes in how flotti behaves (#119).
+
 ## [0.4.0] — 2026-09-25
 
 Agents that remember and know their fleet: memory of its own for every local agent, the roster of the
