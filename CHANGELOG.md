@@ -36,6 +36,8 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   field and the Next up block no longer stop in a 900 px column: they run the width of the feed, and a
   message in line stands at its right edge, where the messages of the person do. A narrow screen and
   the broadcast look as before (#95).
+- **The Administrators setting shows no box until it is read.** While the dashboard was still asking
+  the server, the box stood empty, as if the setting were off, and a click on it did nothing (#91).
 
 ## [0.3.0]
 
