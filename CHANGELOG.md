@@ -9,6 +9,9 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 - **Simpler functions.** `npm run lint` holds every function of `src/` and `web/src/` to a cyclomatic
   complexity of at most 4. The files not under the limit yet are listed in `eslint.config.js` and leave
   the list a module at a time; 36 of them are there already. Nothing changes in how flotti behaves (#119).
+- **No line under every answer.** A turn that ended normally draws nothing in the feed any more; for a
+  remote agent every answer is a turn, so a dashed line followed each of its messages. A turn that ended
+  for another reason still says why (#115).
 
 ## [0.4.0] — 2026-09-25
 
