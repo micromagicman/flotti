@@ -501,7 +501,7 @@ class Supervisor {
         this.delegations.take(member.agent.id, event);
         const answer = member.answers.take(event);
         if (answer !== undefined) {
-            this.forward(member, answer.to, answer.text, answer.replyTo);
+            this.forward(member, answer.to, answer.text, answer.replyTo, true);
         }
     }
     /** What the agent says to another one goes there: a message, a task, taking a task back. */
@@ -647,11 +647,12 @@ class Supervisor {
     }
     /**
      * Sends on what an agent said to another one — a message of its own, or,
-     * with `replyTo`, its answer to a message of that one. The sender does not
-     * wait for the receiver: a message that cannot be delivered is a line in
-     * the tab of the sender, saying why.
+     * with `replyTo`, its answer to a message of that one. `turnAnswer` marks
+     * the answer flotti sends back at the end of a turn: the receiver owes none
+     * to it. The sender does not wait for the receiver: a message that cannot
+     * be delivered is a line in the tab of the sender, saying why.
      */
-    private forward(sender: Member, to: string, text: string, replyTo?: Quote): void {
+    private forward(sender: Member, to: string, text: string, replyTo?: Quote, turnAnswer = false): void {
         const from = sender.agent.id;
         const receiver = this.members.get(to);
         const failed = (why: string): void => {
@@ -665,7 +666,7 @@ class Supervisor {
         } else if (receiver === sender) {
             failed('an agent does not send messages to itself');
         } else {
-            void this.handOn(receiver, from, text, replyTo).then((error) => {
+            void this.handOn(receiver, from, text, replyTo, turnAnswer).then((error) => {
                 if (error !== undefined) {
                     failed(error);
                 }
@@ -677,9 +678,14 @@ class Supervisor {
      * fleet tools, so `reply` and `forward` of the receiver act on it. Resolves
      * with why it failed, or with nothing.
      */
-    private async handOn(receiver: Member, from: string, text: string, replyTo: Quote | undefined): Promise<string | undefined> {
+    private async handOn(receiver: Member, from: string, text: string, replyTo: Quote | undefined, turnAnswer: boolean): Promise<string | undefined> {
         const messageId = randomUUID();
-        const delivery = await this.hand(receiver, text, replyTo === undefined ? { from, messageId } : { from, messageId, replyTo });
+        const delivery = await this.hand(receiver, text, {
+            from,
+            messageId,
+            ...(replyTo === undefined ? {} : { replyTo }),
+            ...(turnAnswer ? { turnAnswer: true as const } : {})
+        });
         if (delivery.result === 'failed') {
             return delivery.error ?? 'the agent did not take it';
         }

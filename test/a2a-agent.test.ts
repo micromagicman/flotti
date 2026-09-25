@@ -8,6 +8,7 @@ import type { A2AAgentOptions } from '../src/a2a-agent.js';
 import type { AgentEvent as DashboardEvent, AgentStatus } from '../src/agent-events.js';
 import { FleetMcpServer } from '../src/fleet-mcp.js';
 import { Supervisor } from '../src/supervisor.js';
+import type { SupervisorOptions } from '../src/supervisor.js';
 import type { RemoteAgent, RemoteAuth } from '../src/types.js';
 import { FakeAgent, agentMessage, artifact, gate, said, statusUpdate, task } from './a2a-fake-server.js';
 import type { FakeAgentOptions, Received, Script } from './a2a-fake-server.js';
@@ -736,9 +737,10 @@ describe('A2AAgent: answering another agent of the fleet', () => {
     });
 });
 /** A supervisor over these running agents, as a fleet of their ids. */
-async function fleetOf(agents: ReadonlyMap<string, A2AAgent | Harness>): Promise<Supervisor> {
+async function fleetOf(agents: ReadonlyMap<string, A2AAgent | Harness>, options: SupervisorOptions = {}): Promise<Supervisor> {
     const manifests = [...agents].map(([id, agent]) => agent instanceof Harness ? { ...agent.agent.agent, id } : { ...manifest('http://127.0.0.1/'), id });
     const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents: manifests }, {
+        ...options,
         createAgent: agent => {
             const found = agents.get(agent.id);
             return found instanceof Harness ? found.agent : found as A2AAgent;
@@ -836,6 +838,94 @@ describe('A2AAgent: tasks between an A2A agent and a local one', { timeout: 20_0
         deepStrictEqual(taskParams(params), { id: 'task-5', state: 'completed' });
         match(text, /The task task-5 you gave is completed\.\n\nyou said: \[from a\] Task task-5/);
         await supervisor.stop();
+    });
+});
+/** The texts the local agent was prompted with, in order. */
+function prompts(local: Harness): string[] {
+    return local.recorded('session/prompt').map(entry => String(entry['text']));
+}
+describe('A2AAgent: answering a message of a local agent', { timeout: 20_000 }, () => {
+    it('ACP to A2A: what the A2A agent answers in its task comes back to the local agent, quoting its message', async () => {
+        const server = await FleetMcpServer.start();
+        try {
+            const local = new Harness({ fake: { mcpHttp: true }, manifest: { id: 'a' }, options: { fleetTools: server.access('a') } });
+            const receiver = await inboxAgent();
+            const supervisor = await fleetOf(new Map<string, A2AAgent | Harness>([['a', local], ['b', a2a(receiver.agent, 'b')]]));
+            server.serve(supervisor);
+            await local.talk('mcp {"name":"send_message","arguments":{"to":"b","text":"Summarise the release"}}');
+            await eventually(() => prompts(local).length === 2, 5_000);
+            deepStrictEqual(prompts(local)[1], '[from b] In reply to a message from you:\n> Summarise the release\n\necho: Summarise the release');
+            await eventually(() => supervisor.history('a').filter(event => event.type === 'turn-end').length === 2, 5_000);
+            await new Promise(resolve => setTimeout(resolve, 100));
+            deepStrictEqual(conversation(receiver.agent).map(([text]) => text), ['Summarise the release'], 'the answer to the answer does not come back');
+            await supervisor.stop();
+        } finally {
+            await server.close();
+        }
+    });
+    it('an answer the local agent gives with reply is a message: what the A2A agent answers to it comes back', async () => {
+        const server = await FleetMcpServer.start();
+        try {
+            const local = new Harness({ fake: { mcpHttp: true }, manifest: { id: 'a' }, options: { fleetTools: server.access('a') } });
+            const sender = await inboxAgent();
+            const supervisor = await fleetOf(new Map<string, A2AAgent | Harness>([['a', local], ['b', a2a(sender.agent, 'b')]]), { fleetTools: server });
+            server.serve(supervisor);
+            await eventually(() => sender.isOpen());
+            sender.post('Deploy the release', 'own-1', { [INBOX_EXTENSION]: { to: 'a' } });
+            // The turn-end answer of the local agent goes back to b; b's answer to it does not come back.
+            await eventually(() => conversation(sender.agent).length === 1, 5_000);
+            await eventually(() => supervisor.history('b').some(event => event.type === 'turn-end'), 5_000);
+            await local.talk('mcp {"name":"reply","arguments":{"text":"Which host?"}}');
+            await eventually(() => prompts(local).length === 3, 5_000);
+            deepStrictEqual(prompts(local)[2],
+                '[from b] In reply to a message from you:\n> Which host?\n\necho: In reply to a message from you:\n> Deploy the release\n\nWhich host?');
+            await eventually(() => supervisor.history('a').filter(event => event.type === 'turn-end').length === 3, 5_000);
+            await new Promise(resolve => setTimeout(resolve, 100));
+            strictEqual(conversation(sender.agent).length, 2, 'the answer of the local agent to that answer does not go to b again');
+            await supervisor.stop();
+        } finally {
+            await server.close();
+        }
+    });
+});
+describe('A2AAgent: a message of another agent and the line', { timeout: 20_000 }, () => {
+    it('a task of an A2A agent from another agent ends with its answer, and the message of a person waiting in line goes next', async () => {
+        const server = await FleetMcpServer.start();
+        try {
+            const hold = gate();
+            const receiver = await fake({
+                script: async (context, bus) => {
+                    bus.publish(task(context, TaskState.TASK_STATE_WORKING));
+                    if (said(context).endsWith('Summarise the release')) {
+                        await hold.promise;
+                    }
+                    bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_COMPLETED, agentMessage(`done: ${said(context)}`, context)));
+                    bus.finished();
+                }
+            });
+            const local = new Harness({ fake: { mcpHttp: true }, manifest: { id: 'a' }, options: { fleetTools: server.access('a') } });
+            const supervisor = await fleetOf(new Map<string, A2AAgent | Harness>([['a', local], ['b', a2a(receiver, 'b')]]));
+            server.serve(supervisor);
+            await local.talk('mcp {"name":"send_message","arguments":{"to":"b","text":"Summarise the release"}}');
+            await eventually(() => receiver.received.length === 1);
+            const owner = supervisor.send('b', 'And the changelog?');
+            await eventually(() => supervisor.history('b').some(event => event.type === 'queued'));
+            hold.open();
+            await owner;
+            await eventually(() => supervisor.history('b').filter(event => event.type === 'turn-end').length === 2, 5_000);
+            deepStrictEqual(supervisor.history('b').flatMap(event => event.type === 'turn-end' ? [event.reason] : []), ['end_turn', 'end_turn']);
+            deepStrictEqual(supervisor.history('b').flatMap(event => event.type === 'message' ? [`${event.role}: ${event.text}`] : []), [
+                'user: Summarise the release',
+                'agent: done: [from a] Summarise the release',
+                'user: And the changelog?',
+                'agent: done: And the changelog?'
+            ]);
+            await eventually(() => prompts(local).length === 2, 5_000);
+            match(prompts(local)[1] ?? '', /^\[from b\] In reply to a message from you:\n> Summarise the release\n\ndone: /);
+            await supervisor.stop();
+        } finally {
+            await server.close();
+        }
     });
 });
 describe('A2AAgent: clearing the context', () => {
