@@ -26,7 +26,8 @@ let remote: InstanceType<typeof FakeAgent> | undefined;
 /** A pretend Telegram Bot API: flotti is pointed at it, no real bot or chat is used. */
 let telegram: FakeTelegram | undefined;
 let url = '';
-function localAgent(fleet: string, id: string, adapter?: string): void {
+/** @param fake What the pretend agent does besides recording; `mcpHttp` makes it take the fleet tools, and memory with them. */
+function localAgent(fleet: string, id: string, adapter?: string, fake: Record<string, unknown> = {}): void {
     const directory = join(fleet, 'local', id);
     mkdirSync(directory, { recursive: true });
     const record = join(directory, 'record.jsonl');
@@ -35,7 +36,7 @@ function localAgent(fleet: string, id: string, adapter?: string): void {
         ...(adapter === undefined ? {} : { adapter }),
         command: process.execPath,
         arguments: [FAKE_ACP],
-        env: { FAKE_ACP: JSON.stringify({ record }) }
+        env: { FAKE_ACP: JSON.stringify({ record, ...fake }) }
     }));
 }
 /**
@@ -121,9 +122,9 @@ function memoryNotes(fleet: string, id: string): void {
 }
 test.beforeAll(async () => {
     const fleet = join(workspace, 'fleet');
-    localAgent(fleet, 'claude', 'claude-code');
+    localAgent(fleet, 'claude', 'claude-code', { mcpHttp: true });
     memoryNotes(fleet, 'claude');
-    localAgent(fleet, 'codex', 'codex');
+    localAgent(fleet, 'codex', 'codex', { mcpHttp: true });
     await remoteAgent(fleet, 'relay');
     telegram = await FakeTelegram.start();
     url = await startFlotti(fleet);
@@ -895,6 +896,42 @@ test('deletes an agent: it stops, and its directory goes to .trash', async ({ pa
     await expect(tab(page, 'Helper Two')).toHaveCount(0);
     expect(existsSync(join(workspace, 'fleet', 'local', 'helper'))).toBe(false);
     expect(readdirSync(join(workspace, 'fleet', '.trash')).some((name) => name.startsWith('local-helper-'))).toBe(true);
+});
+test('the details of an agent say whether it has memory, as flotti delivered it', async ({ page }) => {
+    await page.goto(url);
+    const memoryOf = async (name: string) => {
+        await tab(page, name).click();
+        await page.getByRole('button', { name: `Details of ${name}` }).click();
+        return page.getByRole('complementary', { name: `Details of ${name}` }).locator('[data-memory]');
+    };
+    const close = async (name: string) => {
+        await page.getByRole('complementary', { name: `Details of ${name}` }).getByRole('button', { name: 'Close' }).click();
+    };
+    // The memory bank of codex stops being usable: something that is not a folder takes its place, and a restart hands memory over again.
+    await expect(await memoryOf('codex')).toHaveAttribute('data-memory', 'on');
+    await close('codex');
+    await expect(page.locator('.agent-header [data-memory]')).toHaveCount(0);
+    const bank = join(workspace, 'fleet', 'local', 'codex', 'memory');
+    rmSync(bank, { recursive: true, force: true });
+    writeFileSync(bank, 'not a folder');
+    await page.locator('.agent-header').getByRole('button', { name: 'Restart' }).click();
+    const cases = [
+        ['claude', 'on', 'memory on · policy v1'],
+        ['codex', 'unavailable', 'memory unavailable'],
+        ['relay', 'unsupported', 'memory unsupported']
+    ] as const;
+    for (const [name, state, text] of cases) {
+        const badge = await memoryOf(name);
+        await expect(badge).toHaveAttribute('data-memory', state);
+        await expect(badge).toHaveText(text);
+        if (name === 'codex') {
+            await expect(badge).toHaveAttribute('title', /is not a folder/);
+        }
+        await close(name);
+    }
+    await tab(page, 'codex').click();
+    await viewButton(page, 'Memory').click();
+    await expect(page.locator('.memory-state')).toContainText('is not a folder');
 });
 test('switches the fleet directory, and saves it for the next run', async ({ page }) => {
     const next = join(workspace, 'fleet-next');

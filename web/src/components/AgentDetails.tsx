@@ -16,7 +16,25 @@ function Harness({ agent }: { readonly agent: AgentSummary }) {
     const why = agent.kind === 'remote' ? t.agent.harnessRemote : t.agent.harnessLocal;
     return <span className="harness-unknown" data-harness="unknown" title={why}>{t.agent.noHarness}</span>;
 }
-/** The agent itself: what it is for, its type, its harness, its role. */
+/**
+ * Whether the agent has memory (#101), as flotti delivered it: on with the
+ * version of the policy, unsupported, or unavailable — with why in the hint.
+ * Nothing before a local agent was started once: flotti does not guess.
+ */
+function Memory({ memory }: { readonly memory: NonNullable<AgentSummary['memory']> }) {
+    const t = useT();
+    if (memory.state === 'on') {
+        const skill = memory.skill === 'user' ? t.agent.memorySkillUser : memory.skill === 'missing' ? t.agent.memorySkillMissing : '';
+        return (
+            <span className="memory-badge" data-memory="on" data-skill={memory.skill} title={`${t.agent.memoryOnHint}${skill === '' ? '' : ` ${skill}`}`}>
+                {t.agent.memoryOn(memory.policy)}
+            </span>
+        );
+    }
+    const label = memory.state === 'unsupported' ? t.agent.memoryUnsupported : t.agent.memoryUnavailable;
+    return <span className="memory-badge memory-badge-off" data-memory={memory.state} title={memory.reason}>{label}</span>;
+}
+/** The agent itself: what it is for, its type, its harness, its memory, its role. */
 function AboutAgent({ agent }: { readonly agent: AgentSummary }) {
     const t = useT();
     return (
@@ -28,6 +46,7 @@ function AboutAgent({ agent }: { readonly agent: AgentSummary }) {
                 <dd>{agent.kind === 'local' ? t.common.localKind : t.common.remoteKind}</dd>
                 <dt>{t.agent.harness}</dt>
                 <dd><Harness agent={agent} /></dd>
+                {agent.memory === undefined ? null : <><dt>{t.agent.memory}</dt><dd><Memory memory={agent.memory} /></dd></>}
                 {agent.admin === true
                     ? <><dt>{t.agent.role}</dt><dd><span className="admin-badge" title={t.agent.adminHint}>{t.agent.admin}</span></dd></>
                     : null}
@@ -51,7 +70,7 @@ function AboutConnection({ agent }: { readonly agent: AgentSummary }) {
 }
 /**
  * What left the header (#102): the description, the type, the harness, the
- * role, and the connection of a remote agent. A panel on the right of the
+ * memory (#101), the role, and the connection of a remote agent. A panel on the right of the
  * chat, over it on a phone; the chat stays in sight and can be written to.
  */
 function AgentDetails({ agent, id, onClose }: { readonly agent: AgentSummary; readonly id: string; readonly onClose: () => void }) {

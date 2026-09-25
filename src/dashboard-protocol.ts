@@ -30,7 +30,22 @@ type AgentSummary = {
     readonly health?: ConnectionHealth;
     /** Set for an administrator of the fleet: it may restart the other agents and clear their context. */
     readonly admin?: true;
+    /**
+     * Whether the agent has the memory of #101, as flotti delivered it — never
+     * what the agent says. Absent until a local agent was started once.
+     */
+    readonly memory?: MemoryStatus;
 };
+/**
+ * The memory of an agent: `on` with the version of the policy it got and where
+ * the built-in skill stands — flotti's own, one of the agent's own of the same
+ * name, or not written; `unsupported` when flotti cannot give it memory;
+ * `unavailable` when the bank cannot be read or written. An unavailable bank
+ * is never shown as an empty one.
+ */
+type MemoryStatus =
+    | { readonly state: 'on'; readonly policy: number; readonly skill: 'builtin' | 'user' | 'missing' }
+    | { readonly state: 'unsupported' | 'unavailable'; readonly reason: string };
 /**
  * What the page sends over the socket: the last `seq` it has seen of each
  * agent. The server answers with what came after it, then keeps the socket
@@ -296,6 +311,7 @@ export type {
     MemoryBank,
     MemoryNote,
     MemoryNoteSummary,
+    MemoryStatus,
     NotificationEvents,
     NotificationSettings,
     NotificationSettingsChange,

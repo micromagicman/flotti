@@ -1,4 +1,5 @@
 import type { ConnectionHealth, HealthListener } from './connection-health.js';
+import type { MemoryStatus } from './dashboard-protocol.js';
 /**
  * The one shape every agent of the fleet has for the dashboard, whether it is a
  * local process spoken to over ACP or a remote service spoken to over A2A: the
@@ -349,6 +350,8 @@ interface FleetAgent {
      * one does once connected to. Absent for an agent whose manifest tells it.
      */
     readonly harness?: string;
+    /** The memory flotti delivered to the agent (#101); absent when it has nothing to say. */
+    readonly memory?: MemoryStatus;
     /** Calls the listener with every event from now on; returns the way to stop. */
     subscribe(listener: AgentEventListener): () => void;
     /** Starts the agent, or connects to it; resolves once it can take messages. */
