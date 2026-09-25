@@ -299,7 +299,7 @@ describe('A2AAgent: a message of another agent while a task waits for input', ()
         await client.start();
         await client.send('pick one');
         await reaches(client, 'waiting');
-        await client.send('hello', { from: 'cutie' });
+        await client.send('hello', { from: 'reviewer' });
         await eventually(() => turnEnds(events).length === 2);
         const sent = agent.received[1]?.params['message'] as { taskId?: string };
         ok(sent.taskId === undefined || sent.taskId === '', `a message of an agent went to the paused task ${sent.taskId}`);
