@@ -215,19 +215,29 @@ test('the answer to a message from another agent goes back to the sender, quotin
     deepStrictEqual(fake(fakes.get('a')).options, [{
         from: 'b',
         messageId: answer?.type === 'message' ? answer.messageId : undefined,
-        replyTo: { agentId: 'b', messageId: 'u-rerun the tests', author: 'a', text: 'rerun the tests' }
+        replyTo: { agentId: 'b', messageId: 'u-rerun the tests', author: 'a', text: 'rerun the tests' },
+        turnAnswer: true
     }]);
     deepStrictEqual(answer?.type === 'message' ? [answer.text, answer.from] : undefined, ['you said: rerun the tests', 'b']);
     deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send rerun the tests from a'], 'the answer to the answer goes nowhere');
     deepStrictEqual(supervisor.history('b').map((event) => event.type), ['status', 'message', 'message', 'turn-end'], 'the tab of the receiver is as before');
 });
-test('a message of a person, and a message that answers one, get no answer sent anywhere', async () => {
+test('a message of a person, and an answer flotti sent back, get no answer sent anywhere', async () => {
     const { supervisor, fakes } = supervised('a', 'b');
     await supervisor.start();
     await supervisor.send('b', 'hi');
-    await supervisor.send('b', 'thanks', { from: 'a', replyTo: { agentId: 'a', messageId: 'm1', author: 'b', text: 'done' } });
+    await supervisor.send('b', 'thanks', { from: 'a', replyTo: { agentId: 'a', messageId: 'm1', author: 'b', text: 'done' }, turnAnswer: true });
     await new Promise((resolve) => setTimeout(resolve, 10));
     deepStrictEqual(fake(fakes.get('a')).calls, ['start']);
+});
+test('a reply an agent sends itself is a message: the answer to it goes back, and gets none in turn', async () => {
+    const { supervisor, fakes } = supervised('a', 'b');
+    await supervisor.start();
+    await supervisor.send('b', 'which host?', { from: 'a', replyTo: { agentId: 'a', messageId: 'm1', author: 'b', text: 'deploy it' } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(fake(fakes.get('a')).calls, ['start', 'send you said: which host? from b']);
+    deepStrictEqual(fake(fakes.get('a')).options.map((options) => [options.replyTo?.text, options.turnAnswer]), [['which host?', true]]);
+    deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send which host? from a'], 'the answer to the answer goes nowhere');
 });
 test('the answer is what the agent said in its messages of the turn; a cancelled turn and progress send nothing', async () => {
     const { supervisor, fakes } = supervised('a', 'b');

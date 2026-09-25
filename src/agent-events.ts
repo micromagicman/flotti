@@ -77,6 +77,13 @@ type AgentEventBody =
         /** The message this one answers: a reply, from a person or from an agent. */
         readonly replyTo?: Quote;
         /**
+         * The message is the answer flotti sent back on its own at the end of a
+         * turn of the sender (`role: 'user'`, with `from` and `replyTo`): it gets
+         * no answer back, or two agents would answer each other for ever. A reply
+         * an agent sends itself, with its `reply` tool, is an ordinary message.
+         */
+        readonly turnAnswer?: true;
+        /**
          * A message sent on as it was. The `text` of the event is then what the
          * one who forwarded it wrote above it, and may be empty.
          */
@@ -103,6 +110,7 @@ type AgentEventBody =
         /** As in a `message` event: the agent of the fleet that sent it, what it answers, sends on or sends again, and the task it is about. */
         readonly from?: string;
         readonly replyTo?: Quote;
+        readonly turnAnswer?: true;
         readonly forwarded?: Forwarded;
         readonly retryOf?: string;
         readonly delegation?: DelegationMark;
@@ -257,6 +265,8 @@ type SendOptions = {
     /** The `messageId` the message gets in the tab of the receiver; a new one when absent. */
     readonly messageId?: string;
     readonly replyTo?: Quote;
+    /** The answer flotti sends back at the end of a turn; see the `turnAnswer` of a `message` event. */
+    readonly turnAnswer?: true;
     readonly forwarded?: Forwarded;
     /** The `messageId` of an undelivered message this one sends again. */
     readonly retryOf?: string;
@@ -264,10 +274,11 @@ type SendOptions = {
     readonly delegation?: DelegationMark;
 };
 /** The fields of a `message` or `queued` event a sent message carries on, beyond its text. */
-function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message' }, 'from' | 'replyTo' | 'forwarded' | 'retryOf' | 'delegation'> {
+function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message' }, 'from' | 'replyTo' | 'turnAnswer' | 'forwarded' | 'retryOf' | 'delegation'> {
     return {
         ...(options.from === undefined ? {} : { from: options.from }),
         ...(options.replyTo === undefined ? {} : { replyTo: options.replyTo }),
+        ...(options.turnAnswer === true ? { turnAnswer: true as const } : {}),
         ...(options.forwarded === undefined ? {} : { forwarded: options.forwarded }),
         ...(options.retryOf === undefined ? {} : { retryOf: options.retryOf }),
         ...(options.delegation === undefined ? {} : { delegation: options.delegation })

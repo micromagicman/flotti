@@ -29,6 +29,11 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Fixed
 
+- **An answer to a reply comes back to its author.** When an agent answered another one with `reply`,
+  what the other answered to it stayed in its own tab: every message with a quote counted as an answer
+  flotti had sent back, and got none. Now only the answer flotti sends back at the end of a turn gets
+  no answer back, so there is still no loop, and an A2A agent that answers into its task reaches the
+  agent that replied to it (#99).
 - **`reply` and `forward` see every message from another agent.** A message of a remote A2A agent and
   an answer sent back at the end of a turn now count as the last message too: `reply` goes to their
   sender and quotes them, instead of saying no agent has written or answering an older sender (#98).

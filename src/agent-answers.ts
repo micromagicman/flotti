@@ -18,8 +18,10 @@ type Asked = { readonly from: string; readonly quote: Quote };
  * sender. Only the answer goes back — what the agent says in its messages;
  * progress lines, thoughts and tool calls stay in its own tab.
  *
- * A message that itself answers something — it carries `replyTo` — gets no
- * answer back: otherwise two agents would answer each other for ever.
+ * An answer flotti sent back this way — it carries `turnAnswer` — gets no
+ * answer back: otherwise two agents would answer each other for ever. A reply
+ * an agent sends itself (`replyTo` without `turnAnswer`) is a message like any
+ * other, and what the receiver answers to it goes back to the agent.
  */
 class AgentAnswers {
     private asked: Asked | undefined;
@@ -43,7 +45,7 @@ class AgentAnswers {
     private begin(event: AgentEvent & { type: 'message' }): void {
         this.said.clear();
         // A task has an outcome of its own, sent back as such: see Delegations.
-        this.asked = event.from === undefined || event.replyTo !== undefined || event.delegation !== undefined
+        this.asked = event.from === undefined || event.turnAnswer === true || event.delegation !== undefined
             ? undefined
             : { from: event.from, quote: quoteOf(event, event.from) };
     }
