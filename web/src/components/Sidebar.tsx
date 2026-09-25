@@ -19,7 +19,8 @@ type SidebarProps = {
     readonly seenSeq: Readonly<Record<string, number>>;
     readonly selected: string;
     readonly broadcastId: string;
-    readonly settingsId: string;
+    /** Where the settings stood: the settings opened at the agents, to add one (#116). */
+    readonly addAgentId: string;
     readonly conversationsId: string;
     readonly onSelect: (tab: string) => void;
 };
@@ -30,7 +31,7 @@ type SideTabProps = {
     readonly name: string;
     readonly hint: string;
 };
-/** A tab that is not an agent's: the broadcast one, the settings one, the list of conversations. */
+/** A tab that is not an agent's: the broadcast one, Add agent, the list of conversations. */
 function SideTab({ className, selected, onClick, name, hint }: SideTabProps) {
     return (
         <button
@@ -124,7 +125,7 @@ function ConversationTabs({ agents, colors, conversations, seenSeq, selected, co
         </>
     );
 }
-function Sidebar({ agents, feeds, colors, conversations, seenSeq, selected, broadcastId, settingsId, conversationsId, onSelect }: SidebarProps) {
+function Sidebar({ agents, feeds, colors, conversations, seenSeq, selected, broadcastId, addAgentId, conversationsId, onSelect }: SidebarProps) {
     const t = useT();
     return (
         <nav className="sidebar" role="tablist" aria-label={t.sidebar.label} aria-orientation="vertical">
@@ -136,7 +137,7 @@ function Sidebar({ agents, feeds, colors, conversations, seenSeq, selected, broa
             {conversations.length === 0
                 ? null
                 : <ConversationTabs agents={agents} colors={colors} conversations={conversations} seenSeq={seenSeq} selected={selected} conversationsId={conversationsId} onSelect={onSelect} />}
-            <SideTab className="tab tab-settings" selected={selected === settingsId} onClick={() => onSelect(settingsId)} name={t.sidebar.settings} hint={t.sidebar.settingsHint} />
+            <SideTab className="tab tab-add-agent" selected={selected === addAgentId} onClick={() => onSelect(addAgentId)} name={t.sidebar.addAgent} hint={t.sidebar.addAgentHint} />
         </nav>
     );
 }

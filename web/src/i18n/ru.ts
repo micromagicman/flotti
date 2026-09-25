@@ -115,8 +115,7 @@ const ru: Messages = {
         gone: 'flotti остановлен'
     },
     topbar: {
-        notify: 'Уведомлять',
-        notifyHint: 'Уведомление, когда агент ждёт вас, а вкладка flotti не на виду'
+        settings: 'Настройки'
     },
     attention: {
         waitingTitle: (name) => `${name} ждёт вас`,
@@ -128,8 +127,8 @@ const ru: Messages = {
         label: 'Агенты',
         allAgents: 'Все агенты',
         broadcast: 'Рассылка',
-        settings: 'Настройки',
-        settingsHint: 'Флот и агенты',
+        addAgent: 'Добавить агента',
+        addAgentHint: 'Локального или удалённого',
         newOutput: 'новый вывод',
         newMessages: 'новые сообщения',
         conversations: 'Переписки',
@@ -324,6 +323,10 @@ const ru: Messages = {
         noAgents: 'Агентов пока нет.',
         addLocal: 'Добавить локального агента',
         addRemote: 'Добавить удалённого агента',
+        notify: 'Уведомлять',
+        notifyHint: 'Уведомление, когда агент ждёт вас, а вкладка flotti не на виду',
+        notifyDenied: 'Браузеру запрещено показывать уведомления; разрешить можно в настройках сайта в браузере.',
+        notifyUnsupported: 'Этот браузер не умеет показывать уведомления.',
         adminSuffix: ' · админ',
         confirmDelete: (name) => `Остановить ${name} и переместить его каталог в .trash каталога флота?`,
         keep: 'Оставить',

@@ -2,6 +2,14 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Settings as an icon, Add agent in their place.** The settings open from a gear icon right of the connection
+  status; «Notify me» is a checkbox in the Notifications section of the settings; the sidebar ends with
+  **Add agent**, which opens the settings at the agents with Add local agent in focus (#116).
+
 ## [0.4.0] — 2026-09-25
 
 Agents that remember and know their fleet: memory of its own for every local agent, the roster of the

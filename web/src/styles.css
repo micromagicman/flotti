@@ -443,7 +443,7 @@ input[type="checkbox"]:disabled { cursor: not-allowed; }
 /* A round button of an icon: the details, the menu of actions. */
 .icon-btn { width: var(--ctl-h-sm); padding: 0; }
 .icon-btn svg { width: 16px; height: 16px; }
-.icon-btn[aria-expanded="true"] { background: var(--nav-bg-selected); color: var(--text); }
+.icon-btn[aria-expanded="true"], .icon-btn[aria-current="page"] { background: var(--nav-bg-selected); color: var(--text); }
 /* On a wide screen the actions are buttons; on a phone they go behind «⋯». */
 .actions-menu { position: relative; display: none; }
 .menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 6; min-width: 180px; padding: 4px; background: var(--panel); border: var(--pop-edge); border-radius: var(--r-pop); box-shadow: var(--pop-shadow); display: flex; flex-direction: column; }
@@ -779,7 +779,7 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
     .tab-label { max-width: 40vw; }
     .lane .message-row { max-width: 92%; }
 }
-.tab-settings { margin-top: auto; }
+.tab-add-agent { margin-top: auto; }
 .settings { flex: 1; padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
 .settings h1 { font-size: 18px; margin: 0; }
 .settings h2 { font-size: 15px; margin: 0; display: flex; align-items: baseline; gap: 10px; }

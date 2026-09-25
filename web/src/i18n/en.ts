@@ -110,8 +110,7 @@ const en = {
         gone: 'flotti has stopped'
     },
     topbar: {
-        notify: 'Notify me',
-        notifyHint: 'A notification when an agent waits for you and flotti is out of sight'
+        settings: 'Settings'
     },
     attention: {
         waitingTitle: (name: string) => `${name} is waiting for you`,
@@ -123,8 +122,8 @@ const en = {
         label: 'Agents',
         allAgents: 'All agents',
         broadcast: 'Broadcast',
-        settings: 'Settings',
-        settingsHint: 'Fleet and agents',
+        addAgent: 'Add agent',
+        addAgentHint: 'Local or remote',
         newOutput: 'new output',
         newMessages: 'new messages',
         conversations: 'Conversations',
@@ -319,6 +318,10 @@ const en = {
         noAgents: 'No agents yet.',
         addLocal: 'Add local agent',
         addRemote: 'Add remote agent',
+        notify: 'Notify me',
+        notifyHint: 'A notification when an agent waits for you and flotti is out of sight',
+        notifyDenied: 'The browser was told not to show notifications; that is undone in its site settings.',
+        notifyUnsupported: 'This browser cannot show notifications.',
         adminSuffix: ' · admin',
         confirmDelete: (name: string) => `Stop ${name} and move its directory to .trash in the fleet directory?`,
         keep: 'Keep',
