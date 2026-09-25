@@ -210,11 +210,13 @@ test('the answer to a message from another agent goes back to the sender, quotin
     await supervisor.send('b', 'rerun the tests', { from: 'a' });
     await new Promise((resolve) => setTimeout(resolve, 10));
     deepStrictEqual(fake(fakes.get('a')).calls, ['start', 'send you said: rerun the tests from b']);
+    const answer = supervisor.history('a').find((event) => event.type === 'message' && event.role === 'user');
+    // The answer has an id of its own in the tab of the receiver: a `reply` of the fleet tools quotes it.
     deepStrictEqual(fake(fakes.get('a')).options, [{
         from: 'b',
+        messageId: answer?.type === 'message' ? answer.messageId : undefined,
         replyTo: { agentId: 'b', messageId: 'u-rerun the tests', author: 'a', text: 'rerun the tests' }
     }]);
-    const answer = supervisor.history('a').find((event) => event.type === 'message' && event.role === 'user');
     deepStrictEqual(answer?.type === 'message' ? [answer.text, answer.from] : undefined, ['you said: rerun the tests', 'b']);
     deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send rerun the tests from a'], 'the answer to the answer goes nowhere');
     deepStrictEqual(supervisor.history('b').map((event) => event.type), ['status', 'message', 'message', 'turn-end'], 'the tab of the receiver is as before');

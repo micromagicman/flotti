@@ -29,6 +29,9 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Fixed
 
+- **`reply` and `forward` see every message from another agent.** A message of a remote A2A agent and
+  an answer sent back at the end of a turn now count as the last message too: `reply` goes to their
+  sender and quotes them, instead of saying no agent has written or answering an older sender (#98).
 - **A tunnel that is down counts as trouble.** A remote agent whose connection dropped and has not come
   back was shown as fine; now it says «No connection», under the header, on its tab in the sidebar and
   in `flotti status` (#102).
