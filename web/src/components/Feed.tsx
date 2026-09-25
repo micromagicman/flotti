@@ -122,7 +122,8 @@ function NoteEntry({ item }: { readonly item: Exclude<FeedItem, { kind: 'message
         case 'tool':
             return <ToolEntry item={item} />;
         case 'turn-end':
-            return item.reason === 'end_turn' ? <hr className="turn-end" /> : <div className="item turn-end-note">{t.feed.turnEnded(item.reason)}</div>;
+            // A normal end of turn has no look (#115): for an A2A agent every answer is a turn, and a line would follow each.
+            return item.reason === 'end_turn' ? null : <div className="item turn-end-note">{t.feed.turnEnded(item.reason)}</div>;
         case 'status':
             return <div className={`item status-line status-line-${item.status}`}>{t.status[item.status]}{item.reason === undefined || item.reason === item.status ? '' : `: ${item.reason}`}</div>;
         case 'log':
