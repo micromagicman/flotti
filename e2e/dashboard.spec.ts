@@ -206,6 +206,22 @@ test('writes to one agent, and the answer stays in its tab', async ({ page }) =>
     await tab(page, 'claude').click();
     await expect(feed(page, 'claude')).toContainText('you said: hello claude');
 });
+test('a turn that ended normally draws nothing under the answer; one that ended otherwise says why (#115)', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'claude', 'no line under me');
+    await expect(feed(page, 'claude')).toContainText('you said: no line under me');
+    await say(page, 'relay', 'no line under me');
+    await expect(feed(page, 'relay')).toContainText('echo: no line under me');
+    for (const name of ['claude', 'relay']) {
+        await tab(page, name).click();
+        await expect(feed(page, name).locator('hr, .turn-end')).toHaveCount(0);
+    }
+    await say(page, 'claude', 'wait');
+    await expect(tab(page, 'claude').locator('[data-status]')).toHaveAttribute('data-status', 'working');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(feed(page, 'claude').locator('.turn-end-note').last()).toHaveText('Turn ended: cancelled');
+    await expect(feed(page, 'claude').locator('hr, .turn-end')).toHaveCount(0);
+});
 test('what an agent says of its own shows in its tab, local and remote alike', async ({ page }) => {
     await page.goto(url);
     await say(page, 'claude', 'later');

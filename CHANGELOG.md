@@ -2,6 +2,14 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **No line under every answer.** A turn that ended normally draws nothing in the feed any more; for a
+  remote agent every answer is a turn, so a dashed line followed each of its messages. A turn that ended
+  for another reason still says why (#115).
+
 ## [0.4.0] — 2026-09-25
 
 Agents that remember and know their fleet: memory of its own for every local agent, the roster of the
