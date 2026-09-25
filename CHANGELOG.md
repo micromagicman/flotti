@@ -6,6 +6,9 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Added
 
+- **Remote agents see the fleet.** An A2A agent that declares the new fleet extension gets the roster of
+  the fleet — its own entry marked `you`, administrators `admin` — with the inbox request, and the whole
+  roster again after a change, outside any conversation; see [docs/a2a-fleet.md](docs/a2a-fleet.md) (#94).
 - **Agent memory.** Every local agent with an adapter gets a memory of its own with nothing to install:
   the tools `memory_search`, `memory_read`, `memory_write` and `memory_delete` of the fleet MCP server,
   a short policy after its system prompt, the built-in skill `flotti-memory`, and an index of its

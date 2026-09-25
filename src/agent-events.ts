@@ -354,6 +354,8 @@ interface FleetAgent {
     readonly memory?: MemoryStatus;
     /** Calls the listener with every event from now on; returns the way to stop. */
     subscribe(listener: AgentEventListener): () => void;
+    /** The fleet changed: an agent told who is in it is told again (docs/a2a-fleet.md). */
+    fleetChanged?(): void;
     /** Starts the agent, or connects to it; resolves once it can take messages. */
     start(): Promise<void>;
     /**
