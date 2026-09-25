@@ -29,9 +29,15 @@ const POOR_LATENCY_MS = 1_000;
 /** This many reconnects in the last hour, or more, make the connection poor. */
 const POOR_RECONNECTS_PER_HOUR = 3;
 const HOUR_MS = 3_600_000;
-/** Why a connection with this latency and these reconnects is poor; empty when it is fine. */
-function poorReasons(latencyMs: number | undefined, reconnectsLastHour: number): string[] {
-    const reasons: string[] = [];
+/** The reason of a connection that was up and is down now: it comes first, and the page knows it by these words. */
+const POOR_DOWN = 'connection down';
+/**
+ * Why a connection with this latency and these reconnects is poor; empty when
+ * it is fine. `down` is a connection that was up and dropped: not one that has
+ * not come up yet, and not the one of a stopped agent.
+ */
+function poorReasons(latencyMs: number | undefined, reconnectsLastHour: number, down = false): string[] {
+    const reasons: string[] = down ? [POOR_DOWN] : [];
     if (reconnectsLastHour >= POOR_RECONNECTS_PER_HOUR) {
         reasons.push(`${reconnectsLastHour} reconnects in the last hour`);
     }
@@ -150,7 +156,7 @@ class HealthTracker {
             ...(lastReconnectAt === undefined ? {} : { lastReconnectAt }),
             ...(lastActivityAt === undefined ? {} : { lastActivityAt }),
             ...(upSince === undefined ? {} : { upSince }),
-            poor: poorReasons(this.latencyMs, this.recent.length)
+            poor: poorReasons(this.latencyMs, this.recent.length, this.wasUp && this.upSince === undefined)
         };
     }
     /** Calls the listener with the health whenever it changes; returns the way to stop. */
@@ -186,5 +192,5 @@ class HealthTracker {
         this.pending = setTimeout(() => this.tell(), wait);
     }
 }
-export { HealthTracker, POOR_LATENCY_MS, POOR_RECONNECTS_PER_HOUR, formatDuration, poorReasons };
+export { HealthTracker, POOR_DOWN, POOR_LATENCY_MS, POOR_RECONNECTS_PER_HOUR, formatDuration, poorReasons };
 export type { ConnectionHealth, HealthListener, HealthTrackerOptions };

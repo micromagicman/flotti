@@ -3,7 +3,7 @@
  * the settings. Pure, so the words are tested without a page; the times are
  * counted from `now`, which the page moves on every second.
  */
-import { POOR_LATENCY_MS, POOR_RECONNECTS_PER_HOUR } from '../../src/connection-health.js';
+import { POOR_DOWN, POOR_LATENCY_MS, POOR_RECONNECTS_PER_HOUR } from '../../src/connection-health.js';
 import type { ConnectionHealth } from '../../src/connection-health.js';
 import type { Messages } from './i18n/en.js';
 /** One fact about the connection: which it is, its short name and its value. */
@@ -37,9 +37,27 @@ function poorReasons(health: ConnectionHealth, t: Messages): readonly string[] {
     ];
     return reasons.length === 0 ? health.poor : reasons;
 }
-/** The line that says the connection is poor, and why; `undefined` when it is fine. */
-function poorText(health: ConnectionHealth, t: Messages): string | undefined {
-    return health.poor.length === 0 ? undefined : t.health.poor(poorReasons(health, t).join(', '));
+/** A connection that was up and dropped: the server says so first among the reasons. */
+function isDown(health: ConnectionHealth): boolean {
+    return health.poor.includes(POOR_DOWN);
 }
-export { healthFacts, poorText };
+/** The line that says the connection is lost or poor, and why; `undefined` when it is fine. */
+function poorText(health: ConnectionHealth, t: Messages): string | undefined {
+    if (health.poor.length === 0) {
+        return undefined;
+    }
+    if (isDown(health)) {
+        const others = health.reconnectsLastHour >= POOR_RECONNECTS_PER_HOUR ? [t.health.poorReconnects(health.reconnectsLastHour)] : [];
+        return t.health.lost([t.health.tunnelDown, ...others].join(', '));
+    }
+    return t.health.poor(poorReasons(health, t).join(', '));
+}
+/** The short mark of a troubled connection, for the tab of the agent; `undefined` when it is fine. */
+function poorMark(health: ConnectionHealth, t: Messages): string | undefined {
+    if (health.poor.length === 0) {
+        return undefined;
+    }
+    return isDown(health) ? t.health.lostMark : t.health.poorMark;
+}
+export { healthFacts, isDown, poorMark, poorText };
 export type { HealthFact };
