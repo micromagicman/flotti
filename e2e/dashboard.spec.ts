@@ -520,7 +520,9 @@ test('the composer shows the status of the agent and its line, on a narrow scree
     await expect(card.locator('[data-status]')).toContainText(/working\s*· 1 in line/);
     await expect(card).toContainText('Enter to send');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    // On a phone the actions are behind «⋯» (#102).
+    await page.getByRole('button', { name: 'Actions' }).click();
+    await page.getByRole('menuitem', { name: 'Cancel' }).click();
     await expect(feed(page, 'codex')).toContainText('you said: queued from a phone');
     await expect(card.locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     await expect(card.locator('[data-status]')).not.toContainText('in line');
