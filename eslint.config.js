@@ -51,7 +51,6 @@ export default tseslint.config(
     {
         // Not under the limit yet (#119): a file leaves this list once its functions are split.
         files: [
-            'src/a2a-agent.ts',
             'src/agent-events.ts',
             'src/dashboard-server.ts',
             'src/delegations.ts',
