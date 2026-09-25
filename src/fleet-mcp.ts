@@ -54,13 +54,25 @@ type JsonRpcRequest = {
 };
 type ToolResult = { readonly content: { type: 'text'; text: string }[]; readonly isError?: boolean };
 type ToolArguments = Readonly<Record<string, unknown>>;
-/** The last message one agent got from another through the tools: what `reply` and `forward` act on. */
+/**
+ * The last message one agent got from another — through the tools, or sent on
+ * by the supervisor: what `reply` and `forward` act on.
+ */
 type Received = {
     readonly from: string;
     /** Its `messageId` in the tab of the agent that got it: a reply quotes it. */
     readonly messageId: string;
     readonly text: string;
     readonly forwarded?: Forwarded;
+};
+/**
+ * A message of one agent the supervisor handed to another past the tools — a
+ * message of a remote agent, an answer sent back at the end of a turn — so
+ * that `reply` and `forward` of the receiver act on it too.
+ */
+type DeliveredMessage = Received & {
+    /** Id of the agent that got it. */
+    readonly to: string;
 };
 /** What one call of a tool sends, besides the receiver and the text. */
 type Extras = Pick<SendOptions, 'replyTo' | 'forwarded'>;
@@ -222,6 +234,11 @@ class FleetMcpServer {
             this.agentsByToken.set(token, agentId);
         }
         return { port: this.port, token };
+    }
+    /** Remembers a message the supervisor delivered: the receiver's `reply` and `forward` now act on it. */
+    delivered(message: DeliveredMessage): void {
+        const { to, ...received } = message;
+        this.received.set(to, received);
     }
     close(): Promise<void> {
         return new Promise((resolve) => {
@@ -435,7 +452,7 @@ class FleetMcpServer {
         if (delivery.result === 'failed') {
             return failure(`"${to}" did not get it: ${delivery.error ?? 'no reason given'}`);
         }
-        this.received.set(to, { from, messageId, text: message, ...(extras.forwarded === undefined ? {} : { forwarded: extras.forwarded }) });
+        this.delivered({ to, from, messageId, text: message, ...(extras.forwarded === undefined ? {} : { forwarded: extras.forwarded }) });
         return text(delivery.result === 'taken'
             ? `"${to}" has it. Its answer comes to you as a message from "${to}".`
             : `"${to}" is busy: the message waits in line and reaches it once it is done.`);
@@ -503,4 +520,4 @@ function readBody(request: IncomingMessage): Promise<string> {
     });
 }
 export { FleetMcpServer, MCP_PATH, MCP_SERVER_NAME };
-export type { FleetDirectory, FleetToolsAccess };
+export type { DeliveredMessage, FleetDirectory, FleetToolsAccess };

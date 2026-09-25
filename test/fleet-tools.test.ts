@@ -12,6 +12,8 @@ import { RemoteStartReader, remoteCommandArguments } from '../src/ssh.js';
 import type { SshOptions } from '../src/ssh.js';
 import { Supervisor } from '../src/supervisor.js';
 import type { LocalAgent } from '../src/types.js';
+import { fakeFleet } from './fake-fleet-agent.js';
+import type { FakeFleetAgent } from './fake-fleet-agent.js';
 import { rejected, single } from './fleet-helpers.js';
 import { Harness, eventually, workspace } from './local-agent-helpers.js';
 const FAKE_SSH = fileURLToPath(new URL('./fake-ssh.js', import.meta.url));
@@ -159,6 +161,63 @@ describe('fleet tools: replies and forwards', () => {
         await callTool(server, server.access('carol').token, 'forward', { to: 'alice' });
         deepStrictEqual(fleet.options.at(-1)?.forwarded, { author: 'alice', text: 'the build is red' });
         strictEqual(fleet.sent.at(-1), 'carol -> alice: Forwarded from you:\n\nthe build is red');
+    });
+});
+/** A fleet of fakes run by a supervisor that hands the delivered messages to the tools. */
+async function fleetWithTools(...ids: string[]) {
+    const server = await toolsServer();
+    const { fleet, fakes, createAgent } = fakeFleet(...ids);
+    const supervisor = new Supervisor(fleet, { createAgent, fleetTools: server });
+    server.serve(supervisor);
+    await supervisor.start();
+    const fake = (id: string): FakeFleetAgent => {
+        const found = fakes.get(id);
+        ok(found !== undefined);
+        return found;
+    };
+    return { server, supervisor, fake };
+}
+/** The message the agent got from `from`, as its tab shows it. */
+function received(agent: FakeFleetAgent, from: string): { messageId: string; text: string } {
+    const index = agent.options.findIndex((options) => options.from === from);
+    const call = agent.calls.filter((line) => line.startsWith('send '))[index];
+    const options = agent.options[index];
+    ok(call !== undefined && options !== undefined, `nothing from ${from}`);
+    const text = call.slice('send '.length, call.length - ` from ${from}`.length);
+    return { messageId: options.messageId ?? `u-${text}`, text };
+}
+describe('fleet tools: replies to what the supervisor delivers', () => {
+    it('replies to a remote agent that wrote to the caller, quoting its message', async () => {
+        const { server, supervisor, fake } = await fleetWithTools('alice', 'remote');
+        const alice = fake('alice');
+        const remote = fake('remote');
+        alice.slow = true;
+        remote.emit({ type: 'message', role: 'agent', messageId: 'r-1', text: 'is the release ready?', append: false, to: 'alice' });
+        await eventually(() => alice.options.length > 0);
+        const got = received(alice, 'remote');
+        const answer = await callTool(server, server.access('alice').token, 'reply', { text: 'yes, tagged' });
+        strictEqual(answer.isError, false, answer.text);
+        const last = remote.options.at(-1);
+        strictEqual(remote.calls.at(-1), 'send yes, tagged from alice');
+        deepStrictEqual(last?.replyTo, { agentId: 'alice', messageId: got.messageId, author: 'remote', text: 'is the release ready?' });
+        await supervisor.stop();
+    });
+    it('replies to the agent whose automatic answer came last', async () => {
+        const { server, supervisor, fake } = await fleetWithTools('alice', 'bob', 'carol');
+        const alice = fake('alice');
+        const bob = fake('bob');
+        const alicesToken = server.access('alice').token;
+        // Carol writes through the tools first: without the answer of bob, `reply` would go to her.
+        await callTool(server, server.access('carol').token, 'send_message', { to: 'alice', text: 'hello' });
+        await callTool(server, alicesToken, 'send_message', { to: 'bob', text: 'review #7, please' });
+        await eventually(() => alice.options.some((options) => options.from === 'bob'));
+        const got = received(alice, 'bob');
+        strictEqual(got.text, 'you said: review #7, please');
+        const answer = await callTool(server, alicesToken, 'reply', { text: 'thanks' });
+        strictEqual(answer.isError, false, answer.text);
+        strictEqual(bob.calls.at(-1), 'send thanks from alice');
+        deepStrictEqual(bob.options.at(-1)?.replyTo, { agentId: 'alice', messageId: got.messageId, author: 'bob', text: 'you said: review #7, please' });
+        await supervisor.stop();
     });
 });
 describe('fleet tools: every ACP session gets them', { timeout: 20_000 }, () => {

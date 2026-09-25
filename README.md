@@ -453,6 +453,8 @@ ACP agents, on both sides. An answer gets no answer back by itself, so two agent
 other for ever; only the answer goes, not the progress of the turn, and a cancelled turn sends nothing (#45).
 A `reply` and a `forward` are the reply and the forward of the dashboard: the `message` event carries
 `replyTo` or `forwarded`, and the tab shows the quote or the forwarded message the same way (#30).
+They act on the last message from another agent whichever way it came: through the tools, from a
+remote A2A agent, or as an answer sent back at the end of a turn (#98).
 Messages queue as a person's do; a tool call does not wait for the answer.
 
 `delegate` is `send_message` with an outcome. The task goes in line like a message, and the turn the

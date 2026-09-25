@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { A2AAgent } from './a2a-agent.js';
 import type { AdminRequest } from './a2a-agent.js';
 import { AgentAnswers } from './agent-answers.js';
@@ -10,7 +11,7 @@ import type { DelegationCancel, DelegationFleet, DelegationStart } from './deleg
 import type { AgentSummary, Delivery, Harness } from './dashboard-protocol.js';
 import { FleetAdmin } from './fleet-admin.js';
 import type { AdminFleet, AdminOutcome } from './fleet-admin.js';
-import type { FleetToolsAccess } from './fleet-mcp.js';
+import type { DeliveredMessage, FleetToolsAccess } from './fleet-mcp.js';
 import { LocalAgentProcess } from './local-agent.js';
 import type { Agent, Fleet } from './types.js';
 /**
@@ -58,9 +59,14 @@ type SupervisorOptions = {
     readonly queuedAfterMs?: number;
     /**
      * The fleet tools each agent flotti starts gets in its sessions; none when
-     * absent. `flotti run` gives them, tests of fake fleets do not.
+     * absent. `flotti run` gives them, tests of fake fleets do not. A message
+     * the supervisor sends on from one agent to another goes to `delivered`,
+     * so that `reply` and `forward` of the receiver act on it.
      */
-    readonly fleetTools?: { access(agentId: string): FleetToolsAccess };
+    readonly fleetTools?: {
+        access(agentId: string): FleetToolsAccess;
+        delivered?(message: DeliveredMessage): void;
+    };
     /**
      * Whether an action of an administrator of the fleet waits for a person to
      * allow it in the dashboard; asked at every action, off when absent.
@@ -134,6 +140,8 @@ class Supervisor {
     private readonly queuedAfterMs: number;
     private readonly persistHistory: boolean;
     private readonly warn: (text: string) => void;
+    /** Told of each message the supervisor sends on from one agent to another. */
+    private readonly delivered: ((message: DeliveredMessage) => void) | undefined;
     /** Last number given to an event of each id, kept when the agent goes: numbers of an id only grow. */
     private readonly lastSeq = new Map<string, number>();
     /** Tasks agents give one another. */
@@ -148,6 +156,7 @@ class Supervisor {
         this.queuedAfterMs = options.queuedAfterMs ?? 500;
         this.persistHistory = options.persistHistory ?? false;
         this.warn = options.warn ?? ((text) => console.error(text));
+        this.delivered = options.fleetTools?.delivered?.bind(options.fleetTools);
         this.delegations = new Delegations(this.delegationFleet(), this.queuedAfterMs);
         for (const agent of fleet.agents) {
             this.join(agent, []);
@@ -615,12 +624,26 @@ class Supervisor {
         } else if (receiver === sender) {
             failed('an agent does not send messages to itself');
         } else {
-            void this.hand(receiver, text, replyTo === undefined ? { from } : { from, replyTo }).then((delivery) => {
-                if (delivery.result === 'failed') {
-                    failed(delivery.error ?? 'the agent did not take it');
+            void this.handOn(receiver, from, text, replyTo).then((error) => {
+                if (error !== undefined) {
+                    failed(error);
                 }
             });
         }
+    }
+    /**
+     * Hands a message of one agent to another and, once it is taken, tells the
+     * fleet tools, so `reply` and `forward` of the receiver act on it. Resolves
+     * with why it failed, or with nothing.
+     */
+    private async handOn(receiver: Member, from: string, text: string, replyTo: Quote | undefined): Promise<string | undefined> {
+        const messageId = randomUUID();
+        const delivery = await this.hand(receiver, text, replyTo === undefined ? { from, messageId } : { from, messageId, replyTo });
+        if (delivery.result === 'failed') {
+            return delivery.error ?? 'the agent did not take it';
+        }
+        this.delivered?.({ to: receiver.agent.id, from, messageId, text });
+        return undefined;
     }
     /** Hands the message over; resolves once the agent took it or it failed, however long that takes. */
     private hand(member: Member, text: string, options: SendOptions): Promise<Delivery> {
