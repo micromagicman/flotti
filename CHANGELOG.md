@@ -4,6 +4,15 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ## [Unreleased]
 
+### Changed
+
+- **A calm, almost monochrome palette.** The dashboard is grey and ink, with colour kept for a few small
+  marks that mean something: the primary button in a muted steel, the dot of a state (sage for work,
+  ochre for waiting on you, brick for an error) while the chip and its word stay grey, and a muted hue
+  on the mark of each agent, whose shape tells the agent too. Envelopes have a hairline border and a
+  grey bar with a faint tone of the sender; the line of messages waiting is grey and dashed. The logo
+  and the icon are ink. Both themes, text contrast AA (#96).
+
 ### Fixed
 
 - **The composer and the messages in line span the chat on a wide window.** The card of the message
