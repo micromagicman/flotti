@@ -10,7 +10,7 @@ import { FleetMcpServer } from '../src/fleet-mcp.js';
 import { Supervisor } from '../src/supervisor.js';
 import type { RemoteAgent, RemoteAuth } from '../src/types.js';
 import { FakeAgent, agentMessage, artifact, gate, said, statusUpdate, task } from './a2a-fake-server.js';
-import type { FakeAgentOptions, Script } from './a2a-fake-server.js';
+import type { FakeAgentOptions, Received, Script } from './a2a-fake-server.js';
 import { Harness } from './local-agent-helpers.js';
 const running: FakeAgent[] = [];
 const clients: A2AAgent[] = [];
@@ -889,6 +889,141 @@ describe('A2AAgent: requests of an administrator through the inbox', () => {
         await eventually(() => conversation(other.agent).length === 1);
         match(conversation(other.agent)[0]?.[0] ?? '', /Refused: only an administrator/);
         ok(!supervisor.history('a').some(event => event.type === 'admin-action' && event.admin === 'b'), 'nothing happened to "a"');
+    });
+});
+/** The URI of the fleet extension (docs/a2a-fleet.md). */
+const FLEET = 'https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md';
+type Roster = { version?: number; agents?: Record<string, unknown>[]; text?: string };
+/** The roster the agent got when flotti opened its inbox. */
+function subscribedRoster(agent: FakeAgent): Roster | undefined {
+    const request = agent.received.find(received => received.method === 'SendStreamingMessage');
+    const message = request?.params['message'] as { metadata?: Record<string, { fleet?: Roster }> } | undefined;
+    return message?.metadata?.[INBOX_EXTENSION]?.fleet;
+}
+/** The rosters the agent got as `fleet` requests, outside any conversation. */
+function rosterUpdates(agent: FakeAgent): { request: Received; roster: Roster & { action?: string } }[] {
+    return agent.received.flatMap(request => {
+        const message = request.params['message'] as { metadata?: Record<string, Roster & { action?: string }> } | undefined;
+        const roster = message?.metadata?.[FLEET];
+        return roster?.action === 'fleet' ? [{ request, roster }] : [];
+    });
+}
+/** A supervisor over A2A agents that are told the roster, gathered for `debounceMs`. */
+async function rosterFleet(fakes: ReadonlyMap<string, FakeAgent>, debounceMs: number): Promise<{ supervisor: Supervisor; running: Map<string, A2AAgent> }> {
+    const agents = [...fakes].map(([id, agent]) => ({ ...manifest(agent.url), id }));
+    const fleetOptions = { rosterDebounceMs: debounceMs, fleet: { roster: () => supervisor.agents() } };
+    const running = new Map(agents.map(agent => [agent.id, new A2AAgent(agent, { reconnectDelayMs: 10, pollIntervalMs: 10, ...fleetOptions })]));
+    clients.push(...running.values());
+    const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents }, {
+        createAgent: (agent): A2AAgent => running.get(agent.id) as A2AAgent
+    });
+    await supervisor.start();
+    return { supervisor, running };
+}
+describe('A2AAgent: the fleet roster with the inbox request', () => {
+    it('hands the roster over when it opens the inbox, the agent itself and administrators marked', async (t) => {
+        const admin = await inboxAgent({ extensions: [INBOX_EXTENSION, FLEET] });
+        const other = await inboxAgent({ extensions: [INBOX_EXTENSION, FLEET] });
+        const agents = [{ ...manifest(admin.agent.url), id: 'a', admin: true as const }, { ...manifest(other.agent.url), id: 'b' }];
+        // No createAgent: the supervisor hands its roster to the remote agents itself.
+        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents });
+        t.after(() => supervisor.stop());
+        await supervisor.start();
+        await eventually(() => admin.isOpen() && other.isOpen());
+        const roster = subscribedRoster(admin.agent);
+        ok(typeof roster?.version === 'number');
+        deepStrictEqual(roster.agents?.map(({ id, name, kind, admin: isAdmin, you }) => ({ id, name, kind, admin: isAdmin, you })), [
+            { id: 'a', name: 'Fake', kind: 'remote', admin: true, you: true },
+            { id: 'b', name: 'Fake', kind: 'remote', admin: undefined, you: undefined }
+        ]);
+        ok(roster.agents.every(agent => typeof agent['status'] === 'string'));
+        match(roster.text ?? '', /"you": true/);
+        deepStrictEqual(subscribedRoster(other.agent)?.agents?.map(agent => [agent['id'], agent['you']]), [['a', undefined], ['b', true]]);
+        const header = admin.agent.received.find(received => received.method === 'SendStreamingMessage')?.headers['a2a-extensions'];
+        deepStrictEqual(String(header).split(',').map(uri => uri.trim()).sort(), [FLEET, INBOX_EXTENSION].sort());
+    });
+    it('keeps the inbox request as it was for an agent without the fleet extension, and sends it no roster', async (t) => {
+        const plain = await inboxAgent();
+        const other = await inboxAgent({ extensions: [INBOX_EXTENSION, FLEET] });
+        const { supervisor } = await rosterFleet(new Map([['a', plain.agent], ['b', other.agent]]), 20);
+        t.after(() => supervisor.stop());
+        await eventually(() => plain.isOpen() && other.isOpen());
+        deepStrictEqual(plain.subscriptions[0]?.userMessage.metadata?.[INBOX_EXTENSION], { action: 'subscribe' });
+        strictEqual(plain.agent.received[0]?.headers['a2a-extensions'], INBOX_EXTENSION);
+        await supervisor.stopAgent('b');
+        await eventually(() => supervisor.agents().find(agent => agent.id === 'b')?.status === 'stopped');
+        await new Promise(resolve => setTimeout(resolve, 100));
+        deepStrictEqual(rosterUpdates(plain.agent), []);
+        deepStrictEqual(plain.agent.methods(), ['SendStreamingMessage']);
+    });
+});
+describe('A2AAgent: the fleet roster when the fleet changes', () => {
+    it('sends what changed as one fleet request after a pause, with a greater version, outside the conversation', async (t) => {
+        const watcher = await inboxAgent({ extensions: [INBOX_EXTENSION, FLEET] });
+        const other = await inboxAgent({ extensions: [INBOX_EXTENSION, FLEET] });
+        const { supervisor, running } = await rosterFleet(new Map([['a', watcher.agent], ['b', other.agent]]), 50);
+        t.after(() => supervisor.stop());
+        await eventually(() => watcher.isOpen() && other.isOpen());
+        // What the start itself changed has gone out by now.
+        await new Promise(resolve => setTimeout(resolve, 200));
+        const before = rosterUpdates(watcher.agent).length;
+        const history = supervisor.history('a').length;
+        await supervisor.stopAgent('b');
+        await supervisor.remove('b');
+        await eventually(() => rosterUpdates(watcher.agent).length > before);
+        await new Promise(resolve => setTimeout(resolve, 200));
+        const updates = rosterUpdates(watcher.agent).slice(before);
+        strictEqual(updates.length, 1, 'the changes close together go out as one');
+        const [update] = updates;
+        ok(update !== undefined);
+        deepStrictEqual(update.roster.agents?.map(agent => [agent['id'], agent['you']]), [['a', true]]);
+        const versions = [subscribedRoster(watcher.agent)?.version ?? 0, ...rosterUpdates(watcher.agent).map(item => item.roster.version ?? 0)];
+        deepStrictEqual([...versions].sort((left, right) => left - right), versions, 'the version only grows');
+        ok((update.roster.version ?? 0) > (subscribedRoster(watcher.agent)?.version ?? 0));
+        strictEqual(update.request.method, 'SendMessage');
+        match(String(update.request.headers['a2a-extensions']), /a2a-fleet\.md/);
+        const message = update.request.params['message'] as { contextId?: string; taskId?: string; metadata?: Record<string, unknown> };
+        ok(!message.contextId && !message.taskId, 'the roster belongs to no conversation');
+        strictEqual(message.metadata?.[INBOX_EXTENSION], undefined, 'an inbox adapter does not take it for words of a person');
+        const after = supervisor.history('a').slice(history);
+        deepStrictEqual(after.filter(event => ['message', 'queued', 'turn-end', 'progress'].includes(event.type)), [], 'the roster is not a turn and not shown');
+        strictEqual(running.get('a')?.status, 'idle');
+    });
+});
+describe('A2AAgent: the fleet roster and the line of messages', () => {
+    it('does not hold a message of a person back while the roster goes out', async () => {
+        let release: (() => void) | undefined;
+        let open = false;
+        const agent = await fake({
+            extensions: [INBOX_EXTENSION, FLEET],
+            script: async (context, bus) => {
+                const inbox = context.userMessage.metadata?.[INBOX_EXTENSION] as { action?: string } | undefined;
+                if (inbox?.action === 'subscribe') {
+                    open = true;
+                    bus.publish(task(context, TaskState.TASK_STATE_WORKING));
+                    await new Promise(() => undefined);
+                }
+                if (context.userMessage.metadata?.[FLEET] !== undefined) {
+                    // The agent is slow to take the roster: a message of a person does not wait for it.
+                    await new Promise<void>(resolve => {
+                        release = resolve;
+                    });
+                }
+                await echo(context, bus);
+            }
+        });
+        let roster = [{ id: 'fake', name: 'Fake', kind: 'remote' as const, status: 'idle' as const }];
+        const { client, events } = connect(agent, { rosterDebounceMs: 10, fleet: { roster: () => roster } });
+        await client.start();
+        await eventually(() => open);
+        roster = [...roster, { id: 'other', name: 'Other', kind: 'remote' as const, status: 'idle' as const }];
+        client.fleetChanged();
+        await eventually(() => release !== undefined);
+        await client.send('hi');
+        await eventually(() => turnEnds(events).length === 1);
+        deepStrictEqual(messages(events).map(message => `${message.role}: ${message.text}`), ['user: hi', 'agent: echo: hi']);
+        deepStrictEqual(events.filter(event => event.type === 'queued'), []);
+        release?.();
     });
 });
 describe('cardLocation', () => {

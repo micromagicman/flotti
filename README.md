@@ -472,7 +472,8 @@ message fails at once, and the tool says why. `cancel_delegation` takes the task
 cancels the turn working on it; the giver gets no outcome for a task it took back. A task not done by its
 deadline fails, and the agent working on it is told to stop. Both tabs show the task as a card — who gave
 it to whom, where it stands, and the result or the reason once it is over (#51). An A2A agent gives and
-takes back tasks through its inbox: see [docs/a2a-inbox.md](docs/a2a-inbox.md).
+takes back tasks through its inbox: see [docs/a2a-inbox.md](docs/a2a-inbox.md); who is in the fleet it
+learns through [the fleet extension](docs/a2a-fleet.md).
 
 The server speaks MCP over HTTP (the streamable transport, with plain JSON answers) on a free port of
 `127.0.0.1`, and every agent gets a token of its own in the `Authorization` header: the token tells who
@@ -661,6 +662,10 @@ agent: the dashboard gets the same events and drives it the same way.
   for — "the merge request is ready" — and lines about what it is busy with, and they show in its tab
   like any other. A broken inbox is reconnected to for as long as the agent is connected. Without the
   extension an A2A agent has no way to speak first: its tab shows only its answers.
+- **Who is in the fleet.** An agent that declares the [fleet extension](docs/a2a-fleet.md) next to the
+  inbox gets the roster of the fleet — the same entries `list_agents` gives a local agent, its own marked
+  `you` and administrators `admin` — with the inbox request, and again whenever the fleet changes. So it
+  can write to any agent without waiting for that one to write first.
 
 ### Over SSH
 

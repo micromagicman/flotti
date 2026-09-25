@@ -76,7 +76,8 @@ The message may say what it is, under the extension URI in its own metadata:
   request of an administrator of the fleet, below.
 - `busy` — optional: `true` when the agent is busy on its own, `false` when it is done. The tab shows
   the agent as working in between. A message from a person has the last word while it is being worked on.
-- `to` — optional: the id of another agent of the fleet (the name of its directory) the message is for.
+- `to` — optional: the id of another agent of the fleet (the name of its directory) the message is for;
+  who is in the fleet the agent learns through [the fleet extension](a2a-fleet.md).
   flotti sends the text on to that agent as a message from this one — see below — and shows it in this
   agent's tab as sent there. A message that cannot be delivered — no such agent, the agent is stopped —
   is a line in this agent's tab saying why; the agent itself is not told. `to` goes with `kind: message`

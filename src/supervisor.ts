@@ -122,11 +122,12 @@ class UnknownAgentError extends Error {}
  */
 function defaultAgent(
     fleetTools: SupervisorOptions['fleetTools'],
-    onAdminRequest: (agentId: string, request: AdminRequest) => void
+    onAdminRequest: (agentId: string, request: AdminRequest) => void,
+    roster: () => AgentSummary[]
 ): (agent: Agent) => FleetAgent {
     return (agent) => agent.kind === 'local'
         ? new LocalAgentProcess(agent, fleetTools === undefined ? {} : { fleetTools: fleetTools.access(agent.id) })
-        : new A2AAgent(agent, { onAdminRequest: (request) => onAdminRequest(agent.id, request) });
+        : new A2AAgent(agent, { onAdminRequest: (request) => onAdminRequest(agent.id, request), fleet: { roster } });
 }
 function describeError(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -164,7 +165,7 @@ class Supervisor {
     private readonly admin: FleetAdmin;
     constructor(fleet: Fleet, options: SupervisorOptions = {}) {
         this.createAgent = options.createAgent
-            ?? defaultAgent(options.fleetTools, (agentId, request) => void this.adminRequest(agentId, request));
+            ?? defaultAgent(options.fleetTools, (agentId, request) => void this.adminRequest(agentId, request), () => this.agents());
         this.admin = new FleetAdmin(this.adminFleet(), options.confirmAdminActions === undefined ? {} : { confirm: options.confirmAdminActions });
         this.historyLimit = options.historyLimit ?? 5000;
         this.queuedAfterMs = options.queuedAfterMs ?? 500;
@@ -492,6 +493,7 @@ class Supervisor {
     private hear(member: Member, event: AgentEvent): void {
         if (event.type === 'status') {
             this.noticeHarness(member);
+            this.rosterChanged();
         }
         this.followTurn(member, event);
         this.keep(member, event);
@@ -596,6 +598,13 @@ class Supervisor {
     }
     private announce(): void {
         this.notify({ type: 'fleet', agents: this.agents() });
+        this.rosterChanged();
+    }
+    /** The agents that are told who is in the fleet learn it changed (docs/a2a-fleet.md). */
+    private rosterChanged(): void {
+        for (const { running } of this.members.values()) {
+            running.fleetChanged?.();
+        }
     }
     private keep(member: Member, received: AgentEvent): void {
         this.store(member, member.offset === 0 ? received : { ...received, seq: received.seq + member.offset });
