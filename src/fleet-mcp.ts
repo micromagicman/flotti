@@ -6,6 +6,7 @@ import type { AdminAction, Forwarded, SendOptions } from './agent-events.js';
 import type { AgentSummary, Delivery } from './dashboard-protocol.js';
 import type { DelegationCancel, DelegationStart } from './delegations.js';
 import type { AdminOutcome } from './fleet-admin.js';
+import { MEMORY_TOOLS, callMemoryTool, isMemoryTool } from './memory-tools.js';
 /**
  * The fleet as tools: an MCP server flotti hands to every ACP agent it starts,
  * in `mcpServers` of `session/new`, so a bare Claude Code or Codex can see its
@@ -40,6 +41,12 @@ interface FleetDirectory {
      * answer that they are not available.
      */
     administer?(adminId: string, action: AdminAction, target: string): Promise<AdminOutcome>;
+    /**
+     * Where the memory bank of the agent is, for the memory tools (#101);
+     * undefined for an agent whose memory flotti does not keep — a remote one,
+     * one on an SSH host. Without it no agent gets the memory tools.
+     */
+    memoryBank?(agentId: string): string | undefined;
 }
 /** How an agent reaches the tools: the port on its side and the token that says who it is. */
 type FleetToolsAccess = {
@@ -54,13 +61,25 @@ type JsonRpcRequest = {
 };
 type ToolResult = { readonly content: { type: 'text'; text: string }[]; readonly isError?: boolean };
 type ToolArguments = Readonly<Record<string, unknown>>;
-/** The last message one agent got from another through the tools: what `reply` and `forward` act on. */
+/**
+ * The last message one agent got from another — through the tools, or sent on
+ * by the supervisor: what `reply` and `forward` act on.
+ */
 type Received = {
     readonly from: string;
     /** Its `messageId` in the tab of the agent that got it: a reply quotes it. */
     readonly messageId: string;
     readonly text: string;
     readonly forwarded?: Forwarded;
+};
+/**
+ * A message of one agent the supervisor handed to another past the tools — a
+ * message of a remote agent, an answer sent back at the end of a turn — so
+ * that `reply` and `forward` of the receiver act on it too.
+ */
+type DeliveredMessage = Received & {
+    /** Id of the agent that got it. */
+    readonly to: string;
 };
 /** What one call of a tool sends, besides the receiver and the text. */
 type Extras = Pick<SendOptions, 'replyTo' | 'forwarded'>;
@@ -223,6 +242,11 @@ class FleetMcpServer {
         }
         return { port: this.port, token };
     }
+    /** Remembers a message the supervisor delivered: the receiver's `reply` and `forward` now act on it. */
+    delivered(message: DeliveredMessage): void {
+        const { to, ...received } = message;
+        this.received.set(to, received);
+    }
     close(): Promise<void> {
         return new Promise((resolve) => {
             this.server.close(() => resolve());
@@ -301,11 +325,11 @@ class FleetMcpServer {
         const fields = isObject(params) ? params : {};
         switch (method) {
             case 'initialize':
-                return initializeResult(caller, fields, this.isAdmin(caller));
+                return initializeResult(caller, fields, this.isAdmin(caller), this.memoryBank(caller) !== undefined);
             case 'ping':
                 return {};
             case 'tools/list':
-                return { tools: this.isAdmin(caller) ? [...TOOLS, ...ADMIN_TOOLS] : TOOLS };
+                return { tools: this.toolsOf(caller) };
             case 'tools/call':
                 return this.callTool(caller, fields);
             default:
@@ -341,7 +365,7 @@ class FleetMcpServer {
                 return this.taskTool(fleet, caller, name, args);
         }
     }
-    /** The tools of tasks one agent gives another; any other is one of an administrator, or none. */
+    /** The tools of tasks one agent gives another; any other is a memory tool, one of an administrator, or none. */
     private taskTool(fleet: FleetDirectory, caller: string, name: string, args: ToolArguments): Promise<ToolResult> {
         switch (name) {
             case 'delegate':
@@ -349,8 +373,28 @@ class FleetMcpServer {
             case 'cancel_delegation':
                 return this.cancelDelegation(fleet, caller, stringArgument(args, 'id'));
             default:
-                return this.adminTool(fleet, caller, name, args);
+                return isMemoryTool(name) ? this.memoryTool(caller, name, args) : this.adminTool(fleet, caller, name, args);
         }
+    }
+    /** The tools the caller is listed: the memory tools with a memory bank, those of an administrator to one. */
+    private toolsOf(caller: string): readonly object[] {
+        return [
+            ...TOOLS,
+            ...(this.memoryBank(caller) === undefined ? [] : MEMORY_TOOLS),
+            ...(this.isAdmin(caller) ? ADMIN_TOOLS : [])
+        ];
+    }
+    /** A memory tool, on the caller's own bank; refused to an agent whose memory flotti does not keep. */
+    private memoryTool(caller: string, name: string, args: ToolArguments): Promise<ToolResult> {
+        const bank = this.memoryBank(caller);
+        return bank === undefined
+            ? Promise.resolve(failure('memory is not supported for you: flotti keeps no memory bank for an agent on '
+                + 'another host or a remote one. Nothing was stored.'))
+            : callMemoryTool(bank, name, args);
+    }
+    /** The memory bank of the caller, when it gets the memory tools. */
+    private memoryBank(caller: string): string | undefined {
+        return this.fleet?.memoryBank?.(caller);
     }
     /** Whether the caller is an administrator of the fleet: it is then listed the tools of one. */
     private isAdmin(caller: string): boolean {
@@ -435,7 +479,7 @@ class FleetMcpServer {
         if (delivery.result === 'failed') {
             return failure(`"${to}" did not get it: ${delivery.error ?? 'no reason given'}`);
         }
-        this.received.set(to, { from, messageId, text: message, ...(extras.forwarded === undefined ? {} : { forwarded: extras.forwarded }) });
+        this.delivered({ to, from, messageId, text: message, ...(extras.forwarded === undefined ? {} : { forwarded: extras.forwarded }) });
         return text(delivery.result === 'taken'
             ? `"${to}" has it. Its answer comes to you as a message from "${to}".`
             : `"${to}" is busy: the message waits in line and reaches it once it is done.`);
@@ -451,14 +495,14 @@ async function deliver(fleet: FleetDirectory, to: string, message: string, optio
     }
 }
 /** The answer to `initialize`: the protocol version, the capabilities, who the caller is and whether it administers. */
-function initializeResult(caller: string, fields: Record<string, unknown>, admin: boolean): object {
+function initializeResult(caller: string, fields: Record<string, unknown>, admin: boolean, memory: boolean): object {
     return {
         protocolVersion: PROTOCOL_VERSIONS.find((known) => known === fields['protocolVersion'])
             ?? PROTOCOL_VERSIONS[0],
         capabilities: { tools: {} },
         serverInfo: { name: MCP_SERVER_NAME, version: '1' },
         instructions: `You are "${caller}", one agent of a flotti fleet. These tools let you see the other `
-            + 'agents and write to them.'
+            + 'agents and write to them' + (memory ? ', and keep your own memory across conversations with the memory_* tools.' : '.')
             + (admin ? ' You are an administrator of the fleet: you may also restart agents and clear their context.' : '')
     };
 }
@@ -503,4 +547,4 @@ function readBody(request: IncomingMessage): Promise<string> {
     });
 }
 export { FleetMcpServer, MCP_PATH, MCP_SERVER_NAME };
-export type { FleetDirectory, FleetToolsAccess };
+export type { DeliveredMessage, FleetDirectory, FleetToolsAccess };

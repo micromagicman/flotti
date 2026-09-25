@@ -8,6 +8,7 @@ import { Readable, Writable } from 'node:stream';
 import * as acp from '@agentclientprotocol/sdk';
 import type {
     AnyMessage,
+    ContentBlock,
     InitializeResponse,
     McpServer,
     NewSessionRequest,
@@ -22,8 +23,11 @@ import type { Handover } from './acp-adapters.js';
 import { AgentEvents, WITHDRAWN, composeText, messageFields } from './agent-events.js';
 import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
 import { commandToSpawn } from './command-line.js';
+import type { MemoryStatus } from './dashboard-protocol.js';
 import { MCP_PATH, MCP_SERVER_NAME } from './fleet-mcp.js';
 import type { FleetToolsAccess } from './fleet-mcp.js';
+import { INDEX_MAX_CHARS, INDEX_MAX_NOTES, firstPromptBlocks } from './memory-contract.js';
+import { MemoryStore } from './memory-store.js';
 import { RemoteStartReader, parseTarget, remoteCommandArguments } from './ssh.js';
 import type { RemotePlace, SshOptions } from './ssh.js';
 import type { LocalAgent } from './types.js';
@@ -116,6 +120,11 @@ type Run = {
     replaying: boolean;
     /** What the session was opened with: a new session, when the context is cleared, is opened the same way. */
     sessionRequest?: NewSessionRequest;
+    /**
+     * What goes before the first message of the session just opened: the rule
+     * of the memory and the index of the bank (#101). Taken by that message.
+     */
+    primer?: readonly string[];
     trace?: WriteStream;
     stderrLog?: WriteStream;
     /** On an SSH host: reads where the command runs and the port of the way back, from standard error. */
@@ -153,6 +162,8 @@ class LocalAgentProcess implements FleetAgent {
     private waiters: { resolve: () => void; reject: (error: Error) => void }[] = [];
     /** Set while the context is being cleared: the messages in line wait for the new session. */
     private renewing = false;
+    /** The memory as the last start delivered it; absent before the first. */
+    private deliveredMemory: MemoryStatus | undefined;
     constructor(agent: LocalAgent, options: LocalAgentOptions = {}) {
         this.agent = agent;
         this.events = new AgentEvents(agent.id);
@@ -181,6 +192,14 @@ class LocalAgentProcess implements FleetAgent {
     /** Id of the ACP session; kept across restarts so the agent can pick the conversation up. */
     get sessionId(): string | undefined {
         return this.session;
+    }
+    /**
+     * The memory of the agent (#101), decided by what flotti delivered: the
+     * tools mounted in the session, the policy handed over, the bank usable.
+     * Before the first start, only what rules memory out is known.
+     */
+    get memory(): MemoryStatus | undefined {
+        return this.deliveredMemory ?? memoryRuledOut(this.agent, this.fleetTools !== undefined);
     }
     /** What the agent said about itself in `initialize`: capabilities, login methods, name. */
     get capabilities(): InitializeResponse | undefined {
@@ -268,6 +287,7 @@ class LocalAgentProcess implements FleetAgent {
         this.session = undefined;
         try {
             await this.applyModel(run, await this.newSession(connection, request, false));
+            await this.prime(run);
         } catch (error) {
             this.fail(run, `could not open a new session: ${message(error)}`);
             throw error;
@@ -371,7 +391,8 @@ class LocalAgentProcess implements FleetAgent {
             // An agent on another host gets no variable of this machine: only what its manifest sets.
             const handover = prepareHandover(
                 this.agent,
-                this.agent.ssh === undefined ? { ...this.env, ...this.agent.env } : this.agent.env
+                this.agent.ssh === undefined ? { ...this.env, ...this.agent.env } : this.agent.env,
+                this.fleetTools !== undefined
             );
             const run = this.spawn(handover);
             return { handover, run };
@@ -502,6 +523,20 @@ class LocalAgentProcess implements FleetAgent {
         this.startHeartbeat(run);
         const place = run.place === undefined ? undefined : await this.remotePlace(run.place);
         await this.applyModel(run, await this.openSession(run, connection, capabilities, handover, place));
+        this.deliveredMemory = deliveredMemory(this.agent, this.fleetTools !== undefined, handover, run.sessionRequest);
+        await this.prime(run);
+    }
+    /**
+     * Readies the rule and the index of the bank for the first message of the
+     * session just opened — new, resumed or loaded — when the agent has memory.
+     */
+    private async prime(run: Run): Promise<void> {
+        run.primer = undefined;
+        if (this.deliveredMemory?.state !== 'on') {
+            return;
+        }
+        const index = await new MemoryStore(this.agent.memoryDirectory).index(INDEX_MAX_NOTES, INDEX_MAX_CHARS);
+        run.primer = firstPromptBlocks(index);
     }
     /** Speaks ACP over the process's stdio; the connection becomes the run's. */
     private connect(run: Run): acp.ClientConnection {
@@ -693,9 +728,11 @@ class LocalAgentProcess implements FleetAgent {
     }
     /** Sends the message as `session/prompt`; its answer, or its failure, ends the turn. */
     private prompt(run: Run, connection: acp.ClientConnection, sessionId: string, turn: Turn): void {
+        const primer = run.primer ?? [];
+        run.primer = undefined;
         connection.agent.request(acp.methods.agent.session.prompt, {
             sessionId,
-            prompt: [{ type: 'text', text: promptText(turn, this.agentId) }]
+            prompt: [...primer, promptText(turn, this.agentId)].map((text): ContentBlock => ({ type: 'text', text }))
         }).then(
             (response) => this.endTurn(turn, response.stopReason),
             (error: unknown) => {
@@ -1020,6 +1057,39 @@ function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
 }
 function isPermanent(error: unknown): boolean {
     return error instanceof acp.RequestError && (error.code === AUTH_REQUIRED || error.code === INVALID_PARAMS);
+}
+/** Why the agent cannot have memory whatever it delivers, or undefined when it may. */
+function memoryRuledOut(agent: LocalAgent, tools: boolean): MemoryStatus | undefined {
+    if (agent.ssh !== undefined) {
+        return { state: 'unsupported', reason: `the agent runs on ${agent.ssh}: memory there is not tested end to end yet` };
+    }
+    if (agent.adapter === undefined) {
+        return { state: 'unsupported', reason: 'the manifest names no adapter: there is no channel for the memory policy' };
+    }
+    if (!tools) {
+        return { state: 'unsupported', reason: 'flotti gives this agent no tools' };
+    }
+    return undefined;
+}
+/** The memory as a start delivered it: the policy handed over, the tools mounted in the session, the bank usable. */
+function deliveredMemory(
+    agent: LocalAgent,
+    tools: boolean,
+    handover: Handover,
+    session: NewSessionRequest | undefined
+): MemoryStatus | undefined {
+    const ruledOut = memoryRuledOut(agent, tools);
+    const contract = handover.memory;
+    if (ruledOut !== undefined || contract === undefined) {
+        return ruledOut;
+    }
+    if (!session?.mcpServers.some((server) => server.name === MCP_SERVER_NAME)) {
+        return { state: 'unsupported', reason: 'the agent takes no MCP server over HTTP: the memory tools do not reach it' };
+    }
+    if (contract.unavailable !== undefined) {
+        return { state: 'unavailable', reason: contract.unavailable };
+    }
+    return { state: 'on', policy: contract.policy, skill: contract.skill };
 }
 function message(error: unknown): string {
     if (error instanceof acp.RequestError) {

@@ -5,38 +5,65 @@
  * buttons, filled fields, cards on a soft shadow.
  */
 :root {
-    --bg: #f7f7f8;
-    --panel: #ffffff;
-    --text: #1f2328;
-    --muted: #656d76;
+    --bg: #f5f7f9;
+    --panel: #fdfdfe;
+    --text: #1f2224;
+    --muted: #616467;
     /* Lines that part one thing from another; nothing a person acts on. */
-    --border: #d8dce0;
+    --border: #dcdee1;
     /* The edge of what a person acts on: 3:1 against the panel (WCAG 1.4.11). */
-    --border-strong: #8c959f;
-    --accent: #2f6feb;
-    /* Text on the accent: 4.5:1 and more. */
-    --on-accent: #ffffff;
-    --focus: var(--accent);
-    --user: #eef3fd;
-    --ok: #1a7f37;
-    --busy: #2f6feb;
-    --wait: #bf6a02;
-    --bad: #cf222e;
-    --off: #8c959f;
+    --border-strong: #898c90;
     /*
-     * Colours of agents, for the messages they send one another (#23): white
-     * text on each is 4.5:1 or more. Kept away from the status colours — no
-     * green, amber, red, nor the blue of work.
+     * The palette is almost monochrome (#96): links, focus, the logo and the
+     * secondary buttons are ink, and colour is kept for a few small marks that
+     * mean something. The accent is ink, not a hue.
      */
-    --agent-ink: #ffffff;
-    --agent-0: #0f7b6c;
-    --agent-1: #b3407a;
-    --agent-2: #6f42c1;
-    --agent-3: #0b6e99;
-    --agent-4: #4b5bbd;
-    --agent-5: #455a64;
+    --accent: #242729;
+    --focus: var(--accent);
+    /* The one colour of action: the primary button (Send, Create, Save), a muted steel. */
+    --act: #42617e;
+    /* Text on it: 4.5:1 and more. */
+    --on-act: #ffffff;
+    --user: #eef0f3;
+    /*
+     * States are grey: the darker, the more a state asks of the person. The
+     * word and the shape of the dot tell which state it is.
+     */
+    --ok: #7e8084;
+    --busy: #4b4d50;
+    --wait: #242729;
+    --bad: #242729;
+    --off: #898c90;
+    /*
+     * The dot of a state, the one place a state takes a colour: sage for work,
+     * ochre for waiting on the person, brick for an error. Graphics, 3:1 at
+     * least against the panel and the background (WCAG 1.4.11).
+     */
+    --dot-busy: #4e835a;
+    --dot-wait: #a77d4b;
+    --dot-bad: #9c5952;
+    /*
+     * Agents (#23): the borders of their envelopes, their buttons and quotes
+     * are grey; an agent is told by its name and the shape of its mark.
+     */
+    --agent-0: #727578;
+    --agent-1: #727578;
+    --agent-2: #727578;
+    --agent-3: #727578;
+    --agent-4: #727578;
+    --agent-5: #727578;
+    /*
+     * The hue of each agent, muted, one lightness: only on its mark, and as a
+     * faint tone in the bar of its envelopes. 3:1 at least against the panel.
+     */
+    --mark-0: #5c7794;
+    --mark-1: #4c7f7e;
+    --mark-2: #647d5e;
+    --mark-3: #83724f;
+    --mark-4: #926961;
+    --mark-5: #836a89;
     /* A person, where a message says who wrote it: the bar of a forwarded message of a person. */
-    --person: #656d76;
+    --person: #616467;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
     /* Controls: sizes and type. */
@@ -75,13 +102,13 @@
     --btn-bg-hover: color-mix(in srgb, var(--accent) 17%, var(--panel));
     --btn-bg-active: color-mix(in srgb, var(--accent) 24%, var(--panel));
     --btn-fg: color-mix(in srgb, var(--accent) 72%, var(--text));
-    /* The main one: the accent itself, on a soft shadow of its colour. */
-    --primary-bg: var(--accent);
-    --primary-bg-hover: color-mix(in srgb, var(--accent) 90%, var(--text));
-    --primary-bg-active: color-mix(in srgb, var(--accent) 80%, var(--text));
-    --primary-fg: var(--on-accent);
-    --primary-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 30%, transparent), 0 3px 10px color-mix(in srgb, var(--accent) 22%, transparent);
-    --primary-shadow-hover: 0 2px 4px color-mix(in srgb, var(--accent) 30%, transparent), 0 6px 16px color-mix(in srgb, var(--accent) 28%, transparent);
+    /* The main one: the colour of action, on a soft shadow of it. */
+    --primary-bg: var(--act);
+    --primary-bg-hover: color-mix(in srgb, var(--act) 90%, var(--text));
+    --primary-bg-active: color-mix(in srgb, var(--act) 80%, var(--text));
+    --primary-fg: var(--on-act);
+    --primary-shadow: 0 1px 2px color-mix(in srgb, var(--act) 30%, transparent), 0 3px 10px color-mix(in srgb, var(--act) 22%, transparent);
+    --primary-shadow-hover: 0 2px 4px color-mix(in srgb, var(--act) 30%, transparent), 0 6px 16px color-mix(in srgb, var(--act) 28%, transparent);
     /* The one that deletes: a tint of red. */
     --danger-bg: color-mix(in srgb, var(--bad) 11%, var(--panel));
     --danger-bg-hover: color-mix(in srgb, var(--bad) 18%, var(--panel));
@@ -124,28 +151,38 @@
 }
 @media (prefers-color-scheme: dark) {
     :root {
-        --bg: #0f1115;
-        --panel: #171a21;
-        --text: #e6e8eb;
-        --muted: #9199a3;
-        --border: #2c313a;
-        --border-strong: #6e7681;
-        --accent: #4c8dff;
-        /* White on this blue is 3.2:1; the dark ink is 5.9:1. */
-        --on-accent: #0b1220;
-        --user: #1c2638;
-        --ok: #3fb950;
-        --busy: #4c8dff;
-        --wait: #e3a008;
-        --bad: #f85149;
-        --off: #6e7681;
-        /* A shade lighter, still 4.5:1 with white text, and 3:1 at least against the panel. */
-        --agent-0: #12806f;
-        --agent-1: #bf4583;
-        --agent-2: #7c52cc;
-        --agent-3: #0c76a3;
-        --agent-4: #5667c8;
-        --agent-5: #546e7a;
+        --bg: #0e1011;
+        --panel: #181a1b;
+        --text: #e3e5e6;
+        --muted: #a2a5a7;
+        --border: #313335;
+        --border-strong: #6c6f72;
+        --accent: #dcdee0;
+        --act: #9cbbda;
+        /* White on this steel is 2:1; the dark ink is 9.6:1. */
+        --on-act: #0e1011;
+        --user: #26282a;
+        --ok: #83868a;
+        --busy: #bcbebf;
+        --wait: #e3e5e6;
+        --bad: #e3e5e6;
+        --off: #727578;
+        --dot-busy: #89b992;
+        --dot-wait: #d7af83;
+        --dot-bad: #d2918a;
+        --agent-0: #898c90;
+        --agent-1: #898c90;
+        --agent-2: #898c90;
+        --agent-3: #898c90;
+        --agent-4: #898c90;
+        --agent-5: #898c90;
+        --mark-0: #93aeca;
+        --mark-1: #86b5b4;
+        --mark-2: #9bb395;
+        --mark-3: #b9a987;
+        --mark-4: #c9a098;
+        --mark-5: #b9a1bf;
+        --person: #a2a5a7;
     }
 }
 * { box-sizing: border-box; }
@@ -298,6 +335,17 @@ input[type="checkbox"]:disabled { cursor: not-allowed; }
 .status-starting .dot { opacity: .5; }
 .status-waiting { --st: var(--wait); font-weight: 700; }
 .status-error { --st: var(--bad); }
+/*
+ * The chip and its word stay grey (#96); the state is told by the word and by
+ * the shape of the dot: a ring for idle, a dot for work, a dot with a halo for
+ * waiting on the person, a diamond for an error, a dash for the rest. The dot
+ * of work, waiting and an error takes a muted colour, and only the dot.
+ */
+.status-idle .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--st); }
+:is(.status-working, .status-starting) .dot { --st: var(--dot-busy); }
+.status-waiting .dot { --st: var(--dot-wait); box-shadow: 0 0 0 2px color-mix(in srgb, var(--st) 25%, transparent); }
+.status-error .dot { --st: var(--dot-bad); border-radius: 1px; transform: rotate(45deg) scale(.9); }
+.badge:not(.status-idle, .status-working, .status-starting, .status-waiting, .status-error) .dot { height: 2px; width: 8px; border-radius: 1px; }
 .app {
     display: grid;
     grid-template-columns: 240px 1fr;
@@ -370,16 +418,66 @@ input[type="checkbox"]:disabled { cursor: not-allowed; }
     .tab.tab-waiting { animation: none; }
 }
 .unread { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
-.main { min-width: 0; min-height: 0; display: flex; }
+.main { min-width: 0; min-height: 0; display: flex; position: relative; }
 .agent-panel, .broadcast { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-.agent-header { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--panel); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
-.agent-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; flex: 1; }
+.agent-header { padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+/*
+ * The header of an agent is one line (#102): the name and the state take what
+ * is left, the rest keeps its size. What left it lives in the details.
+ */
+.agent-title { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; }
+.agent-title > * { flex: none; }
+.agent-title > h1 { flex: 0 1 auto; min-width: 0; }
 .agent-title h1, .broadcast h1 { font-size: 18px; margin: 0; }
+.agent-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-title .reason { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kind, .reason, .muted, .description { color: var(--muted); font-size: 12px; }
 .harness { font-family: var(--mono); font-size: 12px; padding: 0 6px; border: 1px solid var(--border); border-radius: 4px; }
-.harness-unknown { font-family: inherit; color: var(--muted); border-style: dashed; }
-.description { margin: 0; width: 100%; order: 3; }
+.harness-unknown { color: var(--muted); }
+.memory-badge { font-size: 12px; padding: 0 6px; border: 1px solid var(--border); border-radius: 4px; }
+.memory-badge-off { color: var(--muted); border-style: dashed; }
+.memory-badge[data-memory="unavailable"] { color: var(--bad-text); }
+.description { margin: 0; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.header-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+/* A round button of an icon: the details, the menu of actions. */
+.icon-btn { width: var(--ctl-h-sm); padding: 0; }
+.icon-btn svg { width: 16px; height: 16px; }
+.icon-btn[aria-expanded="true"] { background: var(--nav-bg-selected); color: var(--text); }
+/* On a wide screen the actions are buttons; on a phone they go behind «⋯». */
+.actions-menu { position: relative; display: none; }
+.menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 6; min-width: 180px; padding: 4px; background: var(--panel); border: var(--pop-edge); border-radius: var(--r-pop); box-shadow: var(--pop-shadow); display: flex; flex-direction: column; }
+.menu [role="menuitem"] { text-align: left; border: 0; background: transparent; font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 10px; cursor: pointer; color: var(--text); }
+.menu [role="menuitem"]:hover { background: var(--nav-bg-hover); }
+.menu [role="menuitem"]:focus-visible { outline: var(--ring); outline-offset: -2px; }
+.header-error { margin: 0; padding: 6px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+/*
+ * A lost or poor connection, under the header (#102): the whole width, in the
+ * muted brick of the palette; the grey of --bad is too close to the text for it.
+ */
+.health-strip { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-size: 12px; color: var(--bad-text); background: color-mix(in srgb, var(--dot-bad) 10%, var(--panel)); border-bottom: 1px solid color-mix(in srgb, var(--dot-bad) 35%, var(--border)); box-shadow: inset 3px 0 0 var(--dot-bad); }
+.health-strip-text { flex: 1; min-width: 0; font-weight: 600; }
+.health-strip .btn { --b-fg: var(--bad-text); flex: none; }
+.warn-icon { flex: none; color: var(--dot-bad); }
+/* The details of an agent: a panel on the right of the chat, over it on a phone. */
+.agent-details { width: 320px; flex: none; border-left: 1px solid var(--border); background: var(--panel); padding: 14px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+.agent-details-head { display: flex; align-items: center; justify-content: space-between; }
+.agent-details-head h2 { font-size: 14px; margin: 0; }
+.details-section { display: flex; flex-direction: column; gap: 10px; }
+.details-section + .details-section { border-top: 1px solid var(--border); padding-top: 14px; }
+.details-section h3 { font-size: 13px; margin: 0; display: flex; align-items: center; gap: 8px; }
+.details-section .description { font-size: 13px; color: var(--text); }
+.health-fine { color: var(--muted); font-size: 12px; font-weight: 500; }
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 13px; }
+.facts dt { color: var(--muted); font-size: 12px; }
+.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+    .agent-header { padding: 8px 12px; }
+    .header-actions .actions { display: none; }
+    .actions-menu { display: block; }
+    .agent-header .views { order: 5; width: 100%; }
+    .agent-details { position: absolute; inset: 0; width: auto; border-left: 0; z-index: 5; }
+}
 .error { color: var(--bad-text); font-size: 12px; }
 .note { color: var(--muted); font-size: 12px; }
 .feed { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
@@ -395,21 +493,26 @@ input[type="checkbox"]:disabled { cursor: not-allowed; }
 .message-link:focus-visible { outline: var(--ring); outline-offset: 1px; border-radius: 2px; }
 .message { padding: 8px 12px; border-radius: var(--r-msg); background: var(--panel); border: 1px solid var(--border); }
 .message-user { background: var(--user); align-self: flex-end; }
-/* A message one agent sent another: an envelope with a bar in the sender's colour (#23). */
+/*
+ * A message one agent sent another (#23): an envelope with a hairline border
+ * and a quiet grey bar that names the sender (#96). The bar takes a faint tone
+ * of the sender's hue, 7 %; the text on it stays grey.
+ */
 /* overflow: hidden rounds the bar off at the corners; flex-shrink: 0 keeps it from letting the feed squeeze the message flat. */
-.message-peer, .message-sent { padding: 0; overflow: hidden; flex-shrink: 0; border: 1px solid var(--agent-color); }
+.message-peer, .message-sent { padding: 0; overflow: hidden; flex-shrink: 0; border: 1px solid var(--border); }
 .envelope-body { padding: 8px 12px; }
 .envelope-bar, .fwd-bar {
-    background: var(--agent-color);
-    color: var(--agent-ink);
+    background: color-mix(in srgb, var(--agent-hue, var(--text)) 7%, color-mix(in srgb, var(--text) 5%, var(--panel)));
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
     font-family: var(--mono);
     font-size: 11px;
     letter-spacing: .04em;
     text-transform: uppercase;
     padding: 3px 12px;
 }
-/* A task one agent gave another (#51): the envelope of #23, in the colour of the giver, with where it stands. */
-.delegation { padding: 0; overflow: hidden; flex-shrink: 0; border: 1px solid var(--agent-color); align-self: stretch; }
+/* A task one agent gave another (#51): the envelope of #23, with the tone of the giver, with where it stands. */
+.delegation { padding: 0; overflow: hidden; flex-shrink: 0; border: 1px solid var(--border); align-self: stretch; }
 .delegation-bar { display: flex; justify-content: space-between; gap: 12px; }
 .delegation-state { font-weight: 600; }
 .delegation-due { margin-top: 4px; font-size: 12px; color: var(--muted); }
@@ -417,19 +520,26 @@ input[type="checkbox"]:disabled { cursor: not-allowed; }
 .delegation-completed .delegation-result { border-top-color: var(--ok); }
 .delegation-failed .delegation-result { border-top-color: var(--bad); }
 .delegation-failed .delegation-result .item-label { color: var(--bad); }
-.agent-color-0 { --agent-color: var(--agent-0); }
-.agent-color-1 { --agent-color: var(--agent-1); }
-.agent-color-2 { --agent-color: var(--agent-2); }
-.agent-color-3 { --agent-color: var(--agent-3); }
-.agent-color-4 { --agent-color: var(--agent-4); }
-.agent-color-5 { --agent-color: var(--agent-5); }
-.author-person { --agent-color: var(--person); }
+/* --agent-color is grey (borders, buttons, quotes); --agent-hue is the muted hue of the agent (#96). */
+.agent-color-0 { --agent-color: var(--agent-0); --agent-hue: var(--mark-0); }
+.agent-color-1 { --agent-color: var(--agent-1); --agent-hue: var(--mark-1); }
+.agent-color-2 { --agent-color: var(--agent-2); --agent-hue: var(--mark-2); }
+.agent-color-3 { --agent-color: var(--agent-3); --agent-hue: var(--mark-3); }
+.agent-color-4 { --agent-color: var(--agent-4); --agent-hue: var(--mark-4); }
+.agent-color-5 { --agent-color: var(--agent-5); --agent-hue: var(--mark-5); }
+.author-person { --agent-color: var(--person); --agent-hue: var(--person); }
 /*
- * The colour of an agent where its name stands (#50): a square in the sidebar,
- * in the header of its tab and in a conversation, so the eye ties the name to
- * its envelopes. Square, unlike the round dots of status and of unread.
+ * The mark of an agent where its name stands (#50): in the sidebar, in the
+ * header of its tab and in a conversation. It is the one place the agent's hue
+ * is drawn in full (#96), and its shape tells the agent too: square, circle,
+ * diamond, triangle, ring, hollow square. Unlike the dots of status and unread.
  */
-.agent-mark { display: inline-block; flex-shrink: 0; width: 10px; height: 10px; border-radius: 3px; background: var(--agent-color); }
+.agent-mark { display: inline-block; flex-shrink: 0; width: 10px; height: 10px; border-radius: 3px; background: var(--agent-hue); }
+.agent-mark.agent-color-1 { border-radius: 50%; }
+.agent-mark.agent-color-2 { border-radius: 1px; transform: rotate(45deg) scale(.82); }
+.agent-mark.agent-color-3 { border-radius: 0; clip-path: polygon(50% 4%, 100% 96%, 0 96%); }
+.agent-mark.agent-color-4 { border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 2px var(--agent-hue); }
+.agent-mark.agent-color-5 { background: transparent; box-shadow: inset 0 0 0 2px var(--agent-hue); }
 .pair-marks { display: inline-flex; gap: 2px; flex-shrink: 0; }
 .agent-title h1 { display: inline-flex; align-items: center; gap: 8px; }
 .agent-title h1 .agent-mark { width: 12px; height: 12px; }
@@ -506,8 +616,8 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
 /* The colour of the author, toward the text: dark enough on the light panel, light enough on the dark one. */
 .quote-who { display: block; font-weight: 600; color: color-mix(in srgb, var(--q) 70%, var(--text)); }
 .quote-text { display: block; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* A message sent on as it was (#30): the envelope of #23, with the bar in the colour of whoever wrote it. */
-.fwd { border: 1px solid var(--agent-color); border-radius: 6px; overflow: hidden; background: var(--panel); margin-top: 2px; }
+/* A message sent on as it was (#30): the envelope of #23, with the bar in the tone of whoever wrote it. */
+.fwd { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--panel); margin-top: 2px; }
 .fwd > .text { padding: 6px 10px; }
 .text + .fwd { margin-top: 6px; }
 .visually-hidden {
@@ -543,12 +653,13 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
  * The composer (#77): a card with a bar at its foot, in the soft capsules of
  * #61 — the panel on a soft shadow, the thin edge of a field that holds 3:1,
  * the focus ring of the system around the whole card. The field grows with
- * the text up to ten lines (Composer sets its height), then scrolls.
+ * the text up to ten lines (Composer sets its height), then scrolls. The
+ * card spans the feed above it, whose messages of the person reach its right
+ * edge (#95): no column of its own.
  */
 .composer { flex-shrink: 0; padding: 8px 16px 16px; }
 .composer-card {
     --composer-lines: 10;
-    max-width: 900px;
     display: flex;
     flex-direction: column;
     border-radius: var(--r-card);
@@ -611,7 +722,6 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
 }
 .broadcast { padding: 16px; gap: 12px; overflow-y: auto; }
 .broadcast .composer { padding: 0; }
-.broadcast .composer-card { max-width: none; }
 .targets { margin: 0; border: var(--card-edge); border-radius: var(--r-card); background: var(--panel); box-shadow: var(--card-shadow); display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; }
 /* The legend inside the card, not astride its edge. */
 .targets legend { float: left; width: 100%; padding: 0; margin-bottom: 2px; font-size: 12px; font-weight: 600; }
@@ -685,15 +795,21 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
  * The health of an SSH connection (#53): a quiet line of facts; a poor
  * connection turns it the colour of an error, with the reason, and marks the tab.
  */
-.health { width: 100%; order: 4; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; font-size: 12px; color: var(--muted); }
+.health { width: 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; font-size: 12px; color: var(--muted); }
 .settings-agent .health { order: 0; }
 .health-title { font-family: var(--mono); font-size: 11px; padding: 0 5px; border: 1px solid var(--border); border-radius: 4px; }
 .health-label { text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
 .health-fact { color: var(--text); }
 .health-fact .health-label { color: var(--muted); }
-.health-poor { padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--bad) 10%, var(--panel)); box-shadow: inset 3px 0 0 var(--bad); }
-.health-poor .health-title { border-color: var(--bad); color: var(--bad-text); }
+.health-poor { padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--dot-bad) 10%, var(--panel)); box-shadow: inset 3px 0 0 var(--dot-bad); }
+.health-poor .health-title { border-color: var(--dot-bad); color: var(--bad-text); }
 .health-warning { color: var(--bad-text); font-weight: 600; }
+/* In the details: a column of label and value, the warning over them. */
+.health-column { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; align-items: baseline; font-size: 13px; }
+.health-column.health-poor { padding: 0; background: none; box-shadow: none; }
+.health-column .health-fact { display: contents; }
+.health-column .health-label { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.health-column .health-warning { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; margin-bottom: 2px; padding: 6px 10px; border-radius: var(--r-field); font-size: 12px; background: color-mix(in srgb, var(--dot-bad) 10%, var(--panel)); box-shadow: inset 3px 0 0 var(--dot-bad); }
 .tab-poor { font-size: 11px; font-weight: 600; color: var(--bad-text); }
 .actions .note { align-self: center; }
 .field { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 0; }
@@ -704,12 +820,14 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
 .field-inline .input { flex: 1; }
 /*
  * Messages waiting in line for the agent (#46): after the feed, cut off by a
- * dashed amber line, each an envelope with an amber bar and its place in line.
+ * dashed grey line, each a dashed envelope with a grey bar and its place in line.
+ * The block spans the feed, so a message in line stands at its right edge,
+ * where the messages of the person do (#95).
  */
-.next-up { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; border-top: 2px dashed var(--wait); padding-top: 8px; margin-top: 4px; flex-shrink: 0; max-width: 900px; width: 100%; }
-.next-up-head { align-self: stretch; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-family: var(--mono); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: color-mix(in srgb, var(--wait) 75%, var(--text)); }
-.message-queued { padding: 0; overflow: hidden; flex-shrink: 0; border: 1px solid var(--wait); background: color-mix(in srgb, var(--wait) 6%, var(--panel)); }
-.message-queued .envelope-bar { display: flex; justify-content: space-between; gap: 8px; align-items: center; background: color-mix(in srgb, var(--wait) 22%, var(--panel)); color: color-mix(in srgb, var(--wait) 45%, var(--text)); }
+.next-up { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; border-top: 2px dashed var(--border-strong); padding-top: 8px; margin-top: 4px; flex-shrink: 0; width: 100%; }
+.next-up-head { align-self: stretch; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-family: var(--mono); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.message-queued { padding: 0; overflow: hidden; flex-shrink: 0; border: 1px dashed var(--border-strong); background: var(--panel); }
+.message-queued .envelope-bar { display: flex; justify-content: space-between; gap: 8px; align-items: center; background: color-mix(in srgb, var(--text) 5%, var(--panel)); color: var(--muted); }
 /* On the bar of the envelope: its words and its colour. */
 .queue-cancel { --b-fg: currentColor; --b-fg-hover: currentColor; height: 18px; padding: 0 6px; font-family: var(--mono); font-size: 11px; font-weight: inherit; text-transform: inherit; letter-spacing: inherit; }
 .queue-cancel:focus-visible { outline-offset: 1px; }
@@ -726,7 +844,7 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
  * its title. The chat stays mounted while the memory is in sight, so the feed
  * keeps its place and the field its draft.
  */
-.views { width: 100%; order: 5; display: flex; gap: 4px; margin-top: 4px; }
+.views { display: flex; gap: 4px; flex: none; }
 .view-tab { height: var(--ctl-h-sm); padding: 0 14px; border: 0; border-radius: var(--r-ctl); background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: var(--ctl-tr); display: inline-flex; align-items: center; gap: 6px; }
 .view-tab:hover { background: var(--nav-bg-hover); color: var(--text); }
 .view-tab[aria-pressed="true"] { background: var(--nav-bg-selected); color: var(--btn-fg); }

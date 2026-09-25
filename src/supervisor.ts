@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { A2AAgent } from './a2a-agent.js';
 import type { AdminRequest } from './a2a-agent.js';
 import { AgentAnswers } from './agent-answers.js';
@@ -7,10 +8,10 @@ import { HistoryFile } from './agent-history.js';
 import type { ConnectionHealth } from './connection-health.js';
 import { Delegations } from './delegations.js';
 import type { DelegationCancel, DelegationFleet, DelegationStart } from './delegations.js';
-import type { AgentSummary, Delivery, Harness } from './dashboard-protocol.js';
+import type { AgentSummary, Delivery, Harness, MemoryStatus } from './dashboard-protocol.js';
 import { FleetAdmin } from './fleet-admin.js';
 import type { AdminFleet, AdminOutcome } from './fleet-admin.js';
-import type { FleetToolsAccess } from './fleet-mcp.js';
+import type { DeliveredMessage, FleetToolsAccess } from './fleet-mcp.js';
 import { LocalAgentProcess } from './local-agent.js';
 import type { Agent, Fleet } from './types.js';
 /**
@@ -31,6 +32,18 @@ function harnessOf(agent: Agent, running: FleetAgent): { readonly harness?: Harn
         case undefined:
             return {};
     }
+}
+/**
+ * The memory of an agent as the dashboard shows it: what the running agent
+ * delivered, and for a remote agent that flotti gives it none (#94).
+ */
+function memoryOf(agent: Agent, running: FleetAgent): MemoryStatus | undefined {
+    if (running.memory !== undefined) {
+        return running.memory;
+    }
+    return agent.kind === 'remote'
+        ? { state: 'unsupported', reason: 'a remote agent keeps its own memory: flotti gives it none yet' }
+        : undefined;
 }
 /** What the supervisor says besides the agents' own events. */
 type SupervisorNotice =
@@ -58,9 +71,14 @@ type SupervisorOptions = {
     readonly queuedAfterMs?: number;
     /**
      * The fleet tools each agent flotti starts gets in its sessions; none when
-     * absent. `flotti run` gives them, tests of fake fleets do not.
+     * absent. `flotti run` gives them, tests of fake fleets do not. A message
+     * the supervisor sends on from one agent to another goes to `delivered`,
+     * so that `reply` and `forward` of the receiver act on it.
      */
-    readonly fleetTools?: { access(agentId: string): FleetToolsAccess };
+    readonly fleetTools?: {
+        access(agentId: string): FleetToolsAccess;
+        delivered?(message: DeliveredMessage): void;
+    };
     /**
      * Whether an action of an administrator of the fleet waits for a person to
      * allow it in the dashboard; asked at every action, off when absent.
@@ -85,14 +103,16 @@ type Member = {
     unsubscribe: () => void;
     /** The harness the pages were last told the agent has: a change is announced. */
     harness: string | undefined;
+    /** The memory status the pages were last told, as JSON: a change is announced. */
+    memory: string | undefined;
     /** Whether the agent is in a turn: between a message it took and the end of its answer. */
     inTurn: boolean;
     /** Called once the turn is over: actions an administrator asked for on itself in the turn. */
     turnOver: (() => void)[];
 };
 /** What a member starts with besides its agent and its history. */
-function freshMember(): Pick<Member, 'answers' | 'unsubscribe' | 'harness' | 'inTurn' | 'turnOver'> {
-    return { answers: new AgentAnswers(), unsubscribe: () => undefined, harness: undefined, inTurn: false, turnOver: [] };
+function freshMember(): Pick<Member, 'answers' | 'unsubscribe' | 'harness' | 'memory' | 'inTurn' | 'turnOver'> {
+    return { answers: new AgentAnswers(), unsubscribe: () => undefined, harness: undefined, memory: undefined, inTurn: false, turnOver: [] };
 }
 /** An agent the request names that is not in the fleet. */
 class UnknownAgentError extends Error {}
@@ -102,11 +122,12 @@ class UnknownAgentError extends Error {}
  */
 function defaultAgent(
     fleetTools: SupervisorOptions['fleetTools'],
-    onAdminRequest: (agentId: string, request: AdminRequest) => void
+    onAdminRequest: (agentId: string, request: AdminRequest) => void,
+    roster: () => AgentSummary[]
 ): (agent: Agent) => FleetAgent {
     return (agent) => agent.kind === 'local'
         ? new LocalAgentProcess(agent, fleetTools === undefined ? {} : { fleetTools: fleetTools.access(agent.id) })
-        : new A2AAgent(agent, { onAdminRequest: (request) => onAdminRequest(agent.id, request) });
+        : new A2AAgent(agent, { onAdminRequest: (request) => onAdminRequest(agent.id, request), fleet: { roster } });
 }
 function describeError(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -134,6 +155,8 @@ class Supervisor {
     private readonly queuedAfterMs: number;
     private readonly persistHistory: boolean;
     private readonly warn: (text: string) => void;
+    /** Told of each message the supervisor sends on from one agent to another. */
+    private readonly delivered: ((message: DeliveredMessage) => void) | undefined;
     /** Last number given to an event of each id, kept when the agent goes: numbers of an id only grow. */
     private readonly lastSeq = new Map<string, number>();
     /** Tasks agents give one another. */
@@ -142,12 +165,13 @@ class Supervisor {
     private readonly admin: FleetAdmin;
     constructor(fleet: Fleet, options: SupervisorOptions = {}) {
         this.createAgent = options.createAgent
-            ?? defaultAgent(options.fleetTools, (agentId, request) => void this.adminRequest(agentId, request));
+            ?? defaultAgent(options.fleetTools, (agentId, request) => void this.adminRequest(agentId, request), () => this.agents());
         this.admin = new FleetAdmin(this.adminFleet(), options.confirmAdminActions === undefined ? {} : { confirm: options.confirmAdminActions });
         this.historyLimit = options.historyLimit ?? 5000;
         this.queuedAfterMs = options.queuedAfterMs ?? 500;
         this.persistHistory = options.persistHistory ?? false;
         this.warn = options.warn ?? ((text) => console.error(text));
+        this.delivered = options.fleetTools?.delivered?.bind(options.fleetTools);
         this.delegations = new Delegations(this.delegationFleet(), this.queuedAfterMs);
         for (const agent of fleet.agents) {
             this.join(agent, []);
@@ -157,16 +181,30 @@ class Supervisor {
     agents(): AgentSummary[] {
         return [...this.members.values()]
             .sort((left, right) => fleetOrder(left.agent, right.agent))
-            .map(({ agent, running }) => ({
-                id: agent.id,
-                name: agent.name,
-                kind: agent.kind,
-                ...(agent.description === undefined ? {} : { description: agent.description }),
-                ...harnessOf(agent, running),
-                status: running.status,
-                ...(running.health === undefined ? {} : { health: running.health }),
-                ...(agent.admin === true ? { admin: true as const } : {})
-            }));
+            .map(({ agent, running }) => {
+                const memory = memoryOf(agent, running);
+                return {
+                    id: agent.id,
+                    name: agent.name,
+                    kind: agent.kind,
+                    ...(agent.description === undefined ? {} : { description: agent.description }),
+                    ...harnessOf(agent, running),
+                    status: running.status,
+                    ...(running.health === undefined ? {} : { health: running.health }),
+                    ...(agent.admin === true ? { admin: true as const } : {}),
+                    ...(memory === undefined ? {} : { memory })
+                };
+            });
+    }
+    /**
+     * The memory bank the memory tools work on for this agent (#101): a local
+     * agent on this machine with an adapter has one; any other has none.
+     */
+    memoryBank(agentId: string): string | undefined {
+        const agent = this.members.get(agentId)?.agent;
+        return agent?.kind === 'local' && agent.ssh === undefined && agent.adapter !== undefined
+            ? agent.memoryDirectory
+            : undefined;
     }
     /** The agent as its manifest describes it. */
     agent(agentId: string): Agent {
@@ -425,6 +463,7 @@ class Supervisor {
             file: historyFile,
             ...freshMember()
         };
+        member.memory = JSON.stringify(member.running.memory ?? null);
         this.members.set(agent.id, member);
         if (restoredAny) {
             this.markRestored(member);
@@ -454,6 +493,7 @@ class Supervisor {
     private hear(member: Member, event: AgentEvent): void {
         if (event.type === 'status') {
             this.noticeHarness(member);
+            this.rosterChanged();
         }
         this.followTurn(member, event);
         this.keep(member, event);
@@ -461,7 +501,7 @@ class Supervisor {
         this.delegations.take(member.agent.id, event);
         const answer = member.answers.take(event);
         if (answer !== undefined) {
-            this.forward(member, answer.to, answer.text, answer.replyTo);
+            this.forward(member, answer.to, answer.text, answer.replyTo, true);
         }
     }
     /** What the agent says to another one goes there: a message, a task, taking a task back. */
@@ -540,21 +580,31 @@ class Supervisor {
         member.offset += 1;
     }
     /**
-     * A remote agent tells its harness once connected to, which it says with a
-     * status: the pages learn it with the fleet, and only when it changed.
+     * A remote agent tells its harness once connected to, and a local one what
+     * memory it was given once started, which each says with a status: the
+     * pages learn it with the fleet, and only when it changed.
      */
     private noticeHarness(member: Member): void {
         const harness = member.running.harness;
-        if (harness === member.harness) {
+        const memory = JSON.stringify(member.running.memory ?? null);
+        if (harness === member.harness && memory === member.memory) {
             return;
         }
         member.harness = harness;
+        member.memory = memory;
         if (this.members.get(member.agent.id) === member) {
             this.announce();
         }
     }
     private announce(): void {
         this.notify({ type: 'fleet', agents: this.agents() });
+        this.rosterChanged();
+    }
+    /** The agents that are told who is in the fleet learn it changed (docs/a2a-fleet.md). */
+    private rosterChanged(): void {
+        for (const { running } of this.members.values()) {
+            running.fleetChanged?.();
+        }
     }
     private keep(member: Member, received: AgentEvent): void {
         this.store(member, member.offset === 0 ? received : { ...received, seq: received.seq + member.offset });
@@ -597,11 +647,12 @@ class Supervisor {
     }
     /**
      * Sends on what an agent said to another one — a message of its own, or,
-     * with `replyTo`, its answer to a message of that one. The sender does not
-     * wait for the receiver: a message that cannot be delivered is a line in
-     * the tab of the sender, saying why.
+     * with `replyTo`, its answer to a message of that one. `turnAnswer` marks
+     * the answer flotti sends back at the end of a turn: the receiver owes none
+     * to it. The sender does not wait for the receiver: a message that cannot
+     * be delivered is a line in the tab of the sender, saying why.
      */
-    private forward(sender: Member, to: string, text: string, replyTo?: Quote): void {
+    private forward(sender: Member, to: string, text: string, replyTo?: Quote, turnAnswer = false): void {
         const from = sender.agent.id;
         const receiver = this.members.get(to);
         const failed = (why: string): void => {
@@ -615,12 +666,31 @@ class Supervisor {
         } else if (receiver === sender) {
             failed('an agent does not send messages to itself');
         } else {
-            void this.hand(receiver, text, replyTo === undefined ? { from } : { from, replyTo }).then((delivery) => {
-                if (delivery.result === 'failed') {
-                    failed(delivery.error ?? 'the agent did not take it');
+            void this.handOn(receiver, from, text, replyTo, turnAnswer).then((error) => {
+                if (error !== undefined) {
+                    failed(error);
                 }
             });
         }
+    }
+    /**
+     * Hands a message of one agent to another and, once it is taken, tells the
+     * fleet tools, so `reply` and `forward` of the receiver act on it. Resolves
+     * with why it failed, or with nothing.
+     */
+    private async handOn(receiver: Member, from: string, text: string, replyTo: Quote | undefined, turnAnswer: boolean): Promise<string | undefined> {
+        const messageId = randomUUID();
+        const delivery = await this.hand(receiver, text, {
+            from,
+            messageId,
+            ...(replyTo === undefined ? {} : { replyTo }),
+            ...(turnAnswer ? { turnAnswer: true as const } : {})
+        });
+        if (delivery.result === 'failed') {
+            return delivery.error ?? 'the agent did not take it';
+        }
+        this.delivered?.({ to: receiver.agent.id, from, messageId, text });
+        return undefined;
     }
     /** Hands the message over; resolves once the agent took it or it failed, however long that takes. */
     private hand(member: Member, text: string, options: SendOptions): Promise<Delivery> {

@@ -26,7 +26,8 @@ let remote: InstanceType<typeof FakeAgent> | undefined;
 /** A pretend Telegram Bot API: flotti is pointed at it, no real bot or chat is used. */
 let telegram: FakeTelegram | undefined;
 let url = '';
-function localAgent(fleet: string, id: string, adapter?: string): void {
+/** @param fake What the pretend agent does besides recording; `mcpHttp` makes it take the fleet tools, and memory with them. */
+function localAgent(fleet: string, id: string, adapter?: string, fake: Record<string, unknown> = {}): void {
     const directory = join(fleet, 'local', id);
     mkdirSync(directory, { recursive: true });
     const record = join(directory, 'record.jsonl');
@@ -35,7 +36,7 @@ function localAgent(fleet: string, id: string, adapter?: string): void {
         ...(adapter === undefined ? {} : { adapter }),
         command: process.execPath,
         arguments: [FAKE_ACP],
-        env: { FAKE_ACP: JSON.stringify({ record }) }
+        env: { FAKE_ACP: JSON.stringify({ record, ...fake }) }
     }));
 }
 /**
@@ -121,9 +122,9 @@ function memoryNotes(fleet: string, id: string): void {
 }
 test.beforeAll(async () => {
     const fleet = join(workspace, 'fleet');
-    localAgent(fleet, 'claude', 'claude-code');
+    localAgent(fleet, 'claude', 'claude-code', { mcpHttp: true });
     memoryNotes(fleet, 'claude');
-    localAgent(fleet, 'codex', 'codex');
+    localAgent(fleet, 'codex', 'codex', { mcpHttp: true });
     await remoteAgent(fleet, 'relay');
     telegram = await FakeTelegram.start();
     url = await startFlotti(fleet);
@@ -164,12 +165,34 @@ test('the page carries the flotti logo in its header and the icon in its tab', a
         expect(response.headers()['content-type'], icon).toMatch(/^image\//);
     }
 });
-test('the header of an agent names its harness, and says when it is not known', async ({ page }) => {
+test('the header of an agent is one line; its harness and type are in the details, which say when it is not known', async ({ page }) => {
     await page.goto(url);
-    for (const [name, harness] of [['claude', 'claude'], ['codex', 'codex'], ['relay', 'harness unknown']] as const) {
+    for (const [name, harness] of [['claude', 'claude'], ['codex', 'codex'], ['relay', 'not known']] as const) {
         await tab(page, name).click();
-        await expect(page.locator('.agent-header [data-harness]')).toHaveText(harness);
+        await expect(page.locator('.agent-header [data-harness]')).toHaveCount(0);
+        const header = await page.locator('.agent-header').boundingBox();
+        expect(header?.height ?? 0).toBeLessThan(60);
+        await page.getByRole('button', { name: `Details of ${name}` }).click();
+        const details = page.getByRole('complementary', { name: `Details of ${name}` });
+        await expect(details.locator('[data-harness]')).toHaveText(harness);
+        await expect(details).toContainText(name === 'relay' ? 'remote · A2A' : 'local · ACP');
+        await details.getByRole('button', { name: 'Close' }).click();
+        await expect(details).toHaveCount(0);
     }
+});
+test('on a phone the actions of an agent are behind a menu, and the details cover the chat', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(url);
+    await tab(page, 'claude').click();
+    await expect(page.locator('.agent-header .actions')).toBeHidden();
+    await page.getByRole('button', { name: 'Actions' }).click();
+    const menu = page.getByRole('menu', { name: 'Actions' });
+    await expect(menu.getByRole('menuitem')).toHaveText(['Stop', 'Restart']);
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await page.getByRole('button', { name: 'Details of claude' }).click();
+    const details = await page.getByRole('complementary', { name: 'Details of claude' }).boundingBox();
+    expect(details?.width ?? 0).toBeGreaterThan(300);
 });
 test('writes to one agent, and the answer stays in its tab', async ({ page }) => {
     await page.goto(url);
@@ -222,25 +245,71 @@ test('the conversation of two agents has a tab of its own: one lane, read-only, 
     await page.getByRole('button', { name: 'Write to claude' }).click();
     await expect(page.getByRole('textbox', { name: 'Message to claude' })).toBeVisible();
 });
-/** The colour an element is painted with: the fill of a mark, the bar of an envelope. */
-const fill = (element: ReturnType<Page['locator']>) => element.evaluate((node) => getComputedStyle(node).backgroundColor);
-async function relayColors(page: Page): Promise<string[]> {
-    await tab(page, 'relay').click();
-    const colors = [
-        await fill(tab(page, 'relay').locator('.agent-mark')),
-        await fill(page.locator('.agent-header .agent-mark')),
-        await fill(feed(page, 'relay').locator('.message-sent .envelope-bar').first())
-    ];
-    await pairTab(page).click();
-    colors.push(await fill(lane(page).locator('.lane-first .envelope-bar').first()), await fill(page.locator('.lane-title .agent-mark').first()));
-    return colors;
+/** The channels of a colour, 0–255: `#rrggbb`, `rgb()`, or the `color(srgb …)` a `color-mix()` computes to. */
+function channels(color: string): number[] {
+    const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color.trim());
+    if (hex !== null) {
+        return hex.slice(1, 4).map((part) => parseInt(part, 16));
+    }
+    const rgb = /rgba?\(([^)]+)\)/.exec(color);
+    if (rgb?.[1] !== undefined) {
+        return rgb[1].split(/[\s,/]+/).filter(Boolean).slice(0, 3).map(Number);
+    }
+    const srgb = /color\(srgb ([^)]+)\)/.exec(color);
+    if (srgb?.[1] !== undefined) {
+        return srgb[1].split(/[\s/]+/).filter(Boolean).slice(0, 3).map((part) => Math.round(Number(part) * 255));
+    }
+    throw new Error(`not a colour: ${color}`);
 }
-test('an agent has one colour in the sidebar, in the header of its tab, on its envelopes and in a conversation, in both themes', async ({ page }) => {
+/** How far a colour is from grey: the spread of its channels. */
+const chroma = (color: string) => {
+    const [r = 0, g = 0, b = 0] = channels(color);
+    return Math.max(r, g, b) - Math.min(r, g, b);
+};
+const TRANSPARENT = 'rgba(0, 0, 0, 0)';
+/** The colour a mark is drawn in: its fill, or the ring of a hollow one. */
+const paint = (element: Locator) => element.evaluate((node, transparent) => {
+    const style = getComputedStyle(node);
+    return style.backgroundColor === transparent ? /^(rgba?|color)\([^)]*\)/.exec(style.boxShadow)?.[0] ?? style.boxShadow : style.backgroundColor;
+}, TRANSPARENT);
+/** A colour an element takes from its style. */
+const css = (element: Locator, property: string) => element.evaluate((node, name) => getComputedStyle(node).getPropertyValue(name).trim(), property);
+type Bar = { readonly hue: string; readonly background: string; readonly text: string; readonly border: string };
+/** The bar of an envelope: the hue it takes, its fill and text, and the border of the envelope. */
+async function bar(envelope: Locator): Promise<Bar> {
+    const head = envelope.locator('.envelope-bar');
+    return {
+        hue: await css(head, '--agent-hue'),
+        background: await css(head, 'background-color'),
+        text: await css(head, 'color'),
+        border: await css(envelope, 'border-top-color')
+    };
+}
+async function relayColors(page: Page): Promise<{ marks: string[]; bars: Bar[] }> {
+    await tab(page, 'relay').click();
+    const marks = [await paint(tab(page, 'relay').locator('.agent-mark')), await paint(page.locator('.agent-header .agent-mark'))];
+    const bars = [await bar(feed(page, 'relay').locator('.message-sent').first())];
+    await pairTab(page).click();
+    marks.push(await paint(page.locator('.lane-title .agent-mark').first()));
+    bars.push(await bar(lane(page).locator('.lane-first .message-sent').first()));
+    return { marks, bars };
+}
+test('an agent has one hue on its mark in the sidebar, in the header of its tab and in a conversation, and a tone of it on its envelopes, in both themes (#96)', async ({ page }) => {
     for (const colorScheme of ['light', 'dark'] as const) {
         await page.emulateMedia({ colorScheme });
         await page.goto(url);
-        const colors = await relayColors(page);
-        expect(new Set(colors).size, `${colorScheme}: ${colors.join(', ')}`).toBe(1);
+        const { marks, bars } = await relayColors(page);
+        expect(new Set(marks).size, `${colorScheme}: ${marks.join(', ')}`).toBe(1);
+        const mark = marks[0] ?? '';
+        expect(chroma(mark), `${colorScheme}: the mark is in colour, ${mark}`).toBeGreaterThan(15);
+        for (const { hue, background, text, border } of bars) {
+            expect(channels(hue), `${colorScheme}: the bar takes the hue of the mark`).toEqual(channels(mark));
+            expect(chroma(background), `${colorScheme}: the bar is a faint tone, ${background}`).toBeLessThan(8);
+            expect(channels(background), `${colorScheme}: the bar is not the hue itself`).not.toEqual(channels(mark));
+            // The rest of the envelope is grey: the text of the bar and the border.
+            expect(chroma(text), `${colorScheme}: the text of the bar, ${text}`).toBeLessThan(8);
+            expect(chroma(border), `${colorScheme}: the border of the envelope, ${border}`).toBeLessThan(8);
+        }
     }
 });
 test('on a narrow screen the conversations are one tab away, in the list of them all', async ({ page }) => {
@@ -452,10 +521,85 @@ test('the composer shows the status of the agent and its line, on a narrow scree
     await expect(card.locator('[data-status]')).toContainText(/working\s*· 1 in line/);
     await expect(card).toContainText('Enter to send');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    // On a phone the actions are behind «⋯» (#102).
+    await page.getByRole('button', { name: 'Actions' }).click();
+    await page.getByRole('menuitem', { name: 'Cancel' }).click();
     await expect(feed(page, 'codex')).toContainText('you said: queued from a phone');
     await expect(card.locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     await expect(card.locator('[data-status]')).not.toContainText('in line');
+});
+type Edges = { readonly left: number; readonly right: number };
+async function edges(locator: Locator): Promise<Edges> {
+    const box = await locator.boundingBox();
+    if (box === null) {
+        throw new Error('not on the page');
+    }
+    return { left: box.x, right: box.x + box.width };
+}
+/** Where the content of the feed runs, and how wide its scrollbar is: the composer sits under it, not beside it. */
+function feedEdges(log: Locator): Promise<Edges & { readonly scrollbar: number }> {
+    return log.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        const left = box.left + element.clientLeft + parseFloat(style.paddingLeft);
+        const right = box.left + element.clientLeft + element.clientWidth - parseFloat(style.paddingRight);
+        return { left, right, scrollbar: element.offsetWidth - element.clientWidth - 2 * element.clientLeft };
+    });
+}
+test('on a wide screen the composer and the line waiting in it span the feed, in both themes (#95)', async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1000 });
+    await page.goto(url);
+    for (const colorScheme of ['light', 'dark'] as const) {
+        await page.emulateMedia({ colorScheme });
+        await say(page, 'claude', 'wait');
+        await expect(tab(page, 'claude').locator('[data-status]')).toHaveAttribute('data-status', 'working');
+        await sayInLine(page, 'claude', `queued on a wide screen, ${colorScheme}`);
+        const log = feed(page, 'claude');
+        const content = await feedEdges(log);
+        expect(content.right - content.left, 'the feed is wider than a column of messages').toBeGreaterThan(1200);
+        const card = await edges(composer(page, 'claude').locator('.composer-card'));
+        expect(Math.abs(card.left - content.left), `${colorScheme}: left of the composer`).toBeLessThanOrEqual(1);
+        expect(Math.abs(card.right - content.right), `${colorScheme}: right of the composer`).toBeLessThanOrEqual(content.scrollbar + 1);
+        const line = nextUp(page, 'claude');
+        const block = await edges(line);
+        expect(Math.abs(block.left - content.left), `${colorScheme}: left of the line`).toBeLessThanOrEqual(1);
+        expect(Math.abs(block.right - content.right), `${colorScheme}: right of the line`).toBeLessThanOrEqual(1);
+        const queued = await edges(line.locator('.message-queued'));
+        const mine = await edges(log.locator('.message-user').filter({ hasText: 'wait' }).last());
+        expect(Math.abs(queued.right - mine.right), `${colorScheme}: a queued message stands where the person's messages do`).toBeLessThanOrEqual(1);
+        await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+        await expect(line).toHaveCount(0);
+    }
+    await tab(page, 'All agents').click();
+    const targets = await edges(page.locator('.targets'));
+    const broadcast = await edges(page.locator('.broadcast .composer-card'));
+    expect(Math.abs(broadcast.left - targets.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(broadcast.right - targets.right)).toBeLessThanOrEqual(1);
+});
+test('the palette is calm, in both themes: a state is a grey chip with a dot in colour, the line is grey, the primary button holds the one colour of action (#96)', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'claude', 'wait');
+    const chip = tab(page, 'claude').locator('[data-status]');
+    await expect(chip).toHaveAttribute('data-status', 'working');
+    await sayInLine(page, 'claude', 'queued in a calm palette');
+    const field = page.getByRole('textbox', { name: 'Message to claude' });
+    await field.fill('not sent');
+    const send = composer(page, 'claude').getByRole('button', { name: 'Send' });
+    for (const colorScheme of ['light', 'dark'] as const) {
+        await page.emulateMedia({ colorScheme });
+        // A control eases into the colours of the theme: read them once it has settled.
+        await page.evaluate(() => Promise.allSettled(document.getAnimations().filter((animation) => animation instanceof CSSTransition).map((animation) => animation.finished)));
+        expect(chroma(await css(chip, 'background-color')), `${colorScheme}: the chip`).toBeLessThan(8);
+        expect(chroma(await css(chip, 'color')), `${colorScheme}: the word of the chip`).toBeLessThan(8);
+        expect(chroma(await css(chip.locator('.dot'), 'background-color')), `${colorScheme}: the dot`).toBeGreaterThan(15);
+        const bar = nextUp(page, 'claude').locator('.message-queued .envelope-bar');
+        expect(chroma(await css(bar, 'background-color')), `${colorScheme}: the bar of a message in line`).toBeLessThan(8);
+        expect(chroma(await css(nextUp(page, 'claude'), 'border-top-color')), `${colorScheme}: the line`).toBeLessThan(8);
+        expect(chroma(await css(send, 'background-color')), `${colorScheme}: the primary button`).toBeGreaterThan(15);
+    }
+    await field.fill('');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(nextUp(page, 'claude')).toHaveCount(0);
 });
 /** Sends a message the agent is too busy to take: the field clears once the dashboard says it waits in line. */
 async function sayInLine(page: Page, name: string, text: string): Promise<void> {
@@ -671,7 +815,8 @@ test('makes an agent an administrator in the settings; its action waits for a pe
     const settings = () => JSON.parse(readFileSync(join(workspace, '.flotti', 'settings.json'), 'utf8')) as Record<string, unknown>;
     await expect.poll(() => settings()['confirmAdminActions']).toBe(true);
     await say(page, 'relay', 'clear codex');
-    await expect(page.locator('.admin-badge')).toHaveText('admin');
+    await page.getByRole('button', { name: 'Details of relay' }).click();
+    await expect(page.getByRole('complementary', { name: 'Details of relay' }).locator('.admin-badge')).toHaveText('admin');
     const request = feed(page, 'relay').locator('.admin-request');
     await expect(request).toContainText('relay asks to clear the context of codex');
     await request.getByRole('button', { name: 'Allow' }).click();
@@ -681,6 +826,7 @@ test('makes an agent an administrator in the settings; its action waits for a pe
     await page.goto(`${url}#/_settings`);
     await confirm.uncheck();
     await expect(confirm).not.toBeChecked();
+    await expect.poll(() => settings()['confirmAdminActions']).toBe(false);
     await settingsRow(page, 'relay').getByRole('button', { name: 'Edit' }).click();
     await field(page, 'Administrator').uncheck();
     await page.getByRole('button', { name: 'Save' }).click();
@@ -751,6 +897,42 @@ test('deletes an agent: it stops, and its directory goes to .trash', async ({ pa
     await expect(tab(page, 'Helper Two')).toHaveCount(0);
     expect(existsSync(join(workspace, 'fleet', 'local', 'helper'))).toBe(false);
     expect(readdirSync(join(workspace, 'fleet', '.trash')).some((name) => name.startsWith('local-helper-'))).toBe(true);
+});
+test('the details of an agent say whether it has memory, as flotti delivered it', async ({ page }) => {
+    await page.goto(url);
+    const memoryOf = async (name: string) => {
+        await tab(page, name).click();
+        await page.getByRole('button', { name: `Details of ${name}` }).click();
+        return page.getByRole('complementary', { name: `Details of ${name}` }).locator('[data-memory]');
+    };
+    const close = async (name: string) => {
+        await page.getByRole('complementary', { name: `Details of ${name}` }).getByRole('button', { name: 'Close' }).click();
+    };
+    // The memory bank of codex stops being usable: something that is not a folder takes its place, and a restart hands memory over again.
+    await expect(await memoryOf('codex')).toHaveAttribute('data-memory', 'on');
+    await close('codex');
+    await expect(page.locator('.agent-header [data-memory]')).toHaveCount(0);
+    const bank = join(workspace, 'fleet', 'local', 'codex', 'memory');
+    rmSync(bank, { recursive: true, force: true });
+    writeFileSync(bank, 'not a folder');
+    await page.locator('.agent-header').getByRole('button', { name: 'Restart' }).click();
+    const cases = [
+        ['claude', 'on', 'memory on · policy v1'],
+        ['codex', 'unavailable', 'memory unavailable'],
+        ['relay', 'unsupported', 'memory unsupported']
+    ] as const;
+    for (const [name, state, text] of cases) {
+        const badge = await memoryOf(name);
+        await expect(badge).toHaveAttribute('data-memory', state);
+        await expect(badge).toHaveText(text);
+        if (name === 'codex') {
+            await expect(badge).toHaveAttribute('title', /is not a folder/);
+        }
+        await close(name);
+    }
+    await tab(page, 'codex').click();
+    await viewButton(page, 'Memory').click();
+    await expect(page.locator('.memory-state')).toContainText('is not a folder');
 });
 test('switches the fleet directory, and saves it for the next run', async ({ page }) => {
     const next = join(workspace, 'fleet-next');

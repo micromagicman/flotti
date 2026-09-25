@@ -20,6 +20,9 @@ import type { ConnectionHealth, HealthListener, HealthTrackerOptions } from './c
 import { SshConnection } from './ssh.js';
 import type { RemoteConnection, RemoteEndpoint, SshOptions } from './ssh.js';
 import type { RemoteAgent, RemoteAuth } from './types.js';
+import type { AgentSummary } from './dashboard-protocol.js';
+import { roster, rosterEntries } from './fleet-roster.js';
+import type { Roster } from './fleet-roster.js';
 /**
  * A2A extension through which flotti asks a remote agent to restart itself.
  * The agent declares it in `capabilities.extensions` of its card; the contract
@@ -32,6 +35,13 @@ const RESTART_EXTENSION = 'https://github.com/micromagicman/flotti/blob/main/doc
  * dashboard. The contract is in docs/a2a-inbox.md.
  */
 const INBOX_EXTENSION = 'https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md';
+/**
+ * A2A extension through which flotti tells a remote agent who is in the fleet:
+ * the roster goes with the inbox request, and what changes in it follows as a
+ * request of its own, outside any conversation. The contract is in
+ * docs/a2a-fleet.md.
+ */
+const FLEET_EXTENSION = 'https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md';
 /**
  * A2A extension through which a remote agent names the program that runs it,
  * in `params.harness` of the extension in its card. The contract is in
@@ -72,6 +82,14 @@ type A2AAgentOptions = {
      * only a line in the tab.
      */
     readonly onAdminRequest?: (request: AdminRequest) => void;
+    /**
+     * The fleet the agent is in, handed to an agent that declares the fleet
+     * extension (docs/a2a-fleet.md); without it the agent is told nothing of
+     * the fleet.
+     */
+    readonly fleet?: { readonly roster: () => readonly AgentSummary[] };
+    /** How long changes of the fleet are gathered before the roster goes out; 1 s by default. */
+    readonly rosterDebounceMs?: number;
 };
 /** A round trip that takes longer than this is not measured: the connection says itself when it is gone. */
 const PROBE_TIMEOUT_MS = 10_000;
@@ -91,6 +109,8 @@ type A2AAgentInfo = {
     readonly restart: boolean;
     /** Whether the agent says things of its own through the flotti inbox extension. */
     readonly inbox: boolean;
+    /** Whether the agent wants the roster of the fleet through the flotti fleet extension. */
+    readonly fleet: boolean;
     /** The program that runs the agent, as the harness extension of the card names it. */
     readonly harness?: string;
     /** Whether the card carries a signature. It is not verified: see README, "Talking to a remote agent". */
@@ -211,7 +231,16 @@ class A2AAgent implements FleetAgent {
     private busyOnItsOwn = false;
     /** Ids of the administrator requests already taken: a snapshot of the inbox repeats them, a new conversation too. */
     private readonly takenRequests = new Set<string>();
-    private readonly onAdminRequest: ((request: AdminRequest) => void) | undefined;
+    /** Where the requests of an administrator go, and where the roster of the fleet comes from. */
+    private readonly hooks: Pick<A2AAgentOptions, 'onAdminRequest' | 'fleet' | 'rosterDebounceMs'>;
+    /** Version of the last roster the agent was sent; it only grows, whatever the session. */
+    private rosterVersion = 0;
+    /** The entries the agent was last sent in this session, as JSON; absent until its inbox is asked for. */
+    private rosterSent: string | undefined;
+    /** Gathers the changes of the fleet before the roster goes out. */
+    private rosterTimer: ReturnType<typeof setTimeout> | undefined;
+    /** Rosters go out one after another, never side by side. */
+    private rosterLine: Promise<void> = Promise.resolve();
     constructor(agent: RemoteAgent, options: A2AAgentOptions = {}) {
         this.agentId = agent.id;
         this.agent = agent;
@@ -226,7 +255,7 @@ class A2AAgent implements FleetAgent {
         this.reconnectDelayMaxMs = options.reconnectDelayMaxMs ?? 5_000;
         this.restartTimeoutMs = options.restartTimeoutMs ?? 60_000;
         this.reopenDelayMaxMs = options.reopenDelayMaxMs ?? 30_000;
-        this.onAdminRequest = options.onAdminRequest;
+        this.hooks = options;
         this.connection = options.connection ?? (agent.ssh === undefined ? undefined : new SshConnection(agent.ssh, options.ssh));
         this.connection?.onDrop((reason: string) => this.dropped(reason));
         this.tracker = this.connection === undefined ? undefined : new HealthTracker(options.health);
@@ -992,10 +1021,10 @@ class A2AAgent implements FleetAgent {
     ): Promise<AsyncGenerator<StreamResponse> | undefined> {
         const taskId = progress.taskId;
         if (taskId === undefined) {
-            const request = extensionRequest(INBOX_EXTENSION, 'flotti listens for what you say of your own.', { action: 'subscribe' });
+            const request = this.inboxRequest();
             return client.sendMessageStream(sendRequest(request), {
                 signal,
-                serviceParameters: ServiceParameters.create(withA2AExtensions(INBOX_EXTENSION))
+                serviceParameters: ServiceParameters.create(withA2AExtensions(...request.extensions))
             });
         }
         const task = await this.inboxTask(client, taskId, progress, signal);
@@ -1003,6 +1032,20 @@ class A2AAgent implements FleetAgent {
         return progress.taskId === undefined || progress.refused
             ? undefined
             : client.resubscribeTask({ tenant: '', id: taskId }, { signal });
+    }
+    /** The request that opens the inbox; with the roster of the fleet, to an agent that wants it. */
+    private inboxRequest(): Message {
+        const fleet = this.wantsRoster() ? this.nextRoster() : undefined;
+        const request = extensionRequest(INBOX_EXTENSION, 'flotti listens for what you say of your own.', {
+            action: 'subscribe',
+            ...(fleet === undefined ? {} : { fleet: fleet.roster })
+        });
+        if (fleet === undefined) {
+            return request;
+        }
+        this.rosterVersion = fleet.roster.version;
+        this.rosterSent = fleet.key;
+        return { ...request, extensions: [INBOX_EXTENSION, FLEET_EXTENSION] };
     }
     /** The inbox task as the agent has it now. */
     private async inboxTask(client: Client, taskId: string, progress: InboxProgress, signal: AbortSignal): Promise<Task> {
@@ -1085,10 +1128,10 @@ class A2AAgent implements FleetAgent {
         this.takenRequests.add(messageId);
         if (request === undefined) {
             this.log('the agent asked for an action of an administrator flotti does not know: "action" and "agent" say what and on whom');
-        } else if (this.onAdminRequest === undefined) {
+        } else if (this.hooks.onAdminRequest === undefined) {
             this.log(`the agent asked to ${request.action} "${request.target}", and nothing here takes such requests`);
         } else {
-            this.onAdminRequest(request);
+            this.hooks.onAdminRequest(request);
         }
     }
     /** The agent said through the inbox whether it is busy on its own: outside a turn the status follows. */
@@ -1102,6 +1145,52 @@ class A2AAgent implements FleetAgent {
     }
     private log(text: string): void {
         this.events.emit({ type: 'log', source: 'flotti', text });
+    }
+    // --- the roster of the fleet: who the agent can write to ------------------------------------------------
+    /**
+     * The fleet changed — an agent came or went, was renamed, changed its
+     * status. The agent is sent the roster once the changes stop for a moment;
+     * nothing is sent before its inbox was asked for, nor when nothing it sees
+     * changed. The roster goes outside the line of messages and starts no turn.
+     */
+    fleetChanged(): void {
+        const client = this.client;
+        if (client === undefined || this.rosterSent === undefined || this.rosterTimer !== undefined || !this.wantsRoster()) {
+            return;
+        }
+        const signal = this.session.signal;
+        this.rosterTimer = setTimeout(() => {
+            this.rosterTimer = undefined;
+            this.rosterLine = this.rosterLine.then(() => this.sendRoster(client, signal));
+        }, this.hooks.rosterDebounceMs ?? 1_000);
+    }
+    /** Whether the agent is told who is in the fleet: it declares the extension, and the inbox it goes with. */
+    private wantsRoster(): boolean {
+        return this.hooks.fleet !== undefined && this.card?.fleet === true && this.card.inbox && this.card.streaming;
+    }
+    /** The roster as it is now, with the next version, and its entries as JSON to tell a change by. */
+    private nextRoster(): { readonly roster: Roster; readonly key: string } {
+        const entries = rosterEntries(this.hooks.fleet?.roster() ?? [], this.agentId);
+        return { roster: roster(this.rosterVersion + 1, entries), key: JSON.stringify(entries) };
+    }
+    /** Sends the roster as a `fleet` request; a failed one is a line in the tab, and the next change tries again. */
+    private async sendRoster(client: Client, signal: AbortSignal): Promise<void> {
+        const next = this.nextRoster();
+        if (signal.aborted || next.key === this.rosterSent) {
+            return;
+        }
+        try {
+            await tellFleet(client, next.roster, signal);
+        } catch (error) {
+            if (!signal.aborted) {
+                this.log(`could not tell the agent who is in the fleet: ${describeError(error)}`);
+            }
+            return;
+        }
+        if (!signal.aborted) {
+            this.rosterVersion = Math.max(this.rosterVersion, next.roster.version);
+            this.rosterSent = next.key;
+        }
     }
     /**
      * A message of the agent; `to` — the agent of the fleet it is for, when it
@@ -1134,11 +1223,13 @@ class A2AAgent implements FleetAgent {
     }
     /**
      * A message from a person, or from another agent of the fleet when `from`
-     * names it; it answers the task when the task is waiting for one.
+     * names it. A message of a person answers the task when the task is waiting
+     * for one; a message of an agent opens a new task, since the question was
+     * asked of the person.
      */
     private userMessage(text: string, options: SendOptions): Message {
         const task = this.task;
-        const waiting = task !== undefined && INTERRUPTED_STATES.includes(task.state);
+        const waiting = options.from === undefined && task !== undefined && INTERRUPTED_STATES.includes(task.state);
         const { from, delegation } = options;
         const body = composeText(text, options, this.agentId);
         const told = from === undefined || this.card?.inbox === true ? body : `[from ${from}] ${body}`;
@@ -1165,6 +1256,10 @@ class A2AAgent implements FleetAgent {
     }
     private endSession(): void {
         this.session.abort();
+        clearTimeout(this.rosterTimer);
+        this.rosterTimer = undefined;
+        this.rosterSent = undefined;
+        this.rosterLine = Promise.resolve();
         this.session = new AbortController();
         this.queue = Promise.resolve();
         this.turns = 0;
@@ -1287,6 +1382,7 @@ function describeCard(card: AgentCard, protocolVersion: string): A2AAgentInfo {
         streaming: card.capabilities?.streaming === true,
         restart: (card.capabilities?.extensions ?? []).some(extension => extension.uri === RESTART_EXTENSION),
         inbox: (card.capabilities?.extensions ?? []).some(extension => extension.uri === INBOX_EXTENSION),
+        fleet: (card.capabilities?.extensions ?? []).some(extension => extension.uri === FLEET_EXTENSION),
         ...(harness === undefined ? {} : { harness }),
         signed: (card.signatures ?? []).length > 0,
         security: Object.keys(card.securitySchemes ?? {}),
@@ -1316,6 +1412,14 @@ async function askToRestart(client: Client): Promise<void> {
         const why = result.status?.message === undefined ? '' : `: ${partsText(result.status.message.parts)}`;
         throw new Error(`the agent refused to restart${why}`);
     }
+}
+/** Sends the roster of the fleet as a `fleet` request of the fleet extension; the answer says nothing. */
+async function tellFleet(client: Client, fleet: Roster, signal: AbortSignal): Promise<void> {
+    const request = extensionRequest(FLEET_EXTENSION, 'The fleet changed; the roster is in the metadata.', { action: 'fleet', ...fleet });
+    await client.sendMessage(sendRequest(request), {
+        signal,
+        serviceParameters: ServiceParameters.create(withA2AExtensions(FLEET_EXTENSION))
+    });
 }
 /**
  * A message that belongs to no conversation and asks something of an extension:
@@ -1450,5 +1554,5 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
         signal.addEventListener('abort', done, { once: true });
     });
 }
-export { A2AAgent, HARNESS_EXTENSION, INBOX_EXTENSION, RESTART_EXTENSION, cardLocation };
+export { A2AAgent, FLEET_EXTENSION, HARNESS_EXTENSION, INBOX_EXTENSION, RESTART_EXTENSION, cardLocation };
 export type { A2AAgentInfo, A2AAgentOptions, AdminRequest };

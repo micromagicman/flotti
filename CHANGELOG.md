@@ -2,6 +2,61 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-09-25
+
+Agents that remember and know their fleet: memory of its own for every local agent, the roster of the
+fleet for remote A2A agents, answers between agents that reach the right one, and a calmer dashboard
+with a one-line agent header.
+
+### Added
+
+- **Remote agents see the fleet.** An A2A agent that declares the new fleet extension gets the roster of
+  the fleet — its own entry marked `you`, administrators `admin` — with the inbox request, and the whole
+  roster again after a change, outside any conversation; see [docs/a2a-fleet.md](docs/a2a-fleet.md) (#94).
+- **Agent memory.** Every local agent with an adapter gets a memory of its own with nothing to install:
+  the tools `memory_search`, `memory_read`, `memory_write` and `memory_delete` of the fleet MCP server,
+  a short policy after its system prompt, the built-in skill `flotti-memory`, and an index of its
+  `memory/` at the start of the first message of every session. A write is confirmed only once the note
+  is on disk, and a stale revision is a conflict, not an overwrite. The details of the agent («i») say
+  whether it has memory — on, unsupported or unavailable — as flotti delivered it (#101).
+
+### Changed
+
+- **A calm, almost monochrome palette.** The dashboard is grey and ink, with colour kept for a few small
+  marks that mean something: the primary button in a muted steel, the dot of a state (sage for work,
+  ochre for waiting on you, brick for an error) while the chip and its word stay grey, and a muted hue
+  on the mark of each agent, whose shape tells the agent too. Envelopes have a hairline border and a
+  grey bar with a faint tone of the sender; the line of messages waiting is grey and dashed. The logo
+  and the icon are ink. Both themes, text contrast AA (#96).
+- **The header of an agent tab is one line.** It keeps the name, the state, Chat and Memory, the actions
+  and an «i» button. The description, the type, the harness, the role and the SSH diagnostics moved to
+  a details panel on the right of the chat, opened by «i» (over the chat on a phone). Trouble with the
+  connection shows as a strip under the header, with a way to the details. On a phone the actions are
+  in a «⋯» menu (#102).
+
+### Fixed
+
+- **An answer to a reply comes back to its author.** When an agent answered another one with `reply`,
+  what the other answered to it stayed in its own tab: every message with a quote counted as an answer
+  flotti had sent back, and got none. Now only the answer flotti sends back at the end of a turn gets
+  no answer back, so there is still no loop, and an A2A agent that answers into its task reaches the
+  agent that replied to it (#99).
+- **`reply` and `forward` see every message from another agent.** A message of a remote A2A agent and
+  an answer sent back at the end of a turn now count as the last message too: `reply` goes to their
+  sender and quotes them, instead of saying no agent has written or answering an older sender (#98).
+- **A tunnel that is down counts as trouble.** A remote agent whose connection dropped and has not come
+  back was shown as fine; now it says «No connection», under the header, on its tab in the sidebar and
+  in `flotti status` (#102).
+- **A message of another agent no longer answers the owner's question.** While a remote A2A agent waits
+  for the owner's answer, a message from another agent of the fleet opens a task of its own instead of
+  continuing the paused one, so the owner's own answer is no longer held in line behind it (#97).
+- **The composer and the messages in line span the chat on a wide window.** The card of the message
+  field and the Next up block no longer stop in a 900 px column: they run the width of the feed, and a
+  message in line stands at its right edge, where the messages of the person do. A narrow screen and
+  the broadcast look as before (#95).
+- **The Administrators setting shows no box until it is read.** While the dashboard was still asking
+  the server, the box stood empty, as if the setting were off, and a click on it did nothing (#91).
+
 ## [0.3.0]
 
 A fleet that works as a team: agents give one another tasks and answer back, their conversations
@@ -184,6 +239,7 @@ The first release: a fleet of AI agents and one dashboard to work with them.
   ([micromagicman/eva#266](https://github.com/micromagicman/eva/issues/266)).
 - The A2A adapter of Cutie, on the same contract as Eva's (owners/quanthread-ai-hub#218, !194).
 
+[0.4.0]: https://github.com/micromagicman/flotti/releases/tag/v0.4.0
 [0.3.0]: https://github.com/micromagicman/flotti/releases/tag/v0.3.0
 [0.2.0]: https://github.com/micromagicman/flotti/releases/tag/v0.2.0
 [0.1.0]: https://github.com/micromagicman/flotti/releases/tag/v0.1.0

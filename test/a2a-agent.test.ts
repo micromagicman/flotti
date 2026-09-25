@@ -8,9 +8,10 @@ import type { A2AAgentOptions } from '../src/a2a-agent.js';
 import type { AgentEvent as DashboardEvent, AgentStatus } from '../src/agent-events.js';
 import { FleetMcpServer } from '../src/fleet-mcp.js';
 import { Supervisor } from '../src/supervisor.js';
+import type { SupervisorOptions } from '../src/supervisor.js';
 import type { RemoteAgent, RemoteAuth } from '../src/types.js';
 import { FakeAgent, agentMessage, artifact, gate, said, statusUpdate, task } from './a2a-fake-server.js';
-import type { FakeAgentOptions, Script } from './a2a-fake-server.js';
+import type { FakeAgentOptions, Received, Script } from './a2a-fake-server.js';
 import { Harness } from './local-agent-helpers.js';
 const running: FakeAgent[] = [];
 const clients: A2AAgent[] = [];
@@ -279,6 +280,30 @@ describe('A2AAgent: a task waiting for input', () => {
         strictEqual(firstTask, undefined);
         ok(answer.taskId !== undefined && answer.taskId !== '');
         deepStrictEqual(messages(events).map(message => message.text), ['pick one', 'Which one?', 'the second', 'took the second']);
+    });
+});
+describe('A2AAgent: a message of another agent while a task waits for input', () => {
+    it('opens a new task for a message of another agent instead of taking it for the answer', async () => {
+        const agent = await fake({
+            script: async (context, bus) => {
+                if (context.task === undefined && said(context) === 'pick one') {
+                    bus.publish(task(context, TaskState.TASK_STATE_WORKING));
+                    bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_INPUT_REQUIRED, agentMessage('Which one?', context, 'ask')));
+                } else {
+                    bus.publish(context.task === undefined ? task(context, TaskState.TASK_STATE_WORKING) : AgentEvent.task(context.task));
+                    bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_COMPLETED, agentMessage(`took ${said(context)}`, context, 'done')));
+                }
+                bus.finished();
+            }
+        });
+        const { client, events } = connect(agent);
+        await client.start();
+        await client.send('pick one');
+        await reaches(client, 'waiting');
+        await client.send('hello', { from: 'reviewer' });
+        await eventually(() => turnEnds(events).length === 2);
+        const sent = agent.received[1]?.params['message'] as { taskId?: string };
+        ok(sent.taskId === undefined || sent.taskId === '', `a message of an agent went to the paused task ${sent.taskId}`);
     });
 });
 describe('A2AAgent: a busy agent, an agent that cannot stream', () => {
@@ -712,9 +737,10 @@ describe('A2AAgent: answering another agent of the fleet', () => {
     });
 });
 /** A supervisor over these running agents, as a fleet of their ids. */
-async function fleetOf(agents: ReadonlyMap<string, A2AAgent | Harness>): Promise<Supervisor> {
+async function fleetOf(agents: ReadonlyMap<string, A2AAgent | Harness>, options: SupervisorOptions = {}): Promise<Supervisor> {
     const manifests = [...agents].map(([id, agent]) => agent instanceof Harness ? { ...agent.agent.agent, id } : { ...manifest('http://127.0.0.1/'), id });
     const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents: manifests }, {
+        ...options,
         createAgent: agent => {
             const found = agents.get(agent.id);
             return found instanceof Harness ? found.agent : found as A2AAgent;
@@ -814,6 +840,94 @@ describe('A2AAgent: tasks between an A2A agent and a local one', { timeout: 20_0
         await supervisor.stop();
     });
 });
+/** The texts the local agent was prompted with, in order. */
+function prompts(local: Harness): string[] {
+    return local.recorded('session/prompt').map(entry => String(entry['text']));
+}
+describe('A2AAgent: answering a message of a local agent', { timeout: 20_000 }, () => {
+    it('ACP to A2A: what the A2A agent answers in its task comes back to the local agent, quoting its message', async () => {
+        const server = await FleetMcpServer.start();
+        try {
+            const local = new Harness({ fake: { mcpHttp: true }, manifest: { id: 'a' }, options: { fleetTools: server.access('a') } });
+            const receiver = await inboxAgent();
+            const supervisor = await fleetOf(new Map<string, A2AAgent | Harness>([['a', local], ['b', a2a(receiver.agent, 'b')]]));
+            server.serve(supervisor);
+            await local.talk('mcp {"name":"send_message","arguments":{"to":"b","text":"Summarise the release"}}');
+            await eventually(() => prompts(local).length === 2, 5_000);
+            deepStrictEqual(prompts(local)[1], '[from b] In reply to a message from you:\n> Summarise the release\n\necho: Summarise the release');
+            await eventually(() => supervisor.history('a').filter(event => event.type === 'turn-end').length === 2, 5_000);
+            await new Promise(resolve => setTimeout(resolve, 100));
+            deepStrictEqual(conversation(receiver.agent).map(([text]) => text), ['Summarise the release'], 'the answer to the answer does not come back');
+            await supervisor.stop();
+        } finally {
+            await server.close();
+        }
+    });
+    it('an answer the local agent gives with reply is a message: what the A2A agent answers to it comes back', async () => {
+        const server = await FleetMcpServer.start();
+        try {
+            const local = new Harness({ fake: { mcpHttp: true }, manifest: { id: 'a' }, options: { fleetTools: server.access('a') } });
+            const sender = await inboxAgent();
+            const supervisor = await fleetOf(new Map<string, A2AAgent | Harness>([['a', local], ['b', a2a(sender.agent, 'b')]]), { fleetTools: server });
+            server.serve(supervisor);
+            await eventually(() => sender.isOpen());
+            sender.post('Deploy the release', 'own-1', { [INBOX_EXTENSION]: { to: 'a' } });
+            // The turn-end answer of the local agent goes back to b; b's answer to it does not come back.
+            await eventually(() => conversation(sender.agent).length === 1, 5_000);
+            await eventually(() => supervisor.history('b').some(event => event.type === 'turn-end'), 5_000);
+            await local.talk('mcp {"name":"reply","arguments":{"text":"Which host?"}}');
+            await eventually(() => prompts(local).length === 3, 5_000);
+            deepStrictEqual(prompts(local)[2],
+                '[from b] In reply to a message from you:\n> Which host?\n\necho: In reply to a message from you:\n> Deploy the release\n\nWhich host?');
+            await eventually(() => supervisor.history('a').filter(event => event.type === 'turn-end').length === 3, 5_000);
+            await new Promise(resolve => setTimeout(resolve, 100));
+            strictEqual(conversation(sender.agent).length, 2, 'the answer of the local agent to that answer does not go to b again');
+            await supervisor.stop();
+        } finally {
+            await server.close();
+        }
+    });
+});
+describe('A2AAgent: a message of another agent and the line', { timeout: 20_000 }, () => {
+    it('a task of an A2A agent from another agent ends with its answer, and the message of a person waiting in line goes next', async () => {
+        const server = await FleetMcpServer.start();
+        try {
+            const hold = gate();
+            const receiver = await fake({
+                script: async (context, bus) => {
+                    bus.publish(task(context, TaskState.TASK_STATE_WORKING));
+                    if (said(context).endsWith('Summarise the release')) {
+                        await hold.promise;
+                    }
+                    bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_COMPLETED, agentMessage(`done: ${said(context)}`, context)));
+                    bus.finished();
+                }
+            });
+            const local = new Harness({ fake: { mcpHttp: true }, manifest: { id: 'a' }, options: { fleetTools: server.access('a') } });
+            const supervisor = await fleetOf(new Map<string, A2AAgent | Harness>([['a', local], ['b', a2a(receiver, 'b')]]));
+            server.serve(supervisor);
+            await local.talk('mcp {"name":"send_message","arguments":{"to":"b","text":"Summarise the release"}}');
+            await eventually(() => receiver.received.length === 1);
+            const owner = supervisor.send('b', 'And the changelog?');
+            await eventually(() => supervisor.history('b').some(event => event.type === 'queued'));
+            hold.open();
+            await owner;
+            await eventually(() => supervisor.history('b').filter(event => event.type === 'turn-end').length === 2, 5_000);
+            deepStrictEqual(supervisor.history('b').flatMap(event => event.type === 'turn-end' ? [event.reason] : []), ['end_turn', 'end_turn']);
+            deepStrictEqual(supervisor.history('b').flatMap(event => event.type === 'message' ? [`${event.role}: ${event.text}`] : []), [
+                'user: Summarise the release',
+                'agent: done: [from a] Summarise the release',
+                'user: And the changelog?',
+                'agent: done: And the changelog?'
+            ]);
+            await eventually(() => prompts(local).length === 2, 5_000);
+            match(prompts(local)[1] ?? '', /^\[from b\] In reply to a message from you:\n> Summarise the release\n\ndone: /);
+            await supervisor.stop();
+        } finally {
+            await server.close();
+        }
+    });
+});
 describe('A2AAgent: clearing the context', () => {
     it('sends the next message without the context of the conversation before', async () => {
         const agent = await fake({ script: echo });
@@ -865,6 +979,141 @@ describe('A2AAgent: requests of an administrator through the inbox', () => {
         await eventually(() => conversation(other.agent).length === 1);
         match(conversation(other.agent)[0]?.[0] ?? '', /Refused: only an administrator/);
         ok(!supervisor.history('a').some(event => event.type === 'admin-action' && event.admin === 'b'), 'nothing happened to "a"');
+    });
+});
+/** The URI of the fleet extension (docs/a2a-fleet.md). */
+const FLEET = 'https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md';
+type Roster = { version?: number; agents?: Record<string, unknown>[]; text?: string };
+/** The roster the agent got when flotti opened its inbox. */
+function subscribedRoster(agent: FakeAgent): Roster | undefined {
+    const request = agent.received.find(received => received.method === 'SendStreamingMessage');
+    const message = request?.params['message'] as { metadata?: Record<string, { fleet?: Roster }> } | undefined;
+    return message?.metadata?.[INBOX_EXTENSION]?.fleet;
+}
+/** The rosters the agent got as `fleet` requests, outside any conversation. */
+function rosterUpdates(agent: FakeAgent): { request: Received; roster: Roster & { action?: string } }[] {
+    return agent.received.flatMap(request => {
+        const message = request.params['message'] as { metadata?: Record<string, Roster & { action?: string }> } | undefined;
+        const roster = message?.metadata?.[FLEET];
+        return roster?.action === 'fleet' ? [{ request, roster }] : [];
+    });
+}
+/** A supervisor over A2A agents that are told the roster, gathered for `debounceMs`. */
+async function rosterFleet(fakes: ReadonlyMap<string, FakeAgent>, debounceMs: number): Promise<{ supervisor: Supervisor; running: Map<string, A2AAgent> }> {
+    const agents = [...fakes].map(([id, agent]) => ({ ...manifest(agent.url), id }));
+    const fleetOptions = { rosterDebounceMs: debounceMs, fleet: { roster: () => supervisor.agents() } };
+    const running = new Map(agents.map(agent => [agent.id, new A2AAgent(agent, { reconnectDelayMs: 10, pollIntervalMs: 10, ...fleetOptions })]));
+    clients.push(...running.values());
+    const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents }, {
+        createAgent: (agent): A2AAgent => running.get(agent.id) as A2AAgent
+    });
+    await supervisor.start();
+    return { supervisor, running };
+}
+describe('A2AAgent: the fleet roster with the inbox request', () => {
+    it('hands the roster over when it opens the inbox, the agent itself and administrators marked', async (t) => {
+        const admin = await inboxAgent({ extensions: [INBOX_EXTENSION, FLEET] });
+        const other = await inboxAgent({ extensions: [INBOX_EXTENSION, FLEET] });
+        const agents = [{ ...manifest(admin.agent.url), id: 'a', admin: true as const }, { ...manifest(other.agent.url), id: 'b' }];
+        // No createAgent: the supervisor hands its roster to the remote agents itself.
+        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents });
+        t.after(() => supervisor.stop());
+        await supervisor.start();
+        await eventually(() => admin.isOpen() && other.isOpen());
+        const roster = subscribedRoster(admin.agent);
+        ok(typeof roster?.version === 'number');
+        deepStrictEqual(roster.agents?.map(({ id, name, kind, admin: isAdmin, you }) => ({ id, name, kind, admin: isAdmin, you })), [
+            { id: 'a', name: 'Fake', kind: 'remote', admin: true, you: true },
+            { id: 'b', name: 'Fake', kind: 'remote', admin: undefined, you: undefined }
+        ]);
+        ok(roster.agents.every(agent => typeof agent['status'] === 'string'));
+        match(roster.text ?? '', /"you": true/);
+        deepStrictEqual(subscribedRoster(other.agent)?.agents?.map(agent => [agent['id'], agent['you']]), [['a', undefined], ['b', true]]);
+        const header = admin.agent.received.find(received => received.method === 'SendStreamingMessage')?.headers['a2a-extensions'];
+        deepStrictEqual(String(header).split(',').map(uri => uri.trim()).sort(), [FLEET, INBOX_EXTENSION].sort());
+    });
+    it('keeps the inbox request as it was for an agent without the fleet extension, and sends it no roster', async (t) => {
+        const plain = await inboxAgent();
+        const other = await inboxAgent({ extensions: [INBOX_EXTENSION, FLEET] });
+        const { supervisor } = await rosterFleet(new Map([['a', plain.agent], ['b', other.agent]]), 20);
+        t.after(() => supervisor.stop());
+        await eventually(() => plain.isOpen() && other.isOpen());
+        deepStrictEqual(plain.subscriptions[0]?.userMessage.metadata?.[INBOX_EXTENSION], { action: 'subscribe' });
+        strictEqual(plain.agent.received[0]?.headers['a2a-extensions'], INBOX_EXTENSION);
+        await supervisor.stopAgent('b');
+        await eventually(() => supervisor.agents().find(agent => agent.id === 'b')?.status === 'stopped');
+        await new Promise(resolve => setTimeout(resolve, 100));
+        deepStrictEqual(rosterUpdates(plain.agent), []);
+        deepStrictEqual(plain.agent.methods(), ['SendStreamingMessage']);
+    });
+});
+describe('A2AAgent: the fleet roster when the fleet changes', () => {
+    it('sends what changed as one fleet request after a pause, with a greater version, outside the conversation', async (t) => {
+        const watcher = await inboxAgent({ extensions: [INBOX_EXTENSION, FLEET] });
+        const other = await inboxAgent({ extensions: [INBOX_EXTENSION, FLEET] });
+        const { supervisor, running } = await rosterFleet(new Map([['a', watcher.agent], ['b', other.agent]]), 50);
+        t.after(() => supervisor.stop());
+        await eventually(() => watcher.isOpen() && other.isOpen());
+        // What the start itself changed has gone out by now.
+        await new Promise(resolve => setTimeout(resolve, 200));
+        const before = rosterUpdates(watcher.agent).length;
+        const history = supervisor.history('a').length;
+        await supervisor.stopAgent('b');
+        await supervisor.remove('b');
+        await eventually(() => rosterUpdates(watcher.agent).length > before);
+        await new Promise(resolve => setTimeout(resolve, 200));
+        const updates = rosterUpdates(watcher.agent).slice(before);
+        strictEqual(updates.length, 1, 'the changes close together go out as one');
+        const [update] = updates;
+        ok(update !== undefined);
+        deepStrictEqual(update.roster.agents?.map(agent => [agent['id'], agent['you']]), [['a', true]]);
+        const versions = [subscribedRoster(watcher.agent)?.version ?? 0, ...rosterUpdates(watcher.agent).map(item => item.roster.version ?? 0)];
+        deepStrictEqual([...versions].sort((left, right) => left - right), versions, 'the version only grows');
+        ok((update.roster.version ?? 0) > (subscribedRoster(watcher.agent)?.version ?? 0));
+        strictEqual(update.request.method, 'SendMessage');
+        match(String(update.request.headers['a2a-extensions']), /a2a-fleet\.md/);
+        const message = update.request.params['message'] as { contextId?: string; taskId?: string; metadata?: Record<string, unknown> };
+        ok(!message.contextId && !message.taskId, 'the roster belongs to no conversation');
+        strictEqual(message.metadata?.[INBOX_EXTENSION], undefined, 'an inbox adapter does not take it for words of a person');
+        const after = supervisor.history('a').slice(history);
+        deepStrictEqual(after.filter(event => ['message', 'queued', 'turn-end', 'progress'].includes(event.type)), [], 'the roster is not a turn and not shown');
+        strictEqual(running.get('a')?.status, 'idle');
+    });
+});
+describe('A2AAgent: the fleet roster and the line of messages', () => {
+    it('does not hold a message of a person back while the roster goes out', async () => {
+        let release: (() => void) | undefined;
+        let open = false;
+        const agent = await fake({
+            extensions: [INBOX_EXTENSION, FLEET],
+            script: async (context, bus) => {
+                const inbox = context.userMessage.metadata?.[INBOX_EXTENSION] as { action?: string } | undefined;
+                if (inbox?.action === 'subscribe') {
+                    open = true;
+                    bus.publish(task(context, TaskState.TASK_STATE_WORKING));
+                    await new Promise(() => undefined);
+                }
+                if (context.userMessage.metadata?.[FLEET] !== undefined) {
+                    // The agent is slow to take the roster: a message of a person does not wait for it.
+                    await new Promise<void>(resolve => {
+                        release = resolve;
+                    });
+                }
+                await echo(context, bus);
+            }
+        });
+        let roster = [{ id: 'fake', name: 'Fake', kind: 'remote' as const, status: 'idle' as const }];
+        const { client, events } = connect(agent, { rosterDebounceMs: 10, fleet: { roster: () => roster } });
+        await client.start();
+        await eventually(() => open);
+        roster = [...roster, { id: 'other', name: 'Other', kind: 'remote' as const, status: 'idle' as const }];
+        client.fleetChanged();
+        await eventually(() => release !== undefined);
+        await client.send('hi');
+        await eventually(() => turnEnds(events).length === 1);
+        deepStrictEqual(messages(events).map(message => `${message.role}: ${message.text}`), ['user: hi', 'agent: echo: hi']);
+        deepStrictEqual(events.filter(event => event.type === 'queued'), []);
+        release?.();
     });
 });
 describe('cardLocation', () => {

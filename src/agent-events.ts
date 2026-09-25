@@ -1,4 +1,5 @@
 import type { ConnectionHealth, HealthListener } from './connection-health.js';
+import type { MemoryStatus } from './dashboard-protocol.js';
 /**
  * The one shape every agent of the fleet has for the dashboard, whether it is a
  * local process spoken to over ACP or a remote service spoken to over A2A: the
@@ -76,6 +77,13 @@ type AgentEventBody =
         /** The message this one answers: a reply, from a person or from an agent. */
         readonly replyTo?: Quote;
         /**
+         * The message is the answer flotti sent back on its own at the end of a
+         * turn of the sender (`role: 'user'`, with `from` and `replyTo`): it gets
+         * no answer back, or two agents would answer each other for ever. A reply
+         * an agent sends itself, with its `reply` tool, is an ordinary message.
+         */
+        readonly turnAnswer?: true;
+        /**
          * A message sent on as it was. The `text` of the event is then what the
          * one who forwarded it wrote above it, and may be empty.
          */
@@ -102,6 +110,7 @@ type AgentEventBody =
         /** As in a `message` event: the agent of the fleet that sent it, what it answers, sends on or sends again, and the task it is about. */
         readonly from?: string;
         readonly replyTo?: Quote;
+        readonly turnAnswer?: true;
         readonly forwarded?: Forwarded;
         readonly retryOf?: string;
         readonly delegation?: DelegationMark;
@@ -256,6 +265,8 @@ type SendOptions = {
     /** The `messageId` the message gets in the tab of the receiver; a new one when absent. */
     readonly messageId?: string;
     readonly replyTo?: Quote;
+    /** The answer flotti sends back at the end of a turn; see the `turnAnswer` of a `message` event. */
+    readonly turnAnswer?: true;
     readonly forwarded?: Forwarded;
     /** The `messageId` of an undelivered message this one sends again. */
     readonly retryOf?: string;
@@ -263,10 +274,11 @@ type SendOptions = {
     readonly delegation?: DelegationMark;
 };
 /** The fields of a `message` or `queued` event a sent message carries on, beyond its text. */
-function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message' }, 'from' | 'replyTo' | 'forwarded' | 'retryOf' | 'delegation'> {
+function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message' }, 'from' | 'replyTo' | 'turnAnswer' | 'forwarded' | 'retryOf' | 'delegation'> {
     return {
         ...(options.from === undefined ? {} : { from: options.from }),
         ...(options.replyTo === undefined ? {} : { replyTo: options.replyTo }),
+        ...(options.turnAnswer === true ? { turnAnswer: true as const } : {}),
         ...(options.forwarded === undefined ? {} : { forwarded: options.forwarded }),
         ...(options.retryOf === undefined ? {} : { retryOf: options.retryOf }),
         ...(options.delegation === undefined ? {} : { delegation: options.delegation })
@@ -349,8 +361,12 @@ interface FleetAgent {
      * one does once connected to. Absent for an agent whose manifest tells it.
      */
     readonly harness?: string;
+    /** The memory flotti delivered to the agent (#101); absent when it has nothing to say. */
+    readonly memory?: MemoryStatus;
     /** Calls the listener with every event from now on; returns the way to stop. */
     subscribe(listener: AgentEventListener): () => void;
+    /** The fleet changed: an agent told who is in it is told again (docs/a2a-fleet.md). */
+    fleetChanged?(): void;
     /** Starts the agent, or connects to it; resolves once it can take messages. */
     start(): Promise<void>;
     /**

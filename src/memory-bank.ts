@@ -1,11 +1,12 @@
 /**
  * The memory bank of a local agent, read for the dashboard (#73): the
- * markdown notes in its `memory/`, read-only. flotti never writes there — the
- * notes belong to the agent — and reads nothing outside it: only `.md` files,
- * no hidden entries, no symbolic link that leads out of the bank, and no note
- * larger than {@link MAX_NOTE_BYTES}.
+ * markdown notes in its `memory/`, read-only. The dashboard never writes there
+ * — the notes belong to the agent, which writes them itself or through the
+ * memory tools (#101, `memory-store.ts`) — and reads nothing outside it: only
+ * `.md` files, no hidden entries, no symbolic link that leads out of the bank,
+ * and no note larger than {@link MAX_NOTE_BYTES}.
  */
-import { readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import type { Stats } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import type { MemoryBank, MemoryNote, MemoryNoteSummary } from './dashboard-protocol.js';
@@ -52,8 +53,39 @@ function inside(root: string, path: string): boolean {
 function withoutFrontMatter(text: string): string {
     return text.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '');
 }
-/** The first `# heading` of the note, or its file name. */
+/**
+ * The simple `key: value` lines of the YAML front matter: what the memory
+ * tools write and Obsidian keeps. A quoted value is unquoted; anything more
+ * elaborate than a line is not read.
+ */
+function frontMatter(text: string): Record<string, string> {
+    const block = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)?.[1];
+    const fields: Record<string, string> = {};
+    for (const line of block?.split(/\r?\n/) ?? []) {
+        const match = /^([A-Za-z_][\w-]*):[ \t]*(.*?)[ \t]*$/.exec(line);
+        if (match?.[1] !== undefined && match[2] !== undefined) {
+            fields[match[1]] = unquote(match[2]);
+        }
+    }
+    return fields;
+}
+function unquote(value: string): string {
+    if (value.startsWith('"')) {
+        try {
+            const parsed: unknown = JSON.parse(value);
+            return typeof parsed === 'string' ? parsed : value;
+        } catch {
+            return value;
+        }
+    }
+    return /^'.*'$/.test(value) ? value.slice(1, -1).replace(/''/g, "'") : value;
+}
+/** The `title` of the front matter, else the first `# heading` of the note, else its file name. */
 function titleOf(text: string, path: string): string {
+    const given = frontMatter(text)['title']?.trim();
+    if (given) {
+        return given;
+    }
     const heading = /^#[ \t]+(.+?)[ \t#]*$/m.exec(withoutFrontMatter(text));
     return heading?.[1]?.trim() || baseName(path);
 }
@@ -109,6 +141,15 @@ function matches({ summary, text }: Found, query: string): boolean {
     return words === '' || [summary.title, summary.path, text ?? ''].some((part) => part.toLowerCase().includes(words));
 }
 /**
+ * Every note of the bank at `root` (a real path), in the order of their paths,
+ * and whether there were more than {@link MAX_NOTES}.
+ */
+async function collectNotes(root: string): Promise<{ readonly found: readonly Found[]; readonly truncated: boolean }> {
+    const walk: Walk = { found: [], truncated: false };
+    await walkFolder(root, root, 0, walk);
+    return walk;
+}
+/**
  * The notes of the memory bank of the agent; with `query`, only those whose
  * title, path or text has these words. A bank not created yet has no notes.
  */
@@ -121,6 +162,9 @@ async function readMemoryBank(agent: Agent, query = ''): Promise<MemoryBank> {
     const walk: Walk = { found: [], truncated: false };
     if (root !== undefined) {
         await walkFolder(root, root, 0, walk);
+    } else if (await lstat(place.directory).then(() => true, () => false)) {
+        // Something is there that is not a folder: an unavailable bank is not an empty one.
+        return { available: false, reason: `${place.directory} is not a folder: the memory bank cannot be read.` };
     }
     const notes = walk.found.filter((found) => matches(found, query)).map(({ summary }) => summary);
     return { available: true, directory: place.directory, notes, ...(walk.truncated ? { truncated: true as const } : {}) };
@@ -162,4 +206,17 @@ async function readMemoryNote(agent: Agent, path: string): Promise<MemoryNote> {
     const { modifiedAt, size } = found.summary;
     return { path: parts.join('/'), file: join(place.directory, ...parts), modifiedAt, size, text: found.text };
 }
-export { MAX_NOTE_BYTES, MAX_NOTES, MemoryError, readMemoryBank, readMemoryNote };
+export {
+    MAX_NOTE_BYTES,
+    MAX_NOTES,
+    MemoryError,
+    bankDirectory,
+    bankRoot,
+    collectNotes,
+    frontMatter,
+    inside,
+    readMemoryBank,
+    readMemoryNote,
+    withoutFrontMatter
+};
+export type { Found };

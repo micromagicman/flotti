@@ -76,7 +76,8 @@ The message may say what it is, under the extension URI in its own metadata:
   request of an administrator of the fleet, below.
 - `busy` — optional: `true` when the agent is busy on its own, `false` when it is done. The tab shows
   the agent as working in between. A message from a person has the last word while it is being worked on.
-- `to` — optional: the id of another agent of the fleet (the name of its directory) the message is for.
+- `to` — optional: the id of another agent of the fleet (the name of its directory) the message is for;
+  who is in the fleet the agent learns through [the fleet extension](a2a-fleet.md).
   flotti sends the text on to that agent as a message from this one — see below — and shows it in this
   agent's tab as sent there. A message that cannot be delivered — no such agent, the agent is stopped —
   is a line in this agent's tab saying why; the agent itself is not told. `to` goes with `kind: message`
@@ -111,7 +112,10 @@ It goes in line with the messages of a person and belongs to the same conversati
 answers in the task of that message goes back to the sender by itself — the text of its messages in
 that turn, not its progress lines, and nothing for a cancelled task — so the agent does not have to send
 it with `to`. The sender gets it as a message from this agent that quotes the message answered
-(`In reply to a message from you: …`); an answer gets no answer back by itself. The inbox request
+(`In reply to a message from you: …`). Only such an answer, the one flotti sent back by itself, gets no
+answer back, so two agents do not answer each other for ever. A reply an agent sends on purpose — a
+local agent with its `reply` tool — is an ordinary message: what this agent answers to it in the task
+goes back to that agent the same way. The inbox request
 is told from it by `"action": "subscribe"`, not by the extension URI alone. An agent that does
 not declare this extension gets the sender in the text as well, as `[from reviewer] …`; so does a local
 agent over ACP, which has no place for it otherwise. The dashboard shows the message in the receiver's
