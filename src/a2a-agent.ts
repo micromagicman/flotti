@@ -1134,11 +1134,13 @@ class A2AAgent implements FleetAgent {
     }
     /**
      * A message from a person, or from another agent of the fleet when `from`
-     * names it; it answers the task when the task is waiting for one.
+     * names it. A message of a person answers the task when the task is waiting
+     * for one; a message of an agent opens a new task, since the question was
+     * asked of the person.
      */
     private userMessage(text: string, options: SendOptions): Message {
         const task = this.task;
-        const waiting = task !== undefined && INTERRUPTED_STATES.includes(task.state);
+        const waiting = options.from === undefined && task !== undefined && INTERRUPTED_STATES.includes(task.state);
         const { from, delegation } = options;
         const body = composeText(text, options, this.agentId);
         const told = from === undefined || this.card?.inbox === true ? body : `[from ${from}] ${body}`;

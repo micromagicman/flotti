@@ -281,6 +281,30 @@ describe('A2AAgent: a task waiting for input', () => {
         deepStrictEqual(messages(events).map(message => message.text), ['pick one', 'Which one?', 'the second', 'took the second']);
     });
 });
+describe('A2AAgent: a message of another agent while a task waits for input', () => {
+    it('opens a new task for a message of another agent instead of taking it for the answer', async () => {
+        const agent = await fake({
+            script: async (context, bus) => {
+                if (context.task === undefined && said(context) === 'pick one') {
+                    bus.publish(task(context, TaskState.TASK_STATE_WORKING));
+                    bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_INPUT_REQUIRED, agentMessage('Which one?', context, 'ask')));
+                } else {
+                    bus.publish(context.task === undefined ? task(context, TaskState.TASK_STATE_WORKING) : AgentEvent.task(context.task));
+                    bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_COMPLETED, agentMessage(`took ${said(context)}`, context, 'done')));
+                }
+                bus.finished();
+            }
+        });
+        const { client, events } = connect(agent);
+        await client.start();
+        await client.send('pick one');
+        await reaches(client, 'waiting');
+        await client.send('hello', { from: 'reviewer' });
+        await eventually(() => turnEnds(events).length === 2);
+        const sent = agent.received[1]?.params['message'] as { taskId?: string };
+        ok(sent.taskId === undefined || sent.taskId === '', `a message of an agent went to the paused task ${sent.taskId}`);
+    });
+});
 describe('A2AAgent: a busy agent, an agent that cannot stream', () => {
     it('queues a message sent while the agent is busy', async () => {
         const hold = gate();
