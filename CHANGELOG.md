@@ -2,7 +2,11 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] — 2026-09-25
+
+Agents that remember and know their fleet: memory of its own for every local agent, the roster of the
+fleet for remote A2A agents, answers between agents that reach the right one, and a calmer dashboard
+with a one-line agent header.
 
 ### Added
 
@@ -43,6 +47,9 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 - **A tunnel that is down counts as trouble.** A remote agent whose connection dropped and has not come
   back was shown as fine; now it says «No connection», under the header, on its tab in the sidebar and
   in `flotti status` (#102).
+- **A message of another agent no longer answers the owner's question.** While a remote A2A agent waits
+  for the owner's answer, a message from another agent of the fleet opens a task of its own instead of
+  continuing the paused one, so the owner's own answer is no longer held in line behind it (#97).
 - **The composer and the messages in line span the chat on a wide window.** The card of the message
   field and the Next up block no longer stop in a 900 px column: they run the width of the feed, and a
   message in line stands at its right edge, where the messages of the person do. A narrow screen and
@@ -232,6 +239,7 @@ The first release: a fleet of AI agents and one dashboard to work with them.
   ([micromagicman/eva#266](https://github.com/micromagicman/eva/issues/266)).
 - The A2A adapter of Cutie, on the same contract as Eva's (owners/quanthread-ai-hub#218, !194).
 
+[0.4.0]: https://github.com/micromagicman/flotti/releases/tag/v0.4.0
 [0.3.0]: https://github.com/micromagicman/flotti/releases/tag/v0.3.0
 [0.2.0]: https://github.com/micromagicman/flotti/releases/tag/v0.2.0
 [0.1.0]: https://github.com/micromagicman/flotti/releases/tag/v0.1.0
