@@ -7,7 +7,7 @@
  */
 import type { AgentSummary } from '../../src/dashboard-protocol.js';
 import { adminActionText, awaitsAllowance } from './feed.js';
-import type { AgentFeed } from './feed.js';
+import type { AgentFeed, FeedItem } from './feed.js';
 import type { Messages } from './i18n/en.js';
 const TITLE = 'flotti';
 /** Agents waiting for a person, in the order of the tabs. */
@@ -27,11 +27,24 @@ function newlyWaiting(before: ReadonlySet<string>, now: readonly AgentSummary[])
  * when it is one, or else why the agent waits.
  */
 function notificationText(agent: AgentSummary, feed: AgentFeed | undefined, t: Messages): { readonly title: string; readonly body: string } {
-    const asked = [...feed?.items ?? []].reverse()
-        .find((item) => (item.kind === 'permission' || (item.kind === 'admin-action' && item.state === 'pending')) && !item.settled);
-    const why = asked?.kind === 'permission'
-        ? t.attention.asksPermission(asked.title)
-        : asked?.kind === 'admin-action' ? t.attention.allowIt(adminActionText(asked, (id) => id, t)) : feed?.reason;
+    const why = waitReason(feed, t);
     return { title: t.attention.waitingTitle(agent.name), body: why === undefined || why === '' ? t.attention.openToAnswer : why };
+}
+type OpenRequest = FeedItem & { kind: 'permission' | 'admin-action' };
+/** Why the agent waits: the latest request still open, or else the reason of the feed. */
+function waitReason(feed: AgentFeed | undefined, t: Messages): string | undefined {
+    if (feed === undefined) {
+        return undefined;
+    }
+    const asked = [...feed.items].reverse().find(isOpenRequest);
+    return asked === undefined ? feed.reason : requestText(asked, t);
+}
+function requestText(asked: OpenRequest, t: Messages): string {
+    return asked.kind === 'permission'
+        ? t.attention.asksPermission(asked.title)
+        : t.attention.allowIt(adminActionText(asked, (id) => id, t));
+}
+function isOpenRequest(item: FeedItem): item is OpenRequest {
+    return (item.kind === 'permission' || (item.kind === 'admin-action' && item.state === 'pending')) && !item.settled;
 }
 export { newlyWaiting, notificationText, pageTitle, waitingAgents };

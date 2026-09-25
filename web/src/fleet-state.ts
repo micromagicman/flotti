@@ -33,17 +33,27 @@ function withFleet(state: FleetState, agents: readonly AgentSummary[]): FleetSta
 function withHealth(state: FleetState, agentId: string, health: ConnectionHealth): FleetState {
     return { ...state, agents: state.agents.map((agent) => (agent.id === agentId ? { ...agent, health } : agent)) };
 }
+type EventMessage = Extract<ServerMessage, { type: 'event' }>;
+/** An event of an agent the page knows goes into its feed; one of any other agent is dropped. */
+function withEvent(state: FleetState, event: EventMessage['event']): FleetState {
+    const feed = state.feeds[event.agentId];
+    if (feed === undefined) {
+        return state;
+    }
+    return { ...state, feeds: { ...state.feeds, [event.agentId]: applyEvent(feed, event) } };
+}
 function fromServer(state: FleetState, message: ServerMessage): FleetState {
     switch (message.type) {
         case 'fleet':
             return withFleet(state, message.agents);
-        case 'event': {
-            const feed = state.feeds[message.event.agentId];
-            if (feed === undefined) {
-                return state;
-            }
-            return { ...state, feeds: { ...state.feeds, [message.event.agentId]: applyEvent(feed, message.event) } };
-        }
+        case 'event':
+            return withEvent(state, message.event);
+        default:
+            return fromServerNotice(state, message);
+    }
+}
+function fromServerNotice(state: FleetState, message: Exclude<ServerMessage, { type: 'fleet' | 'event' }>): FleetState {
+    switch (message.type) {
         case 'delivery':
             return { ...state, deliveries: [...state.deliveries, message.delivery] };
         case 'health':
@@ -52,21 +62,34 @@ function fromServer(state: FleetState, message: ServerMessage): FleetState {
             return { ...state, link: 'gone' };
     }
 }
+/** Once the server said it stops, the socket stays gone. */
+function withLink(state: FleetState, link: Link): FleetState {
+    return state.link === 'gone' ? state : { ...state, link };
+}
 function fleetReducer(state: FleetState, action: FleetAction): FleetState {
     switch (action.type) {
         case 'link':
-            return state.link === 'gone' ? state : { ...state, link: action.link };
+            return withLink(state, action.link);
         case 'server':
             return fromServer(state, action.message);
-        case 'permission-answered': {
-            const feed = state.feeds[action.agentId];
-            return feed === undefined
-                ? state
-                : { ...state, feeds: { ...state.feeds, [action.agentId]: settlePermission(feed, action.requestId) } };
-        }
+        default:
+            return withAnswer(state, action);
+    }
+}
+/** A permission request or an action of an administrator answered here. */
+function withAnswer(state: FleetState, action: Exclude<FleetAction, { type: 'link' | 'server' }>): FleetState {
+    switch (action.type) {
+        case 'permission-answered':
+            return withPermissionAnswered(state, action.agentId, action.requestId);
         case 'admin-answered':
             return { ...state, feeds: Object.fromEntries(Object.entries(state.feeds).map(([id, feed]) => [id, settleAdminAction(feed, action.actionId)])) };
     }
+}
+function withPermissionAnswered(state: FleetState, agentId: string, requestId: string): FleetState {
+    const feed = state.feeds[agentId];
+    return feed === undefined
+        ? state
+        : { ...state, feeds: { ...state.feeds, [agentId]: settlePermission(feed, requestId) } };
 }
 /** What the page has seen of each agent: sent on (re)connecting so the server sends only the rest. */
 function seen(state: FleetState): Record<string, number> {

@@ -5,11 +5,13 @@ const STORAGE_KEY = 'flotti.agent-colors';
 /** The colours picked before in this browser; none when the storage is out of reach. */
 function loadColors(): AgentColors {
     try {
-        const parsed: unknown = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? '{}');
-        return typeof parsed === 'object' && parsed !== null ? parsed as AgentColors : {};
+        return colorsOf(JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? '{}'));
     } catch {
         return {};
     }
+}
+function colorsOf(parsed: unknown): AgentColors {
+    return typeof parsed === 'object' && parsed !== null ? parsed as AgentColors : {};
 }
 /**
  * The colour of every agent of the fleet, kept in this browser: an agent

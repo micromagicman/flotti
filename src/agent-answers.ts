@@ -32,15 +32,21 @@ class AgentAnswers {
         if (event.type === 'turn-end') {
             return this.finish(event.reason);
         }
-        if (event.type !== 'message') {
-            return undefined;
+        if (event.type === 'message') {
+            this.message(event);
         }
+        return undefined;
+    }
+    private message(event: AgentEvent & { type: 'message' }): void {
         if (event.role === 'user') {
             this.begin(event);
         } else if (this.asked !== undefined && event.to === undefined) {
-            this.said.set(event.messageId, event.append ? (this.said.get(event.messageId) ?? '') + event.text : event.text);
+            this.remember(event);
         }
-        return undefined;
+    }
+    private remember(event: AgentEvent & { type: 'message' }): void {
+        const before = event.append ? this.said.get(event.messageId) ?? '' : '';
+        this.said.set(event.messageId, before + event.text);
     }
     private begin(event: AgentEvent & { type: 'message' }): void {
         this.said.clear();

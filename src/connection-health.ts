@@ -37,14 +37,14 @@ const POOR_DOWN = 'connection down';
  * not come up yet, and not the one of a stopped agent.
  */
 function poorReasons(latencyMs: number | undefined, reconnectsLastHour: number, down = false): string[] {
-    const reasons: string[] = down ? [POOR_DOWN] : [];
-    if (reconnectsLastHour >= POOR_RECONNECTS_PER_HOUR) {
-        reasons.push(`${reconnectsLastHour} reconnects in the last hour`);
-    }
-    if (latencyMs !== undefined && latencyMs >= POOR_LATENCY_MS) {
-        reasons.push(`latency ${latencyMs} ms`);
-    }
-    return reasons;
+    return [
+        ...(down ? [POOR_DOWN] : []),
+        ...(reconnectsLastHour >= POOR_RECONNECTS_PER_HOUR ? [`${reconnectsLastHour} reconnects in the last hour`] : []),
+        ...latencyReasons(latencyMs)
+    ];
+}
+function latencyReasons(latencyMs: number | undefined): string[] {
+    return latencyMs !== undefined && latencyMs >= POOR_LATENCY_MS ? [`latency ${latencyMs} ms`] : [];
 }
 /** A duration the way a person reads it: `5 s`, `3 min 20 s`, `2 h 5 min`, `3 d 4 h`. */
 function formatDuration(ms: number): string {
@@ -146,17 +146,23 @@ class HealthTracker {
     snapshot(): ConnectionHealth {
         const now = this.now();
         this.recent = this.recent.filter((time) => time > now - HOUR_MS);
-        const lastReconnectAt = isoTime(this.lastReconnect);
-        const lastActivityAt = isoTime(this.lastActivity);
-        const upSince = isoTime(this.upSince);
         return {
             ...(this.latencyMs === undefined ? {} : { latencyMs: this.latencyMs }),
             reconnects: this.reconnects,
             reconnectsLastHour: this.recent.length,
+            ...this.times(),
+            poor: poorReasons(this.latencyMs, this.recent.length, this.wasUp && this.upSince === undefined)
+        };
+    }
+    /** The moments of the snapshot, those there were. */
+    private times(): Pick<ConnectionHealth, 'lastReconnectAt' | 'lastActivityAt' | 'upSince'> {
+        const lastReconnectAt = isoTime(this.lastReconnect);
+        const lastActivityAt = isoTime(this.lastActivity);
+        const upSince = isoTime(this.upSince);
+        return {
             ...(lastReconnectAt === undefined ? {} : { lastReconnectAt }),
             ...(lastActivityAt === undefined ? {} : { lastActivityAt }),
-            ...(upSince === undefined ? {} : { upSince }),
-            poor: poorReasons(this.latencyMs, this.recent.length, this.wasUp && this.upSince === undefined)
+            ...(upSince === undefined ? {} : { upSince })
         };
     }
     /** Calls the listener with the health whenever it changes; returns the way to stop. */
