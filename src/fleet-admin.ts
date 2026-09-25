@@ -63,8 +63,7 @@ class FleetAdmin {
             return { ok: false, text: refusal };
         }
         const step: Step = { actionId: randomUUID(), action, admin, target };
-        if (this.options.confirm?.() === true && !await this.allowed(step)) {
-            this.tell(step, 'refused', 'a person refused it');
+        if (!await this.confirmed(step)) {
             return { ok: false, text: `A person refused to let you ${doing(step)}.` };
         }
         if (target === admin) {
@@ -73,6 +72,14 @@ class FleetAdmin {
             return { ok: true, text: `Allowed: flotti will ${doing(step)} once this turn is over.` };
         }
         return this.perform(step);
+    }
+    /** Whether the action may go on: allowed by a person, or nobody has to be asked. */
+    private async confirmed(step: Step): Promise<boolean> {
+        if (this.options.confirm?.() !== true || await this.allowed(step)) {
+            return true;
+        }
+        this.tell(step, 'refused', 'a person refused it');
+        return false;
     }
     /**
      * A person allows or refuses an action waiting for it.

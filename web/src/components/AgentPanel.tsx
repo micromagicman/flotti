@@ -53,10 +53,14 @@ function InfoIcon() {
         </svg>
     );
 }
+/** An agent in a turn: the turn can be cancelled. */
+const BUSY: ReadonlySet<string> = new Set(['working', 'waiting']);
+/** An agent that is not running: it can be started. */
+const STOPPED: ReadonlySet<string> = new Set(['stopped', 'error']);
 /** What can be done to the agent now: cancel the turn, stop or start it, restart it. */
 function actionsOf(agent: AgentSummary, feed: AgentFeed, t: Messages): AgentAction[] {
-    const busy = feed.status === 'working' || feed.status === 'waiting';
-    const stopped = feed.status === 'stopped' || feed.status === 'error';
+    const busy = BUSY.has(feed.status);
+    const stopped = STOPPED.has(feed.status);
     return [
         ...(busy ? [{ key: 'cancel', label: t.common.cancel, act: () => api.cancel(agent.id) }] : []),
         stopped
@@ -161,6 +165,14 @@ function useMessaging(agentId: string, quotes: AgentPanelProps['quotes']) {
         });
     return { reply, setReply, actions, send };
 }
+/** The words of the composer: a message to the agent, or a reply to one of its messages. */
+function composerWords(replying: boolean, name: string, t: Messages): { readonly label: string; readonly placeholder: string; readonly submitLabel: string } {
+    return {
+        label: replying ? t.agent.replyTo(name) : t.agent.messageTo(name),
+        placeholder: replying ? t.agent.replyPlaceholder : t.agent.messagePlaceholder(name),
+        submitLabel: replying ? t.agent.reply : t.common.send
+    };
+}
 function AgentComposer({ agent, feed, agents, colors, messaging }: Pick<AgentPanelProps, 'agent' | 'feed' | 'agents' | 'colors'> & {
     readonly messaging: ReturnType<typeof useMessaging>;
 }) {
@@ -169,9 +181,7 @@ function AgentComposer({ agent, feed, agents, colors, messaging }: Pick<AgentPan
     const t = useT();
     return (
         <Composer
-            label={reply === undefined ? t.agent.messageTo(agent.name) : t.agent.replyTo(agent.name)}
-            placeholder={reply === undefined ? t.agent.messagePlaceholder(agent.name) : t.agent.replyPlaceholder}
-            submitLabel={reply === undefined ? t.common.send : t.agent.reply}
+            {...composerWords(reply !== undefined, agent.name, t)}
             onSend={send}
             above={reply === undefined ? undefined : { key: `${reply.agentId}/${reply.messageId}`, node: <ReplyPreview quote={reply} agents={agents} colors={colors} onCancel={cancel} /> }}
             onEscape={reply === undefined ? undefined : cancel}

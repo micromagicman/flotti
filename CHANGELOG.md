@@ -6,6 +6,9 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Changed
 
+- **Simpler functions.** `npm run lint` holds every function of `src/` and `web/src/` to a cyclomatic
+  complexity of at most 4. The files not under the limit yet are listed in `eslint.config.js` and leave
+  the list a module at a time; 36 of them are there already. Nothing changes in how flotti behaves (#119).
 - **Settings as an icon, Add agent in their place.** The settings open from a gear icon right of the connection
   status; «Notify me» is a checkbox in the Notifications section of the settings; the sidebar ends with
   **Add agent**, which opens the settings at the agents with Add local agent in focus (#116).

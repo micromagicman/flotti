@@ -39,10 +39,15 @@ function useNote(agentId: string, path: string, stamp: number): Loaded | undefin
 /** The blocks of the note, without a first `# heading` — after its properties, if any — that only repeats its title. */
 function bodyOf(text: string, title: string): Block[] {
     const blocks = parseMarkdown(text);
-    const at = blocks[0]?.kind === 'code' && blocks[0].properties === true ? 1 : 0;
-    const first = blocks[at];
-    const repeats = first?.kind === 'heading' && first.level === 1 && plainText(first.content).trim() === title;
-    return repeats ? blocks.filter((_block, index) => index !== at) : blocks;
+    const at = headingAt(blocks);
+    return repeatsTitle(blocks[at], title) ? blocks.filter((_block, index) => index !== at) : blocks;
+}
+/** Where a heading that repeats the title would be: first, or right after the properties. */
+function headingAt(blocks: readonly Block[]): number {
+    return blocks[0]?.kind === 'code' && blocks[0].properties === true ? 1 : 0;
+}
+function repeatsTitle(block: Block | undefined, title: string): boolean {
+    return block?.kind === 'heading' && block.level === 1 && plainText(block.content).trim() === title;
 }
 /** Copies the absolute path of the note, and says so for a moment. */
 function CopyPath({ file }: { readonly file: string }) {
@@ -55,8 +60,12 @@ function CopyPath({ file }: { readonly file: string }) {
     const label = copied === undefined ? t.memory.copyPath : copied ? t.memory.copied : t.memory.notCopied;
     return <button type="button" className="btn btn-ghost btn-xs" onClick={copy} title={file}>{label}</button>;
 }
+/** When the note was changed: as read, or else as the list of notes says. */
+function modifiedAtOf(note: MemoryNote | undefined, summary: MemoryNoteSummary | undefined): number | undefined {
+    return note?.modifiedAt ?? summary?.modifiedAt;
+}
 function NoteHead({ path, summary, note }: { readonly path: string; readonly summary: MemoryNoteSummary | undefined; readonly note: MemoryNote | undefined }) {
-    const modifiedAt = note?.modifiedAt ?? summary?.modifiedAt;
+    const modifiedAt = modifiedAtOf(note, summary);
     const t = useT();
     return (
         <div className="note-head">
