@@ -109,21 +109,22 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   inside the bank are read — no hidden ones, none a symbolic link leads out of it, none over a
   megabyte — and the dashboard never writes there. A remote agent, and a local one started over SSH, keep
   their memory on another machine: the view says so instead, and so it does for a bank that cannot be
-  read — an unavailable bank is never shown as an empty one. Next to the harness, the header says whether
-  the agent has [memory](#memory): **memory on · policy v1**, **memory unsupported** or **memory
-  unavailable**, with why on hover.
+  read — an unavailable bank is never shown as an empty one. Next to the harness, the details of the agent
+  («i» in the header) say whether it has [memory](#memory): **memory on · policy v1**, **memory
+  unsupported** or **memory unavailable**, with why on hover.
 - **Reply and Forward** sit on the corner of every message, on hover or focus (always, on a touch
   screen). **Reply** puts the message above the field as a quote; the agent gets the quoted text above
   your answer, and in the tab the quote leads back to the message it answers — in this tab or another
   one — until the message is gone from the history. **Forward** sends the message, as it was, to
-  another agent you pick: its tab shows it under a bar "FORWARDED · AUTHOR" in the colour of whoever
+  another agent you pick: its tab shows it under a bar "FORWARDED · AUTHOR" in the tone of whoever
   wrote it, and the agent gets it as `Forwarded from …:` and the text. Escape drops the reply.
 - **Conversations**, under the agents, list every two agents that wrote to each other, the newest
   first; a pair beyond the first four, and every pair on a narrow screen, is in **All conversations**.
   The tab of a pair shows, in one lane and in the order they were sent, the messages the two sent
   each other — with quotes and forwards, and nothing of their work or of what you wrote them. The
-  lane is read-only: **Write to …** opens the tab of either agent. Every agent keeps one colour
-  everywhere: the square by its name in the sidebar, the stripe over its tab, its envelopes.
+  lane is read-only: **Write to …** opens the tab of either agent. Every agent keeps one mark
+  everywhere — a shape in a muted hue by its name in the sidebar, in the header of its tab and in a
+  conversation — and a faint tone of that hue on the bar of its envelopes.
 - **All agents** sends one message to every agent you leave ticked. Each gets it on its own, so an
   agent that is down or busy holds nobody up; the page shows, agent by agent, whether the message was
   delivered, waits in line or failed, and the answers come in each agent's tab.
@@ -518,7 +519,7 @@ installed; flotti hands it over on every start (#101):
   not instructions, and not part of the system prompt: Codex fixes that when its process starts, and a
   resumed session would keep a stale index. The feed shows the message as it was written.
 
-The status in the header is decided by what flotti delivered, not by what the agent says: **on** when
+The status in the details of the agent is decided by what flotti delivered, not by what the agent says: **on** when
 the tools are in the session and the policy went with the instructions, **unavailable** when `memory/`
 cannot be read and written, **unsupported** for an agent without an adapter, one that takes no MCP
 server over HTTP, one on another host — memory there waits for an end-to-end test on the storage it has

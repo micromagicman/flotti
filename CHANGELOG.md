@@ -10,11 +10,28 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   the tools `memory_search`, `memory_read`, `memory_write` and `memory_delete` of the fleet MCP server,
   a short policy after its system prompt, the built-in skill `flotti-memory`, and an index of its
   `memory/` at the start of the first message of every session. A write is confirmed only once the note
-  is on disk, and a stale revision is a conflict, not an overwrite. The header of the tab says whether
-  the agent has memory — on, unsupported or unavailable — as flotti delivered it (#101).
+  is on disk, and a stale revision is a conflict, not an overwrite. The details of the agent («i») say
+  whether it has memory — on, unsupported or unavailable — as flotti delivered it (#101).
+
+### Changed
+
+- **A calm, almost monochrome palette.** The dashboard is grey and ink, with colour kept for a few small
+  marks that mean something: the primary button in a muted steel, the dot of a state (sage for work,
+  ochre for waiting on you, brick for an error) while the chip and its word stay grey, and a muted hue
+  on the mark of each agent, whose shape tells the agent too. Envelopes have a hairline border and a
+  grey bar with a faint tone of the sender; the line of messages waiting is grey and dashed. The logo
+  and the icon are ink. Both themes, text contrast AA (#96).
+- **The header of an agent tab is one line.** It keeps the name, the state, Chat and Memory, the actions
+  and an «i» button. The description, the type, the harness, the role and the SSH diagnostics moved to
+  a details panel on the right of the chat, opened by «i» (over the chat on a phone). Trouble with the
+  connection shows as a strip under the header, with a way to the details. On a phone the actions are
+  in a «⋯» menu (#102).
 
 ### Fixed
 
+- **A tunnel that is down counts as trouble.** A remote agent whose connection dropped and has not come
+  back was shown as fine; now it says «No connection», under the header, on its tab in the sidebar and
+  in `flotti status` (#102).
 - **The composer and the messages in line span the chat on a wide window.** The card of the message
   field and the Next up block no longer stop in a 900 px column: they run the width of the feed, and a
   message in line stands at its right edge, where the messages of the person do. A narrow screen and

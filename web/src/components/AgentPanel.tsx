@@ -6,9 +6,12 @@ import type { AgentColors } from '../agent-colors.js';
 import { api } from '../api.js';
 import type { AgentFeed } from '../feed.js';
 import type { FleetAction } from '../fleet-state.js';
+import { ActionsMenu, AgentActions } from './ActionsMenu.js';
+import type { AgentAction } from './ActionsMenu.js';
+import { AgentDetails, useDetails } from './AgentDetails.js';
 import { AgentMark } from './AgentMark.js';
 import { Composer } from './Composer.js';
-import { ConnectionHealthView } from './ConnectionHealth.js';
+import { ConnectionAlarm } from './ConnectionHealth.js';
 import { Feed } from './Feed.js';
 import type { Jump } from './Feed.js';
 import type { LineActions } from './InLine.js';
@@ -42,70 +45,27 @@ function useAction(): [string | undefined, (action: () => Promise<unknown>) => v
         action().catch((reason: unknown) => setError(errorText(reason, t)));
     }];
 }
-/**
- * What runs the agent: claude or codex from the adapter of its manifest, or
- * whatever a remote agent names itself, shown as it is. A plain ACP agent and
- * a remote one that says nothing do not tell, and the badge says so too.
- */
-function HarnessBadge({ agent }: { readonly agent: AgentSummary }) {
-    const t = useT();
-    if (agent.harness !== undefined) {
-        return <span className="harness" data-harness={agent.harness} title={t.agent.harness}>{agent.harness}</span>;
-    }
-    const why = agent.kind === 'remote' ? t.agent.harnessRemote : t.agent.harnessLocal;
-    return <span className="harness harness-unknown" data-harness="unknown" title={why}>{t.agent.harnessUnknown}</span>;
-}
-/**
- * Whether the agent has memory (#101), as flotti delivered it: on with the
- * version of the policy, unsupported, or unavailable — with why in the hint.
- * Nothing before a local agent was started once: flotti does not guess.
- */
-function MemoryBadge({ agent }: { readonly agent: AgentSummary }) {
-    const t = useT();
-    const memory = agent.memory;
-    if (memory === undefined) {
-        return null;
-    }
-    if (memory.state === 'on') {
-        const skill = memory.skill === 'user' ? t.agent.memorySkillUser : memory.skill === 'missing' ? t.agent.memorySkillMissing : '';
-        return (
-            <span className="memory-badge" data-memory="on" data-skill={memory.skill} title={`${t.agent.memoryOnHint}${skill === '' ? '' : ` ${skill}`}`}>
-                {t.agent.memoryOn(memory.policy)}
-            </span>
-        );
-    }
-    const label = memory.state === 'unsupported' ? t.agent.memoryUnsupported : t.agent.memoryUnavailable;
-    return <span className="memory-badge memory-badge-off" data-memory={memory.state} title={memory.reason}>{label}</span>;
-}
-function AgentTitle({ agent, feed, color }: HeaderProps) {
-    const t = useT();
+function InfoIcon() {
     return (
-        <div className="agent-title">
-            <h1><AgentMark color={color} />{agent.name}</h1>
-            <span className="kind">{agent.kind === 'local' ? t.common.localKind : t.common.remoteKind}</span>
-            <HarnessBadge agent={agent} />
-            <MemoryBadge agent={agent} />
-            {agent.admin === true ? <span className="admin-badge" title={t.agent.adminHint}>{t.agent.admin}</span> : null}
-            <StatusBadge status={feed.status} />
-            {feed.reason === undefined ? null : <span className="reason">{feed.reason}</span>}
-        </div>
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <circle cx="8" cy="8" r="6.5" />
+            <path d="M8 7.2v4M8 4.6v.3" strokeLinecap="round" />
+        </svg>
     );
 }
-function AgentActions({ agent, feed, run }: { readonly agent: AgentSummary; readonly feed: AgentFeed; readonly run: (action: () => Promise<unknown>) => void }) {
+/** What can be done to the agent now: cancel the turn, stop or start it, restart it. */
+function actionsOf(agent: AgentSummary, feed: AgentFeed, t: Messages): AgentAction[] {
     const busy = feed.status === 'working' || feed.status === 'waiting';
     const stopped = feed.status === 'stopped' || feed.status === 'error';
-    const t = useT();
-    return (
-        <div className="actions">
-            {busy ? <button type="button" className="btn btn-sm" onClick={() => run(() => api.cancel(agent.id))}>{t.common.cancel}</button> : null}
-            {stopped
-                ? <button type="button" className="btn btn-sm" onClick={() => run(() => api.start(agent.id))}>{t.common.start}</button>
-                : <button type="button" className="btn btn-sm" onClick={() => run(() => api.stop(agent.id))}>{t.common.stop}</button>}
-            <button type="button" className="btn btn-sm" onClick={() => run(() => api.restart(agent.id))}>{t.common.restart}</button>
-        </div>
-    );
+    return [
+        ...(busy ? [{ key: 'cancel', label: t.common.cancel, act: () => api.cancel(agent.id) }] : []),
+        stopped
+            ? { key: 'start', label: t.common.start, act: () => api.start(agent.id) }
+            : { key: 'stop', label: t.common.stop, act: () => api.stop(agent.id) },
+        { key: 'restart', label: t.common.restart, act: () => api.restart(agent.id) }
+    ];
 }
-/** Chat or Memory: two capsules under the title, the one in sight pressed. */
+/** Chat or Memory: two capsules in the line of the header, the one in sight pressed. */
 function ViewSwitch({ view, onView }: { readonly view: AgentView; readonly onView: (view: AgentView) => void }) {
     const t = useT();
     const button = (value: AgentView, label: string) => (
@@ -113,18 +73,48 @@ function ViewSwitch({ view, onView }: { readonly view: AgentView; readonly onVie
     );
     return <div className="views" role="group" aria-label={t.agent.view}>{button('chat', t.agent.chat)}{button('memory', t.agent.memory)}</div>;
 }
-/** The header of the tab, with a stripe in the colour of the agent over it: the colour of its envelopes. */
-function AgentHeader({ agent, feed, color, view, onView }: HeaderProps & { readonly view: AgentView; readonly onView: (view: AgentView) => void }) {
+type DetailsToggle = { readonly details: boolean; readonly onDetails: () => void; readonly detailsId: string };
+type AgentHeaderProps = HeaderProps & DetailsToggle & { readonly view: AgentView; readonly onView: (view: AgentView) => void };
+/** The name and the state: all of the header a talk with the agent needs to see. */
+function AgentTitle({ agent, feed, color }: HeaderProps) {
+    return (
+        <div className="agent-title">
+            <h1><AgentMark color={color} /><span className="agent-name">{agent.name}</span></h1>
+            <StatusBadge status={feed.status} />
+            {feed.reason === undefined ? null : <span className="reason" title={feed.reason}>{feed.reason}</span>}
+        </div>
+    );
+}
+/** The actions — buttons on a wide screen, «⋯» on a phone — and «i» for the details. */
+function HeaderActions({ agent, feed, run, details, onDetails, detailsId }: Omit<HeaderProps, 'color'> & DetailsToggle & { readonly run: (action: () => Promise<unknown>) => void }) {
+    const t = useT();
+    const actions = actionsOf(agent, feed, t);
+    return (
+        <div className="header-actions">
+            <AgentActions actions={actions} run={run} />
+            <ActionsMenu actions={actions} run={run} />
+            <button type="button" className="btn btn-sm btn-ghost icon-btn details-toggle" aria-expanded={details} aria-controls={detailsId} aria-label={t.agent.detailsOf(agent.name)} title={t.agent.details} onClick={onDetails}>
+                <InfoIcon />
+            </button>
+        </div>
+    );
+}
+/**
+ * The header of the tab in one line (#102): the name, the state, Chat and
+ * Memory, the actions, and «i» for the details. A stripe in the colour of the
+ * agent over it: the colour of its envelopes.
+ */
+function AgentHeader({ agent, feed, color, view, onView, ...toggle }: AgentHeaderProps) {
     const [error, run] = useAction();
     return (
-        <header className={`agent-header agent-header-colored agent-color-${color ?? 0}`}>
-            <AgentTitle agent={agent} feed={feed} color={color} />
-            {agent.description === undefined ? null : <p className="description">{agent.description}</p>}
-            {agent.health === undefined ? null : <ConnectionHealthView health={agent.health} />}
-            <AgentActions agent={agent} feed={feed} run={run} />
-            {error === undefined ? null : <p className="error" role="alert">{error}</p>}
-            <ViewSwitch view={view} onView={onView} />
-        </header>
+        <>
+            <header className={`agent-header agent-header-colored agent-color-${color ?? 0}`}>
+                <AgentTitle agent={agent} feed={feed} color={color} />
+                <ViewSwitch view={view} onView={onView} />
+                <HeaderActions agent={agent} feed={feed} run={run} {...toggle} />
+            </header>
+            {error === undefined ? null : <p className="error header-error" role="alert">{error}</p>}
+        </>
     );
 }
 /**
@@ -201,20 +191,36 @@ function useAnswers(agentId: string, dispatch: Dispatch<FleetAction>) {
     };
     return { answer, answerAdmin };
 }
-function AgentPanel({ agent, feed, agents, colors, dispatch, quotes, jump }: AgentPanelProps) {
+/** The chat with the agent, or its memory bank. */
+function AgentBody({ agent, feed, agents, colors, dispatch, quotes, jump, view }: AgentPanelProps & { readonly view: AgentView }) {
     const messaging = useMessaging(agent.id, quotes);
-    const [view, setView] = useState<AgentView>('chat');
     const { answer, answerAdmin } = useAnswers(agent.id, dispatch);
     const t = useT();
     return (
-        <section className="agent-panel" aria-label={agent.name}>
-            <AgentHeader agent={agent} feed={feed} color={colors[agent.id]} view={view} onView={setView} />
+        <>
             <div className="chat-view" hidden={view !== 'chat'}>
                 <Feed items={feed.items} queue={feed.queue} status={feed.status} line={lineActions(agent.id, t)} agentId={agent.id} agentName={agent.name} agents={agents} colors={colors} onAnswer={answer} onAdminAnswer={answerAdmin} actions={messaging.actions} jump={jump} />
                 <AgentComposer agent={agent} feed={feed} agents={agents} colors={colors} messaging={messaging} />
             </div>
             {view === 'memory' ? <MemoryView agentId={agent.id} /> : null}
-        </section>
+        </>
+    );
+}
+function AgentPanel(props: AgentPanelProps) {
+    const { agent, feed, colors } = props;
+    const [view, setView] = useState<AgentView>('chat');
+    const details = useDetails();
+    const detailsId = `agent-details-${agent.id}`;
+    return (
+        <>
+            <section className="agent-panel" aria-label={agent.name}>
+                <AgentHeader agent={agent} feed={feed} color={colors[agent.id]} view={view} onView={setView}
+                    details={details.open} onDetails={details.open ? details.hide : details.show} detailsId={detailsId} />
+                <ConnectionAlarm health={agent.health} onDetails={details.show} />
+                <AgentBody {...props} view={view} />
+            </section>
+            {details.open ? <AgentDetails agent={agent} id={detailsId} onClose={details.hide} /> : null}
+        </>
     );
 }
 export { AgentPanel };

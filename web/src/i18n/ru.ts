@@ -154,7 +154,12 @@ const ru: Messages = {
         poor: (reasons) => `Плохое соединение: ${reasons}`,
         poorReconnects: (n) => `${count(n, 'переподключение', 'переподключения', 'переподключений')} за последний час`,
         poorLatency: (ms) => `задержка ${f.number(ms)} мс`,
-        poorMark: 'плохая связь'
+        poorMark: 'плохая связь',
+        lost: (reasons) => `Нет связи: ${reasons}`,
+        tunnelDown: 'туннель не работает',
+        lostMark: 'нет связи',
+        fine: 'в порядке',
+        more: 'Подробнее'
     },
     agent: {
         harness: 'Харнесс',
@@ -176,7 +181,16 @@ const ru: Messages = {
         replyTo: (name) => `Ответ для ${name}`,
         messagePlaceholder: (name) => `Написать ${name}…`,
         replyPlaceholder: 'Напишите ответ…',
-        reply: 'Ответить'
+        reply: 'Ответить',
+        details: 'Сведения',
+        detailsOf: (name) => `Сведения об агенте ${name}`,
+        closeDetails: 'Закрыть',
+        about: 'Агент',
+        kind: 'Тип',
+        role: 'Роль',
+        connection: 'Соединение',
+        actions: 'Действия',
+        noHarness: 'неизвестен'
     },
     composer: {
         toSend: '— отправить',

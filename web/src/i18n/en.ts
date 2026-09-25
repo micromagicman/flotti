@@ -149,7 +149,12 @@ const en = {
         poor: (reasons: string) => `Poor connection: ${reasons}`,
         poorReconnects: (n: number) => `${f.number(n)} reconnects in the last hour`,
         poorLatency: (ms: number) => `latency ${f.number(ms)} ms`,
-        poorMark: 'poor connection'
+        poorMark: 'poor connection',
+        lost: (reasons: string) => `No connection: ${reasons}`,
+        tunnelDown: 'the tunnel is down',
+        lostMark: 'no connection',
+        fine: 'fine',
+        more: 'Details'
     },
     agent: {
         harness: 'Harness',
@@ -171,7 +176,16 @@ const en = {
         replyTo: (name: string) => `Reply to ${name}`,
         messagePlaceholder: (name: string) => `Message ${name}…`,
         replyPlaceholder: 'Write a reply…',
-        reply: 'Reply'
+        reply: 'Reply',
+        details: 'Details',
+        detailsOf: (name: string) => `Details of ${name}`,
+        closeDetails: 'Close',
+        about: 'Agent',
+        kind: 'Type',
+        role: 'Role',
+        connection: 'Connection',
+        actions: 'Actions',
+        noHarness: 'not known'
     },
     composer: {
         toSend: 'to send',
