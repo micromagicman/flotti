@@ -73,16 +73,25 @@ class TelegramChannel implements NotificationChannel {
                 body: JSON.stringify(body),
                 signal: AbortSignal.timeout(TIMEOUT_MS)
             });
-            const answer = (await response.json().catch(() => ({}))) as BotAnswer;
-            if (!response.ok || answer.ok !== true) {
-                throw new Error(`Telegram answered ${response.status}: ${answer.description ?? 'no description'}`);
-            }
-            return answer.result;
+            return resultOf(response, (await response.json().catch(() => ({}))) as BotAnswer);
         } catch (error) {
-            const why = error instanceof Error ? `${error.message}${error.cause instanceof Error ? ` (${error.cause.message})` : ''}` : String(error);
-            throw new Error(`${method}: ${hide(why, token)}`);
+            throw new Error(`${method}: ${hide(reasonOf(error), token)}`);
         }
     }
+}
+/** What the Bot API answered; throws when it refused. */
+function resultOf(response: Response, answer: BotAnswer): unknown {
+    if (!response.ok || answer.ok !== true) {
+        throw new Error(`Telegram answered ${response.status}: ${answer.description ?? 'no description'}`);
+    }
+    return answer.result;
+}
+/** Why a call failed, with the cause a failed fetch hides in `cause`. */
+function reasonOf(error: unknown): string {
+    if (!(error instanceof Error)) {
+        return String(error);
+    }
+    return error.cause instanceof Error ? `${error.message} (${error.cause.message})` : error.message;
 }
 export { TELEGRAM_API, TELEGRAM_API_VARIABLE, TelegramChannel, hide };
 export type { TelegramOptions };

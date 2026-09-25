@@ -4,6 +4,7 @@
  * only once the note is on disk; anything that did not happen comes back as an
  * error result, so the agent cannot mistake it for success.
  */
+import { describeError } from './describe-error.js';
 import { MemoryStore, MemoryStoreError, checkScope } from './memory-store.js';
 const scopeProperty = {
     type: 'string',
@@ -93,33 +94,40 @@ async function callMemoryTool(directory: string, name: string, args: Arguments):
         checkScope(args['scope']);
         return json(await run(new MemoryStore(directory), name, args));
     } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        const kind = error instanceof MemoryStoreError ? error.kind : 'unavailable';
-        return failure(name === 'memory_write' || name === 'memory_delete'
-            ? `Not done (${kind}): ${reason}`
-            : `${kind}: ${reason}`);
+        return failure(failureText(name, error));
     }
 }
+/** What a tool that did not work says: one that changes the bank says that nothing was done. */
+function failureText(name: string, error: unknown): string {
+    const reason = describeError(error);
+    const kind = error instanceof MemoryStoreError ? error.kind : 'unavailable';
+    return CHANGING_TOOLS.has(name) ? `Not done (${kind}): ${reason}` : `${kind}: ${reason}`;
+}
+/** The memory tools that change the bank. */
+const CHANGING_TOOLS: ReadonlySet<string> = new Set(['memory_write', 'memory_delete']);
+/** How each memory tool runs on the bank. */
+const TOOL_RUNS = new Map<string, (store: MemoryStore, args: Arguments) => Promise<unknown>>([
+    ['memory_search', (store, args) => store.search(optionalText(args, 'query') ?? '')],
+    ['memory_read', (store, args) => store.read(text(args, 'id'))],
+    ['memory_write', (store, args) => store.write(noteToWrite(args))],
+    ['memory_delete', (store, args) => store.delete(text(args, 'id'), optionalText(args, 'expected_revision'))]
+]);
 /** What the tool answers when it worked. */
 function run(store: MemoryStore, name: string, args: Arguments): Promise<unknown> {
-    switch (name) {
-        case 'memory_search':
-            return store.search(optionalText(args, 'query') ?? '');
-        case 'memory_read':
-            return store.read(text(args, 'id'));
-        case 'memory_write':
-            return store.write({
-                ...optional('id', optionalText(args, 'id')),
-                title: text(args, 'title'),
-                description: optionalText(args, 'description') ?? '',
-                body: text(args, 'body'),
-                ...optional('expectedRevision', optionalText(args, 'expected_revision'))
-            });
-        case 'memory_delete':
-            return store.delete(text(args, 'id'), optionalText(args, 'expected_revision'));
-        default:
-            throw new MemoryStoreError('invalid', `no memory tool ${name}`);
+    const toolRun = TOOL_RUNS.get(name);
+    if (toolRun === undefined) {
+        throw new MemoryStoreError('invalid', `no memory tool ${name}`);
     }
+    return toolRun(store, args);
+}
+function noteToWrite(args: Arguments): Parameters<MemoryStore['write']>[0] {
+    return {
+        ...optional('id', optionalText(args, 'id')),
+        title: text(args, 'title'),
+        description: optionalText(args, 'description') ?? '',
+        body: text(args, 'body'),
+        ...optional('expectedRevision', optionalText(args, 'expected_revision'))
+    };
 }
 function optional<K extends string>(key: K, value: string | undefined): { [key in K]?: string } {
     return (value === undefined ? {} : { [key]: value }) as { [key in K]?: string };
@@ -132,14 +140,17 @@ function text(args: Arguments, name: string): string {
     return value;
 }
 function optionalText(args: Arguments, name: string): string | undefined {
-    const value = args[name];
+    const value = textOrNothing(args[name], name);
+    return value?.trim() === '' ? undefined : value;
+}
+function textOrNothing(value: unknown, name: string): string | undefined {
     if (value === undefined || value === null) {
         return undefined;
     }
     if (typeof value !== 'string') {
         throw new MemoryStoreError('invalid', `${name} must be text.`);
     }
-    return value.trim() === '' ? undefined : value;
+    return value;
 }
 function json(value: unknown): MemoryToolResult {
     return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };

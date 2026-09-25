@@ -56,22 +56,39 @@ type MemoryHandover = {
  */
 function prepareHandover(agent: LocalAgent, env: Readonly<Record<string, string | undefined>>, memory = false): Handover {
     const systemPrompt = readSystemPrompt(agent);
-    if (agent.ssh !== undefined) {
-        return remoteHandover(agent, env, systemPrompt);
-    }
+    return agent.ssh === undefined
+        ? localHandover(agent, env, systemPrompt, memory)
+        : remoteHandover(agent, env, systemPrompt);
+}
+/** An agent on this machine: the adapter decides how. */
+function localHandover(
+    agent: LocalAgent,
+    env: Readonly<Record<string, string | undefined>>,
+    systemPrompt: string | undefined,
+    memory: boolean
+): Handover {
     switch (agent.adapter) {
-        case 'claude-code': {
-            const contract = memory ? memoryContract(agent) : undefined;
-            return withMemory(localClaudeCodeHandover(agent, contract === undefined ? systemPrompt : withPolicy(systemPrompt)), contract);
-        }
-        case 'codex': {
-            linkCodexSkills(agent);
-            const contract = memory ? memoryContract(agent) : undefined;
-            return withMemory(codexHandover(env, systemPrompt, [agent.directory], [], contract !== undefined), contract);
-        }
+        case 'claude-code':
+            return claudeCodeHere(agent, systemPrompt, memory);
+        case 'codex':
+            return codexHere(agent, env, systemPrompt, memory);
         default:
             return noAdapterHandover(systemPrompt);
     }
+}
+function claudeCodeHere(agent: LocalAgent, systemPrompt: string | undefined, memory: boolean): Handover {
+    const contract = memory ? memoryContract(agent) : undefined;
+    return withMemory(localClaudeCodeHandover(agent, contract === undefined ? systemPrompt : withPolicy(systemPrompt)), contract);
+}
+function codexHere(
+    agent: LocalAgent,
+    env: Readonly<Record<string, string | undefined>>,
+    systemPrompt: string | undefined,
+    memory: boolean
+): Handover {
+    linkCodexSkills(agent);
+    const contract = memory ? memoryContract(agent) : undefined;
+    return withMemory(codexHandover(env, systemPrompt, [agent.directory], [], contract !== undefined), contract);
 }
 /** Installs the built-in skill and looks at the bank; the policy itself goes with the instructions. */
 function memoryContract(agent: LocalAgent): MemoryHandover {
@@ -140,9 +157,6 @@ function remoteHandover(
     env: Readonly<Record<string, string | undefined>>,
     systemPrompt: string | undefined
 ): Handover {
-    const notes = agent.adapter === undefined && systemPrompt !== undefined
-        ? ['system-prompt.md is not passed on: the manifest names no adapter, and ACP itself has no field for it']
-        : [];
     const skipped = `skills/ and memory/ stay on this machine: the agent runs on ${agent.ssh}`;
     switch (agent.adapter) {
         case 'claude-code':
@@ -150,7 +164,7 @@ function remoteHandover(
         case 'codex':
             return codexHandover(env, systemPrompt, [], [skipped]);
         default:
-            return { env: {}, additionalDirectories: [], notes };
+            return noAdapterHandover(systemPrompt);
     }
 }
 /** Claude Code on another host: the system prompt in `_meta`, nothing from the agent directory. */
@@ -176,20 +190,26 @@ function readSystemPrompt(agent: LocalAgent): string | undefined {
  * policy goes after whichever instructions win.
  */
 function codexConfig(env: Readonly<Record<string, string | undefined>>, systemPrompt: string | undefined, policy: boolean): string {
-    const given = env[CODEX_CONFIG_VARIABLE];
-    let config: Record<string, unknown> = {};
-    if (given !== undefined && given.trim() !== '') {
-        const parsed: unknown = JSON.parse(given);
-        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-            throw new Error(`${CODEX_CONFIG_VARIABLE} must hold a JSON object`);
-        }
-        config = parsed as Record<string, unknown>;
-    }
+    const config = givenCodexConfig(env[CODEX_CONFIG_VARIABLE]);
     if (!policy) {
         return JSON.stringify({ developer_instructions: systemPrompt, ...config });
     }
     const written = config['developer_instructions'];
     return JSON.stringify({ ...config, developer_instructions: withPolicy(typeof written === 'string' ? written : systemPrompt) });
+}
+/** The `CODEX_CONFIG` the manifest or the environment already sets; empty when none. */
+function givenCodexConfig(given: string | undefined): Record<string, unknown> {
+    if (given === undefined || given.trim() === '') {
+        return {};
+    }
+    const parsed: unknown = JSON.parse(given);
+    if (!isJsonObject(parsed)) {
+        throw new Error(`${CODEX_CONFIG_VARIABLE} must hold a JSON object`);
+    }
+    return parsed;
+}
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 /**
  * Codex looks for skills in `<root>/.agents/skills`, and the agent keeps them in

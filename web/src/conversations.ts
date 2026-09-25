@@ -9,7 +9,7 @@
  * inbox of a remote agent — while the tab of the sender shows it only for the
  * inbox. So a message is taken once, and none is missed.
  */
-import type { AgentFeed, MessageItem } from './feed.js';
+import type { AgentFeed, FeedItem, MessageItem } from './feed.js';
 /** Tab ids of conversations start with `_`, like the settings: no agent id does. */
 const PAIR_PREFIX = '_pair:';
 /** One message of a lane, and where it is: the tab of the agent it went to. */
@@ -38,15 +38,21 @@ function pairOf(tab: string): readonly [string, string] | undefined {
     if (!tab.startsWith(PAIR_PREFIX)) {
         return undefined;
     }
-    const [one, other, ...rest] = tab.slice(PAIR_PREFIX.length).split(':');
-    return one === undefined || other === undefined || one === '' || other === '' || rest.length > 0 ? undefined : [one, other];
+    const parts = tab.slice(PAIR_PREFIX.length).split(':');
+    return isPair(parts) ? parts : undefined;
+}
+function isPair(parts: string[]): parts is [string, string] {
+    return parts.length === 2 && parts.every((part) => part !== '');
 }
 /** The messages other agents of the fleet sent to `agentId`. */
-function received(agentId: string, feed: AgentFeed, fleet: ReadonlySet<string>): LaneMessage[] {
-    return feed.items.flatMap((item) => (item.kind === 'message' && item.role === 'user'
-        && item.from !== undefined && item.from !== agentId && fleet.has(item.from)
-        ? [{ key: `${agentId}:${item.seq}`, from: item.from, to: agentId, item }]
-        : []));
+function received(agentId: string, feed: AgentFeed | undefined, fleet: ReadonlySet<string>): LaneMessage[] {
+    return (feed?.items ?? []).filter(isFromAgent)
+        .filter((item) => item.from !== agentId && fleet.has(item.from))
+        .map((item) => ({ key: `${agentId}:${item.seq}`, from: item.from, to: agentId, item }));
+}
+/** A message an agent sent, not a person. */
+function isFromAgent(item: FeedItem): item is MessageItem & { readonly from: string } {
+    return item.kind === 'message' && item.role === 'user' && item.from !== undefined;
 }
 /** Oldest first; one time in two tabs — the clock ticks in milliseconds — keeps the order of each tab. */
 function byTime(one: LaneMessage, other: LaneMessage): number {
@@ -63,8 +69,7 @@ function conversations(agentIds: readonly string[], feeds: Readonly<Record<strin
     const fleet = new Set(agentIds);
     const lanes = new Map<string, LaneMessage[]>();
     for (const agentId of agentIds) {
-        const feed = feeds[agentId];
-        for (const message of feed === undefined ? [] : received(agentId, feed, fleet)) {
+        for (const message of received(agentId, feeds[agentId], fleet)) {
             const id = pairId(message.from, message.to);
             lanes.set(id, [...(lanes.get(id) ?? []), message]);
         }
