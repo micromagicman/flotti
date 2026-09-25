@@ -826,6 +826,7 @@ test('makes an agent an administrator in the settings; its action waits for a pe
     await page.goto(`${url}#/_settings`);
     await confirm.uncheck();
     await expect(confirm).not.toBeChecked();
+    await expect.poll(() => settings()['confirmAdminActions']).toBe(false);
     await settingsRow(page, 'relay').getByRole('button', { name: 'Edit' }).click();
     await field(page, 'Administrator').uncheck();
     await page.getByRole('button', { name: 'Save' }).click();

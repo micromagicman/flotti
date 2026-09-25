@@ -152,10 +152,15 @@ function AdminConfirm() {
     return (
         <div className="settings-section" role="group" aria-label={t.settings.adminTitle}>
             <h2>{t.settings.adminTitle}</h2>
-            <label className="check">
-                <input type="checkbox" checked={confirm === true} disabled={confirm === undefined} onChange={(event) => change(event.target.checked)} />
-                {' '}{t.settings.adminConfirm}
-            </label>
+            {/* No box until the server has said: an empty one would claim "off" while the setting may be on. */}
+            {confirm === undefined
+                ? (error === undefined ? <p className="muted">{t.settings.readingAdmin}</p> : null)
+                : (
+                    <label className="check">
+                        <input type="checkbox" checked={confirm} onChange={(event) => change(event.target.checked)} />
+                        {' '}{t.settings.adminConfirm}
+                    </label>
+                )}
             <p className="field-hint">{t.settings.adminHint}</p>
             {error === undefined ? null : <p className="error" role="alert">{error}</p>}
         </div>

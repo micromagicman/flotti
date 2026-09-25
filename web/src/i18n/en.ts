@@ -324,6 +324,7 @@ const en = {
         keep: 'Keep',
         readingManifest: 'Reading the manifest…',
         adminTitle: 'Administrators',
+        readingAdmin: 'Reading the settings…',
         adminConfirm: 'Ask me before an administrator restarts an agent or clears its context',
         adminHint: 'An administrator is an agent with Administrator ticked in its settings. When this is on, each of its actions waits for Allow in the dashboard; a refusal reaches it as one. When off, it is done at once.',
         languageTitle: 'Language',
