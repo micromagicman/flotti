@@ -17,6 +17,7 @@ import type {
     ServerMessage
 } from './dashboard-protocol.js';
 import type { Forwarded, Quote, SendOptions } from './agent-events.js';
+import { describeError } from './describe-error.js';
 import { ConfigurationError } from './errors.js';
 import { MemoryError, readMemoryBank, readMemoryNote } from './memory-bank.js';
 import type { FleetSettings } from './fleet-settings.js';
@@ -199,11 +200,7 @@ const ROUTES: readonly Route[] = [
         method: 'POST',
         pattern: /^\/api\/admin-actions\/([^/]+)$/,
         handle: async ({ supervisor }, [actionId], body) => {
-            const { allow } = (body ?? {}) as Partial<AdminAnswer>;
-            if (typeof allow !== 'boolean') {
-                throw new HttpError(400, '"allow" must be true or false.');
-            }
-            if (!supervisor.answerAdminAction(actionId ?? '', allow)) {
+            if (!supervisor.answerAdminAction(actionId ?? '', allowOf(body))) {
                 throw new HttpError(404, 'No such action of an administrator is waiting.');
             }
             return [200, {}];
@@ -271,21 +268,51 @@ const ROUTES: readonly Route[] = [
         method: 'POST',
         pattern: /^\/api\/agents\/([^/]+)\/permissions\/([^/]+)$/,
         handle: async ({ supervisor }, [id, requestId], body) => {
-            const { optionId } = (body ?? {}) as PermissionAnswer;
-            if (!supervisor.answerPermission(id ?? '', requestId ?? '', typeof optionId === 'string' ? optionId : undefined)) {
+            if (!supervisor.answerPermission(id ?? '', requestId ?? '', optionIdOf(body))) {
                 throw new HttpError(404, 'No such permission request is waiting.');
             }
             return [200, {}];
         }
     }
 ];
+/** The fields of a request body; none when it has no body. */
+function fieldsOf<T>(body: unknown): Partial<T> {
+    return (body ?? {}) as Partial<T>;
+}
+/** `{ [key]: value }`, or nothing when there is no value. */
+function present<K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } {
+    return value === undefined ? {} : ({ [key]: value } as { [P in K]?: V });
+}
+/** What `read` makes of a value, or nothing when the value is absent. */
+function unlessAbsent<T>(value: unknown, read: (value: unknown) => T): T | undefined {
+    return value === undefined ? undefined : read(value);
+}
+function allowOf(body: unknown): boolean {
+    const { allow } = fieldsOf<AdminAnswer>(body);
+    if (typeof allow !== 'boolean') {
+        throw new HttpError(400, '"allow" must be true or false.');
+    }
+    return allow;
+}
+function optionIdOf(body: unknown): string | undefined {
+    const { optionId } = fieldsOf<PermissionAnswer>(body);
+    return typeof optionId === 'string' ? optionId : undefined;
+}
 /** The text of a message; a forwarded one may come without a word above it. */
 function messageText(body: unknown, mayBeEmpty = false): string {
-    const { text = mayBeEmpty ? '' : undefined } = (body ?? {}) as Partial<SendRequest>;
-    if (typeof text !== 'string' || (!mayBeEmpty && text.trim() === '')) {
+    const text = textOf(body, mayBeEmpty);
+    if (!isMessageText(text, mayBeEmpty)) {
         throw new HttpError(400, 'The message is empty.');
     }
     return text;
+}
+/** The `text` of the body; an empty one stands for an absent text that may be empty. */
+function textOf(body: unknown, mayBeEmpty: boolean): unknown {
+    const { text } = fieldsOf<SendRequest>(body);
+    return text === undefined && mayBeEmpty ? '' : text;
+}
+function isMessageText(text: unknown, mayBeEmpty: boolean): text is string {
+    return typeof text === 'string' && (mayBeEmpty || text.trim() !== '');
 }
 function optionalString(value: unknown, name: string): string | undefined {
     if (value !== undefined && typeof value !== 'string') {
@@ -293,55 +320,56 @@ function optionalString(value: unknown, name: string): string | undefined {
     }
     return value;
 }
-function quoteOf(value: unknown): Quote | undefined {
-    if (value === undefined) {
-        return undefined;
+function requiredString(value: unknown, complaint: string): string {
+    if (typeof value !== 'string') {
+        throw new HttpError(400, complaint);
     }
-    const { agentId, messageId, seq, author, text } = (value ?? {}) as Partial<Quote>;
-    if (typeof agentId !== 'string' || typeof messageId !== 'string' || typeof text !== 'string') {
-        throw new HttpError(400, '"replyTo" needs the "agentId", "messageId" and "text" of the message it answers.');
-    }
+    return value;
+}
+const QUOTE_NEEDS = '"replyTo" needs the "agentId", "messageId" and "text" of the message it answers.';
+function quoteOf(value: unknown): Quote {
+    const fields = fieldsOf<Quote>(value);
+    const agentId = requiredString(fields.agentId, QUOTE_NEEDS);
+    const messageId = requiredString(fields.messageId, QUOTE_NEEDS);
+    const text = requiredString(fields.text, QUOTE_NEEDS);
+    return { agentId, messageId, text, ...seqOf(fields.seq), ...present('author', optionalString(fields.author, 'replyTo.author')) };
+}
+function seqOf(seq: unknown): { seq?: number } {
     if (seq !== undefined && !Number.isInteger(seq)) {
         throw new HttpError(400, '"replyTo.seq" must be a whole number.');
     }
-    const by = optionalString(author, 'replyTo.author');
-    return { agentId, messageId, text, ...(seq === undefined ? {} : { seq }), ...(by === undefined ? {} : { author: by }) };
+    return present('seq', seq as number | undefined);
 }
-function forwardedOf(value: unknown): Forwarded | undefined {
-    if (value === undefined) {
-        return undefined;
-    }
-    const { author, text } = (value ?? {}) as Partial<Forwarded>;
+function forwardedOf(value: unknown): Forwarded {
+    const { author, text } = fieldsOf<Forwarded>(value);
     if (typeof text !== 'string' || text.trim() === '') {
         throw new HttpError(400, '"forwarded" needs the "text" of the message sent on.');
     }
-    const by = optionalString(author, 'forwarded.author');
-    return { text, ...(by === undefined ? {} : { author: by }) };
+    return { text, ...present('author', optionalString(author, 'forwarded.author')) };
 }
 /** What a message of a person answers or sends on; the sender is a person, always. */
 function messageOptions(body: unknown): SendOptions {
-    const request = (body ?? {}) as Partial<SendRequest>;
-    const replyTo = quoteOf(request.replyTo);
-    const forwarded = forwardedOf(request.forwarded);
-    const retryOf = optionalString(request.retryOf, 'retryOf');
+    const request = fieldsOf<SendRequest>(body);
     return {
-        ...(replyTo === undefined ? {} : { replyTo }),
-        ...(forwarded === undefined ? {} : { forwarded }),
-        ...(retryOf === undefined ? {} : { retryOf })
+        ...present('replyTo', unlessAbsent(request.replyTo, quoteOf)),
+        ...present('forwarded', unlessAbsent(request.forwarded, forwardedOf)),
+        ...present('retryOf', optionalString(request.retryOf, 'retryOf'))
     };
 }
 function broadcastTargets(body: unknown): string[] | undefined {
-    const { agents } = (body ?? {}) as Partial<SendRequest>;
-    if (agents === undefined) {
-        return undefined;
-    }
-    if (!Array.isArray(agents) || agents.some((id) => typeof id !== 'string')) {
+    return unlessAbsent(fieldsOf<SendRequest>(body).agents, targetsOf);
+}
+function targetsOf(agents: unknown): string[] {
+    if (!isIdList(agents)) {
         throw new HttpError(400, '"agents" must be a list of agent ids.');
     }
     if (agents.length === 0) {
         throw new HttpError(400, 'Pick at least one agent.');
     }
     return agents;
+}
+function isIdList(value: unknown): value is string[] {
+    return Array.isArray(value) && value.every((id) => typeof id === 'string');
 }
 /**
  * Hosts the page may be reached by. Anything else is refused: a web page from
@@ -385,25 +413,44 @@ function collectChunks(request: IncomingMessage, reject: (reason: unknown) => vo
     });
     return chunks;
 }
+/** Every route of the API, in the order they are tried. */
+const ALL_ROUTES: readonly Route[] = [...ROUTES, ...NOTIFICATION_ROUTES, ...MEMORY_ROUTES];
+type Found = { readonly route: Route; readonly match: RegExpExecArray };
 async function handleApi(context: Context, request: IncomingMessage, url: URL): Promise<[number, unknown]> {
-    const path = url.pathname;
-    const matching = [...ROUTES, ...NOTIFICATION_ROUTES, ...MEMORY_ROUTES].map((candidate) => ({ candidate, match: candidate.pattern.exec(path) }))
-        .filter(({ match }) => match !== null);
+    const { route, match } = findRoute(request.method, url.pathname);
+    requireJson(request);
+    const body = request.method === 'GET' ? undefined : await readBody(request);
+    return route.handle(context, match.slice(1).map((part) => decodeURIComponent(part)), body, url.searchParams);
+}
+/** The route of this method at this path; 404 when no route has the path, 405 when none has the method. */
+function findRoute(method: string | undefined, path: string): Found {
+    const matching = routesAt(path);
     if (matching.length === 0) {
         throw new HttpError(404, `Nothing at ${path}.`);
     }
-    const route = matching.find(({ candidate }) => candidate.method === request.method);
-    if (route === undefined || route.match === null) {
-        throw new HttpError(405, `Use ${matching.map(({ candidate }) => candidate.method).join(' or ')}.`);
+    const found = matching.find(({ route }) => route.method === method);
+    if (found === undefined) {
+        throw new HttpError(405, `Use ${matching.map(({ route }) => route.method).join(' or ')}.`);
     }
-    // A JSON body cannot come from a plain HTML form of another site, nor
-    // cross-site without a preflight this server never answers.
-    if (request.method !== 'GET' && !(request.headers['content-type'] ?? '').startsWith('application/json')) {
+    return found;
+}
+function routesAt(path: string): Found[] {
+    return ALL_ROUTES.flatMap((route) => {
+        const match = route.pattern.exec(path);
+        return match === null ? [] : [{ route, match }];
+    });
+}
+/**
+ * A JSON body cannot come from a plain HTML form of another site, nor
+ * cross-site without a preflight this server never answers.
+ */
+function requireJson(request: IncomingMessage): void {
+    if (request.method !== 'GET' && !contentTypeOf(request).startsWith('application/json')) {
         throw new HttpError(415, 'Send the body as application/json.');
     }
-    const body = request.method === 'GET' ? undefined : await readBody(request);
-    const match = route.match.slice(1).map((part) => decodeURIComponent(part));
-    return route.candidate.handle(context, match, body, url.searchParams);
+}
+function contentTypeOf(request: IncomingMessage): string {
+    return request.headers['content-type'] ?? '';
 }
 /** Serves a file of the built page; any other path gets `index.html`, the page routes itself. */
 async function serveStatic(webRoot: string, path: string, response: ServerResponse): Promise<void> {
@@ -432,22 +479,32 @@ function staticTarget(webRoot: string, path: string): string {
     return inside && extension !== '' ? file : join(webRoot, 'index.html');
 }
 function errorResponse(error: unknown): [number, ErrorResponse] {
-    if (error instanceof HttpError) {
-        return [error.status, { error: error.message }];
+    return [statusOf(error), { error: errorText(error) }];
+}
+/** The status of a configuration error by its kind; 400 for the kinds not here. */
+const STATUS_OF_KIND: Readonly<Partial<Record<ConfigurationError['kind'], number>>> = {
+    'duplicate-agent-id': 409,
+    'already-running': 409,
+    'ssh-failed': 502
+};
+function statusOf(error: unknown): number {
+    if (error instanceof HttpError || error instanceof MemoryError) {
+        return error.status;
     }
-    if (error instanceof MemoryError) {
-        return [error.status, { error: error.message }];
-    }
+    return fleetStatus(error);
+}
+/** The status of an error the fleet threw: an unknown agent, a refused configuration, or else a failure. */
+function fleetStatus(error: unknown): number {
     if (error instanceof UnknownAgentError) {
-        return [404, { error: error.message }];
+        return 404;
     }
-    if (error instanceof ConfigurationError) {
-        const status = error.kind === 'duplicate-agent-id' || error.kind === 'already-running'
-            ? 409
-            : error.kind === 'ssh-failed' ? 502 : 400;
-        return [status, { error: error.hint === undefined ? error.message : `${error.message} ${error.hint}` }];
-    }
-    return [500, { error: error instanceof Error ? error.message : String(error) }];
+    return error instanceof ConfigurationError ? STATUS_OF_KIND[error.kind] ?? 400 : 500;
+}
+function errorText(error: unknown): string {
+    return error instanceof ConfigurationError ? configurationText(error) : describeError(error);
+}
+function configurationText(error: ConfigurationError): string {
+    return error.hint === undefined ? error.message : `${error.message} ${error.hint}`;
 }
 /** Whether this is `flotti stop` asking, with the secret of this very run. */
 function isShutdown(request: IncomingMessage, path: string, options: DashboardOptions): boolean {
@@ -457,24 +514,33 @@ function isShutdown(request: IncomingMessage, path: string, options: DashboardOp
         && request.headers['x-flotti-stop'] === options.shutdown.token;
 }
 function requestHandler(supervisor: Supervisor, hosts: Set<string>, options: DashboardOptions & { webRoot: string }) {
-    const { webRoot } = options;
     return (request: IncomingMessage, response: ServerResponse): void => {
-        if (!hosts.has(request.headers.host ?? '')) {
+        if (!isAllowedHost(hosts, request)) {
             send(response, 421, { error: 'The dashboard answers on localhost only.' });
             return;
         }
-        const url = new URL(request.url ?? '/', 'http://localhost');
-        if (isShutdown(request, url.pathname, options)) {
-            send(response, 202, {});
-            options.shutdown?.onRequest();
-            return;
-        }
-        if (!url.pathname.startsWith('/api/')) {
-            void serveStatic(webRoot, url.pathname, response);
-            return;
-        }
-        answerApi({ supervisor, settings: options.settings, notifications: options.notifications }, request, url, response);
+        dispatch(supervisor, options, request, response);
     };
+}
+function isAllowedHost(hosts: Set<string>, request: IncomingMessage): boolean {
+    return hosts.has(request.headers.host ?? '');
+}
+function requestUrl(request: IncomingMessage): URL {
+    return new URL(request.url ?? '/', 'http://localhost');
+}
+/** Sends a request of an allowed host where it goes: the shutdown, a file of the page, or the API. */
+function dispatch(supervisor: Supervisor, options: DashboardOptions & { webRoot: string }, request: IncomingMessage, response: ServerResponse): void {
+    const url = requestUrl(request);
+    if (isShutdown(request, url.pathname, options)) {
+        send(response, 202, {});
+        options.shutdown?.onRequest();
+        return;
+    }
+    if (!url.pathname.startsWith('/api/')) {
+        void serveStatic(options.webRoot, url.pathname, response);
+        return;
+    }
+    answerApi({ supervisor, settings: options.settings, notifications: options.notifications }, request, url, response);
 }
 /** Answers an API request with what its route gives, or with the error it fails with. */
 function answerApi(context: Context, request: IncomingMessage, url: URL, response: ServerResponse): void {
@@ -528,13 +594,16 @@ function parseClientMessage(data: string): ClientMessage | undefined {
 function replayMissed(supervisor: Supervisor, socket: WebSocket, message: ClientMessage): Map<string, number> {
     const last = new Map<string, number>();
     for (const agent of supervisor.agents()) {
-        const since = Number(message.since?.[agent.id] ?? 0);
-        for (const event of supervisor.history(agent.id, since)) {
+        for (const event of supervisor.history(agent.id, sinceOf(message, agent.id))) {
             post(socket, { type: 'event', event });
             last.set(agent.id, event.seq);
         }
     }
     return last;
+}
+/** The number of the last event of the agent the page has seen; 0 when it has seen none. */
+function sinceOf(message: ClientMessage, agentId: string): number {
+    return Number(message.since?.[agentId] ?? 0);
 }
 /** Delivers what was held back while the page caught up, except the events it has already been sent. */
 function deliverHeld(
@@ -543,10 +612,14 @@ function deliverHeld(
     deliver: (notice: SupervisorNotice) => void
 ): void {
     for (const notice of held.splice(0)) {
-        if (notice.type !== 'event' || notice.event.seq > (last.get(notice.event.agentId) ?? 0)) {
+        if (isUnseen(notice, last)) {
             deliver(notice);
         }
     }
+}
+/** Whether the page has not been sent this notice yet: any notice but an event it got replayed. */
+function isUnseen(notice: SupervisorNotice, last: ReadonlyMap<string, number>): boolean {
+    return notice.type !== 'event' || notice.event.seq > (last.get(notice.event.agentId) ?? 0);
 }
 function hostOf(origin: string): string {
     try {
@@ -557,10 +630,7 @@ function hostOf(origin: string): string {
 }
 function upgradeHandler(supervisor: Supervisor, hosts: Set<string>, sockets: WebSocketServer) {
     return (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
-        const path = new URL(request.url ?? '/', 'http://localhost').pathname;
-        // Browsers let any site open a socket to localhost; the Origin header is what tells them apart.
-        const origin = request.headers.origin;
-        if (path !== '/ws' || !hosts.has(request.headers.host ?? '') || (origin !== undefined && !hosts.has(hostOf(origin)))) {
+        if (!mayUpgrade(request, hosts)) {
             socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
             return;
         }
@@ -568,6 +638,14 @@ function upgradeHandler(supervisor: Supervisor, hosts: Set<string>, sockets: Web
             attachPage(supervisor, page);
         });
     };
+}
+/** Whether a page of an allowed host asks for the socket at `/ws`. */
+function mayUpgrade(request: IncomingMessage, hosts: Set<string>): boolean {
+    return requestUrl(request).pathname === '/ws' && isAllowedHost(hosts, request) && isAllowedOrigin(hosts, request.headers.origin);
+}
+/** Browsers let any site open a socket to localhost; the Origin header is what tells them apart. */
+function isAllowedOrigin(hosts: Set<string>, origin: string | undefined): boolean {
+    return origin === undefined || hosts.has(hostOf(origin));
 }
 function listen(server: Server, host: string, port: number): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -585,14 +663,13 @@ function listen(server: Server, host: string, port: number): Promise<number> {
  * @throws The listen error — `EADDRINUSE` when the port is taken.
  */
 async function startDashboard(supervisor: Supervisor, options: DashboardOptions = {}): Promise<Dashboard> {
-    const host = options.host ?? DEFAULT_HOST;
-    const webRoot = normalize(options.webRoot ?? DEFAULT_WEB_ROOT);
+    const { host, port: wanted, webRoot } = placeOf(options);
     const sockets = new WebSocketServer({ noServer: true });
     let hosts = new Set<string>();
     const server = createServer((request, response) =>
         requestHandler(supervisor, hosts, { ...options, webRoot })(request, response));
     server.on('upgrade', (request, socket, head) => upgradeHandler(supervisor, hosts, sockets)(request, socket, head));
-    const port = await listen(server, host, options.port ?? DEFAULT_PORT);
+    const port = await listen(server, host, wanted);
     hosts = allowedHosts(host, port);
     return {
         url: `http://${host}:${port}/`,
@@ -600,6 +677,14 @@ async function startDashboard(supervisor: Supervisor, options: DashboardOptions 
         close: async () => {
             await closeDashboard(server, sockets);
         }
+    };
+}
+/** Where the dashboard listens and what page it serves: the options, or the defaults. */
+function placeOf(options: DashboardOptions): { host: string; port: number; webRoot: string } {
+    return {
+        host: options.host ?? DEFAULT_HOST,
+        port: options.port ?? DEFAULT_PORT,
+        webRoot: normalize(options.webRoot ?? DEFAULT_WEB_ROOT)
     };
 }
 /** Tells the pages the dashboard is going away, closes their sockets and stops listening. */

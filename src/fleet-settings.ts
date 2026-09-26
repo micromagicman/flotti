@@ -66,15 +66,16 @@ type FleetSettingsOptions = {
 function isObject(value: unknown): value is Fields {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+/** Each a kind of value the page may leave out. */
+const BLANK_TESTS: ReadonlyArray<(value: unknown) => boolean> = [
+    (value) => value === undefined || value === null || value === false,
+    (value) => typeof value === 'string' && value.trim() === '',
+    (value) => Array.isArray(value) && value.length === 0,
+    (value) => isObject(value) && (Object.keys(value).length === 0 || value['type'] === 'none')
+];
 /** What the page may leave out: an empty field, list or map — or `false` — is a field left out of the file. */
 function isBlank(value: unknown): boolean {
-    return value === undefined
-        || value === null
-        || value === false
-        || (typeof value === 'string' && value.trim() === '')
-        || (Array.isArray(value) && value.length === 0)
-        || (isObject(value) && Object.keys(value).length === 0)
-        || (isObject(value) && value['type'] === 'none');
+    return BLANK_TESTS.some((test) => test(value));
 }
 function invalid(message: string): ConfigurationError {
     return new ConfigurationError('wrong-type', message);
@@ -84,30 +85,49 @@ function agentBody(body: unknown): { kind: Agent['kind']; id: string; fields: Fi
     if (!isObject(body)) {
         throw invalid('The agent must be a JSON object.');
     }
-    const { kind, id, systemPrompt } = body;
+    const kind = agentKind(body['kind']);
+    const id = agentId(body['id']);
+    const systemPrompt = optionalPrompt(body['systemPrompt']);
+    return { kind, id, fields: body, ...(systemPrompt === undefined ? {} : { systemPrompt }) };
+}
+function agentKind(kind: unknown): Agent['kind'] {
     if (kind !== 'local' && kind !== 'remote') {
         throw invalid('kind must be "local" or "remote".');
     }
+    return kind;
+}
+/** The id of an agent, trimmed; it must be there. */
+function agentId(id: unknown): string {
     if (typeof id !== 'string' || id.trim() === '') {
         throw new ConfigurationError('missing-field', 'id is missing: every agent needs one, it names its directory.');
     }
+    return id.trim();
+}
+function optionalPrompt(systemPrompt: unknown): string | undefined {
     if (systemPrompt !== undefined && typeof systemPrompt !== 'string') {
         throw invalid('systemPrompt must be text.');
     }
-    return { kind, id: id.trim(), fields: body, ...(systemPrompt === undefined ? {} : { systemPrompt }) };
+    return systemPrompt;
 }
+/** The manifest fields the page edits, by the kind of agent. */
+const FIELDS_OF: Readonly<Record<Agent['kind'], readonly string[]>> = { local: LOCAL_FIELDS, remote: REMOTE_FIELDS };
+/** The directory of the fleet the agents of a kind live in. */
+const DIRECTORY_OF: Readonly<Record<Agent['kind'], string>> = { local: LOCAL_DIRECTORY, remote: REMOTE_DIRECTORY };
 /** The manifest to write: what the file had, with every field the page edits set or left out. */
 function manifestFrom(kind: Agent['kind'], fields: Fields, kept: Fields): Fields {
     const manifest: Fields = { ...kept };
-    for (const field of kind === 'local' ? LOCAL_FIELDS : REMOTE_FIELDS) {
-        const value = fields[field];
-        if (isBlank(value)) {
-            delete manifest[field];
-        } else {
-            manifest[field] = typeof value === 'string' ? value.trim() : value;
-        }
+    for (const field of FIELDS_OF[kind]) {
+        setField(manifest, field, fields[field]);
     }
     return manifest;
+}
+/** Sets a field of the manifest, trimmed, or leaves it out when it is blank. */
+function setField(manifest: Fields, field: string, value: unknown): void {
+    if (isBlank(value)) {
+        delete manifest[field];
+    } else {
+        manifest[field] = typeof value === 'string' ? value.trim() : value;
+    }
 }
 function readJson(path: string): Fields {
     let value: unknown;
@@ -177,10 +197,13 @@ function sshPlace(target: string): SshTarget {
 }
 /** The remote agent of the fleet that already reaches the published agent over SSH, if there is one. */
 function alreadyInFleet(fleet: readonly Agent[], place: SshTarget, agent: PublishedAgent): Agent | undefined {
-    return fleet.find((member) => member.kind === 'remote'
-        && member.ssh !== undefined
+    return fleet.find((member) => member.kind === 'remote' && reachesOverSsh(member, place, agent));
+}
+/** Whether the remote agent is the published agent, reached over SSH at the same place. */
+function reachesOverSsh(member: RemoteAgent, place: SshTarget, agent: PublishedAgent): boolean {
+    return member.ssh !== undefined
         && sameDestination(member.ssh.target, place)
-        && (member.ssh.agent ?? agent.id) === agent.id);
+        && (member.ssh.agent ?? agent.id) === agent.id;
 }
 /** @throws ConfigurationError when every agent the host publishes was in the fleet already. */
 function requireAdded(added: readonly AgentSummary[], present: readonly string[], place: SshTarget): void {
@@ -193,18 +216,25 @@ function requireAdded(added: readonly AgentSummary[], present: readonly string[]
 }
 /** The path of a request to switch the fleet directory: absolute, or starting with `~`, trimmed. */
 function fleetPath(body: unknown): string {
-    const { path } = (isObject(body) ? body : {}) as { path?: unknown };
-    if (typeof path !== 'string' || path.trim() === '') {
-        throw new ConfigurationError('missing-field', 'path is missing: name the fleet directory.');
-    }
-    const given = path.trim();
-    if (!isAbsolute(given) && given !== '~' && !given.startsWith('~/') && !given.startsWith('~\\')) {
+    const given = requiredPath(body);
+    if (!isAbsolute(given) && !startsAtHome(given)) {
         throw new ConfigurationError(
             'invalid-argument',
             `"${given}" is a relative path; give an absolute one, or one starting with ~`
         );
     }
     return given;
+}
+/** The `path` of the request, trimmed; it must be there. */
+function requiredPath(body: unknown): string {
+    const path = isObject(body) ? body['path'] : undefined;
+    if (typeof path !== 'string' || path.trim() === '') {
+        throw new ConfigurationError('missing-field', 'path is missing: name the fleet directory.');
+    }
+    return path.trim();
+}
+function startsAtHome(path: string): boolean {
+    return path === '~' || path.startsWith('~/') || path.startsWith('~\\');
 }
 /** @throws ConfigurationError when something that is not a directory is at the path. */
 function requireFleetDirectory(target: string): void {
@@ -234,16 +264,22 @@ function writeSystemPrompt(directory: string, prompt: string | undefined): void 
 /** The manifest as the file says it, for the page to edit: defaults are not filled in. */
 function readConfig(agent: Agent): AgentConfig {
     const fields = readJson(agent.manifestPath);
-    const common = {
+    const common = commonConfig(agent, fields);
+    return agent.kind === 'remote' ? remoteConfig(agent, fields, common) : localConfig(agent, fields, common);
+}
+/** What the config of the agent has whatever its kind. */
+function commonConfig(agent: Agent, fields: Fields): CommonConfig {
+    return {
         id: agent.id,
-        ...(pick<string>(fields, 'name', isString) === undefined ? {} : { name: fields['name'] as string }),
-        ...(pick<string>(fields, 'description', isString) === undefined ? {} : { description: fields['description'] as string }),
+        ...textField(fields, 'name'),
+        ...textField(fields, 'description'),
         ...(agent.admin === true ? { admin: true } : {})
     };
-    if (agent.kind === 'remote') {
-        return remoteConfig(agent, fields, common);
-    }
-    return localConfig(agent, fields, common);
+}
+/** `{ [name]: text }` when the field is text; nothing otherwise. */
+function textField<K extends string>(fields: Fields, name: K): { [P in K]?: string } {
+    const value = pick<string>(fields, name, isString);
+    return value === undefined ? {} : ({ [name]: value } as { [P in K]?: string });
 }
 /** {@link readConfig} of a remote agent. */
 function remoteConfig(agent: RemoteAgent, fields: Fields, common: CommonConfig): RemoteAgentConfig {
@@ -258,12 +294,7 @@ function remoteConfig(agent: RemoteAgent, fields: Fields, common: CommonConfig):
 }
 /** {@link readConfig} of a local agent. */
 function localConfig(agent: Agent, fields: Fields, common: CommonConfig): LocalAgentConfig {
-    const optional: Fields = {};
-    for (const field of LOCAL_FIELDS) {
-        if (field !== 'name' && field !== 'description' && field !== 'command' && field !== 'admin' && fields[field] !== undefined) {
-            optional[field] = fields[field];
-        }
-    }
+    const optional = optionalFields(fields);
     const systemPrompt = readText(join(agent.directory, SYSTEM_PROMPT_FILE));
     return {
         kind: 'local',
@@ -272,6 +303,34 @@ function localConfig(agent: Agent, fields: Fields, common: CommonConfig): LocalA
         command: pick<string>(fields, 'command', isString) ?? '',
         ...(systemPrompt === undefined ? {} : { systemPrompt })
     } as LocalAgentConfig;
+}
+/** Fields of a local agent the config has under names of its own. */
+const OWN_FIELDS: ReadonlySet<string> = new Set(['name', 'description', 'command', 'admin']);
+/** The fields of a local manifest the config carries as they are. */
+function optionalFields(fields: Fields): Fields {
+    const optional: Fields = {};
+    for (const field of LOCAL_FIELDS) {
+        if (!OWN_FIELDS.has(field) && fields[field] !== undefined) {
+            optional[field] = fields[field];
+        }
+    }
+    return optional;
+}
+/** What pins the fleet directory for this run: the command line or the environment, or nothing. */
+function pinnedByOf(source: FleetLocation['source']): FleetInfo['pinnedBy'] {
+    return source === 'argument' || source === 'environment' ? source : undefined;
+}
+/** A prompt worth a file: one with more than spaces in it. */
+function promptOf(systemPrompt: string | undefined): string | undefined {
+    return systemPrompt !== undefined && systemPrompt.trim() !== '' ? systemPrompt : undefined;
+}
+/** The base with the first number from 2 up that makes a name not yet taken. */
+function firstFree(base: string, taken: (candidate: string) => boolean): string {
+    let number = 2;
+    while (taken(`${base}-${number}`)) {
+        number++;
+    }
+    return `${base}-${number}`;
 }
 /**
  * The settings page at work: agents added, changed and removed by writing
@@ -287,8 +346,7 @@ class FleetSettings {
     constructor(fleet: Fleet, private readonly supervisor: Supervisor, private readonly options: FleetSettingsOptions = {}) {
         this.location = fleet.location;
         this.env = options.env ?? process.env;
-        const source = fleet.location.source;
-        this.pinnedBy = source === 'argument' || source === 'environment' ? source : undefined;
+        this.pinnedBy = pinnedByOf(fleet.location.source);
     }
     /** The fleet directory this run works with, and where it came from. */
     info(): FleetInfo {
@@ -390,19 +448,14 @@ class FleetSettings {
     }
     /** The id itself when it is free, else the id with the host, else with a number. */
     private freeId(id: string, host: string): string {
-        const taken = (candidate: string) => this.supervisor.agents().some((agent) => agent.id === candidate)
-            || [LOCAL_DIRECTORY, REMOTE_DIRECTORY].some((group) => exists(join(this.location.path, group, candidate)));
+        const taken = (candidate: string): boolean => this.isTaken(candidate);
         const withHost = `${id}-${host.replace(/[^A-Za-z0-9._-]/g, '-')}`;
-        for (const candidate of [id, withHost]) {
-            if (AGENT_ID.test(candidate) && !taken(candidate)) {
-                return candidate;
-            }
-        }
-        for (let number = 2; ; number++) {
-            if (!taken(`${withHost}-${number}`)) {
-                return `${withHost}-${number}`;
-            }
-        }
+        return [id, withHost].find((candidate) => AGENT_ID.test(candidate) && !taken(candidate)) ?? firstFree(withHost, taken);
+    }
+    /** Whether an agent of the fleet or a directory in it has this id already. */
+    private isTaken(candidate: string): boolean {
+        return this.supervisor.agents().some((agent) => agent.id === candidate)
+            || [LOCAL_DIRECTORY, REMOTE_DIRECTORY].some((group) => exists(join(this.location.path, group, candidate)));
     }
     /**
      * Writes the changed manifest and puts it to work: the agent is restarted
@@ -489,8 +542,8 @@ class FleetSettings {
      * agent directory.
      */
     private write(kind: Agent['kind'], id: string, manifest: Fields, systemPrompt: string | undefined): Agent {
-        const directory = join(this.location.path, kind === 'local' ? LOCAL_DIRECTORY : REMOTE_DIRECTORY, id);
-        const prompt = kind === 'local' && systemPrompt !== undefined && systemPrompt.trim() !== '' ? systemPrompt : undefined;
+        const directory = join(this.location.path, DIRECTORY_OF[kind], id);
+        const prompt = kind === 'local' ? promptOf(systemPrompt) : undefined;
         const context: ManifestContext = {
             id,
             directory,
