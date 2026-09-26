@@ -52,7 +52,6 @@ export default tseslint.config(
         // Not under the limit yet (#119): a file leaves this list once its functions are split.
         files: [
             'src/agent-events.ts',
-            'src/dashboard-server.ts',
             'src/delegations.ts',
             'src/fleet-mcp.ts',
             'src/fleet-settings.ts',
