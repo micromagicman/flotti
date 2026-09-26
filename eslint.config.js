@@ -52,18 +52,14 @@ export default tseslint.config(
         // Not under the limit yet (#119): a file leaves this list once its functions are split.
         files: [
             'src/agent-events.ts',
-            'src/dashboard-server.ts',
             'src/delegations.ts',
             'src/fleet-mcp.ts',
-            'src/fleet-settings.ts',
             'src/fleet.ts',
-            'src/manifest.ts',
             'src/memory-bank.ts',
             'src/memory-store.ts',
             'src/notifications.ts',
             'src/notifier.ts',
             'src/run.ts',
-            'src/settings.ts',
             'src/ssh.ts',
             'src/supervisor.ts',
             'web/src/App.tsx',

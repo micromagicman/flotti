@@ -80,9 +80,15 @@ function readLocalManifest(value: unknown, context: ManifestContext): LocalAgent
 }
 /** Working directory of a local agent: on the SSH host as written, here resolved against the agent directory. */
 function localWorkdir(workdir: string | undefined, ssh: string | undefined, context: ManifestContext): string {
-    return ssh !== undefined
-        ? workdir?.trim() ?? '~'
-        : workdir === undefined ? context.directory : workingDirectory(workdir, context);
+    return ssh !== undefined ? remoteWorkdir(workdir) : hereWorkdir(workdir, context);
+}
+/** Working directory on the SSH host: as written, the home directory there when absent. */
+function remoteWorkdir(workdir: string | undefined): string {
+    return workdir?.trim() ?? '~';
+}
+/** Working directory here: resolved against the agent directory, the agent directory itself when absent. */
+function hereWorkdir(workdir: string | undefined, context: ManifestContext): string {
+    return workdir === undefined ? context.directory : workingDirectory(workdir, context);
 }
 /** Environment, restart and heartbeat of a local agent, and the files of its directory. */
 function localRuntime(fields: Fields, context: ManifestContext) {
@@ -141,32 +147,44 @@ function directUrl(fields: Fields, context: ManifestContext): string {
 }
 /** `"ssh": "user@host"`, or `"ssh": {"target": "user@host", "agent": "<id>"}`. */
 function sshAccess(value: unknown, place: Place): RemoteSsh {
-    const fields: Fields = typeof value === 'string' ? { target: value } : isObject(value) ? value : {};
-    if (typeof value !== 'string' && !isObject(value)) {
-        reject('wrong-type', place.path, `${place.field} must be "user@host" or a JSON object, got ${typeName(value)}`);
-    }
+    const fields = sshFields(value, place);
     const inside = (field: string): Place => ({ field: `${place.field}.${field}`, path: place.path });
     const target = requiredString(fields['target'], inside('target')).trim();
+    checkTarget(target, inside('target'));
+    const agent = publishedAgent(fields['agent'], inside('agent'));
+    return { target, ...(agent === undefined ? {} : { agent }) };
+}
+/** The fields of `ssh`: a string is the target alone. */
+function sshFields(value: unknown, place: Place): Fields {
+    if (typeof value === 'string') {
+        return { target: value };
+    }
+    if (!isObject(value)) {
+        reject('wrong-type', place.path, `${place.field} must be "user@host" or a JSON object, got ${typeName(value)}`);
+    }
+    return value;
+}
+/** `ssh.agent`: the id of an agent the host publishes, when given. */
+function publishedAgent(value: unknown, place: Place): string | undefined {
+    const agent = optionalString(value, place);
+    if (agent !== undefined && !AGENT_ID_PATTERN.test(agent)) {
+        reject('wrong-type', place.path, `${place.field} must be the id of a published agent, got ${shown(agent)}`);
+    }
+    return agent;
+}
+/** @throws ConfigurationError when the target is not `user@host`. */
+function checkTarget(target: string, place: Place): void {
     try {
         parseTarget(target);
     } catch (error) {
-        reject('wrong-type', place.path, `${inside('target').field}: ${(error as Error).message}`);
+        reject('wrong-type', place.path, `${place.field}: ${(error as Error).message}`);
     }
-    const agent = optionalString(fields['agent'], inside('agent'));
-    if (agent !== undefined && !AGENT_ID_PATTERN.test(agent)) {
-        reject('wrong-type', place.path, `${inside('agent').field} must be the id of a published agent, got ${shown(agent)}`);
-    }
-    return { target, ...(agent === undefined ? {} : { agent }) };
 }
 /** `"ssh": "user@host"` of a local agent: the host flotti starts it on. */
 function optionalHost(value: unknown, place: Place): string | undefined {
     const target = optionalString(value, place)?.trim();
     if (target !== undefined) {
-        try {
-            parseTarget(target);
-        } catch (error) {
-            reject('wrong-type', place.path, `${place.field}: ${(error as Error).message}`);
-        }
+        checkTarget(target, place);
     }
     return target;
 }
@@ -202,18 +220,30 @@ function requireSameId(id: string | undefined, context: ManifestContext): void {
     }
 }
 function workingDirectory(workdir: string, context: ManifestContext): string {
-    if (workdir === '~' || workdir.startsWith('~/') || workdir.startsWith('~\\')) {
-        const home = context.env['HOME']?.trim() || context.env['USERPROFILE']?.trim();
-        if (home === undefined || home === '') {
-            reject(
-                'unresolved-home',
-                context.manifestPath,
-                `workdir "${workdir}" starts with "~", but neither HOME nor USERPROFILE is set in the environment`
-            );
-        }
-        return workdir === '~' ? home : join(home, workdir.slice(2));
+    if (startsAtHome(workdir)) {
+        return underHome(workdir, context);
     }
     return isAbsolute(workdir) ? workdir : resolve(context.directory, workdir);
+}
+function startsAtHome(workdir: string): boolean {
+    return workdir === '~' || workdir.startsWith('~/') || workdir.startsWith('~\\');
+}
+/** A working directory given as `~` or `~/…`, in the home directory of the environment. */
+function underHome(workdir: string, context: ManifestContext): string {
+    const home = nonBlank(context.env['HOME']) ?? nonBlank(context.env['USERPROFILE']);
+    if (home === undefined) {
+        reject(
+            'unresolved-home',
+            context.manifestPath,
+            `workdir "${workdir}" starts with "~", but neither HOME nor USERPROFILE is set in the environment`
+        );
+    }
+    return workdir === '~' ? home : join(home, workdir.slice(2));
+}
+/** The value without the spaces around it; nothing when that leaves nothing. */
+function nonBlank(value: string | undefined): string | undefined {
+    const trimmed = value?.trim();
+    return trimmed === '' ? undefined : trimmed;
 }
 /** A field of a manifest: its name and the file it is in. */
 type Place = { readonly field: string; readonly path: string };
@@ -256,20 +286,23 @@ function optionalStringArray(value: unknown, place: Place): string[] {
     });
 }
 function optionalEnvironment(value: unknown, place: Place): Record<string, string> {
-    if (value === undefined) {
-        return {};
-    }
+    return value === undefined ? {} : environment(value, place);
+}
+function environment(value: unknown, place: Place): Record<string, string> {
     if (!isObject(value)) {
         reject('wrong-type', place.path, `${place.field} must be a JSON object, got ${typeName(value)}`);
     }
     const variables: Record<string, string> = {};
     for (const [name, item] of Object.entries(value)) {
-        if (typeof item !== 'string') {
-            reject('wrong-type', place.path, `${place.field}.${name} must be a string, got ${typeName(item)}`);
-        }
-        variables[name] = item;
+        variables[name] = variableValue(item, name, place);
     }
     return variables;
+}
+function variableValue(item: unknown, name: string, place: Place): string {
+    if (typeof item !== 'string') {
+        reject('wrong-type', place.path, `${place.field}.${name} must be a string, got ${typeName(item)}`);
+    }
+    return item;
 }
 function optionalChoice<T extends string>(value: unknown, choices: readonly T[], place: Place): T | undefined {
     if (value === undefined) {
@@ -286,10 +319,13 @@ function optionalPositiveNumber(value: unknown, place: Place): number | undefine
     if (value === undefined) {
         return undefined;
     }
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    if (!isPositiveNumber(value)) {
         reject('wrong-type', place.path, `${place.field} must be a positive number, got ${shown(value)}`);
     }
     return value;
+}
+function isPositiveNumber(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 function requiredUrl(value: unknown, place: Place): string {
     const text = requiredString(value, place);
