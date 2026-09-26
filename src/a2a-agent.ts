@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { AGENT_CARD_PATH, Role, TaskState } from '@a2a-js/sdk';
-import type { AgentCard, Message, Part, StreamResponse, Task, TaskArtifactUpdateEvent } from '@a2a-js/sdk';
+import { Role } from '@a2a-js/sdk';
+import type { Message, Part, StreamResponse, Task, TaskArtifactUpdateEvent, TaskState, TaskStatusUpdateEvent } from '@a2a-js/sdk';
 import {
     ClientFactory,
     ClientFactoryOptions,
@@ -13,7 +13,7 @@ import {
 } from '@a2a-js/sdk/client';
 import type { Client } from '@a2a-js/sdk/client';
 import { AgentEvents, WITHDRAWN, composeText, messageFields } from './agent-events.js';
-import type { AdminAction, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
+import type { AgentEvent, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
 import type { Environment } from './manifest.js';
 import { HealthTracker } from './connection-health.js';
 import type { ConnectionHealth, HealthListener, HealthTrackerOptions } from './connection-health.js';
@@ -23,31 +23,34 @@ import type { RemoteAgent, RemoteAuth } from './types.js';
 import type { AgentSummary } from './dashboard-protocol.js';
 import { roster, rosterEntries } from './fleet-roster.js';
 import type { Roster } from './fleet-roster.js';
-/**
- * A2A extension through which flotti asks a remote agent to restart itself.
- * The agent declares it in `capabilities.extensions` of its card; the contract
- * is in docs/a2a-restart.md.
- */
-const RESTART_EXTENSION = 'https://github.com/micromagicman/flotti/blob/main/docs/a2a-restart.md';
-/**
- * A2A extension through which a remote agent says things of its own — a message
- * nobody asked for, a line about what it is busy with — outside the turns of the
- * dashboard. The contract is in docs/a2a-inbox.md.
- */
-const INBOX_EXTENSION = 'https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md';
-/**
- * A2A extension through which flotti tells a remote agent who is in the fleet:
- * the roster goes with the inbox request, and what changes in it follows as a
- * request of its own, outside any conversation. The contract is in
- * docs/a2a-fleet.md.
- */
-const FLEET_EXTENSION = 'https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md';
-/**
- * A2A extension through which a remote agent names the program that runs it,
- * in `params.harness` of the extension in its card. The contract is in
- * docs/a2a-ssh.md, "Which harness runs the agent".
- */
-const HARNESS_EXTENSION = 'https://github.com/micromagicman/flotti/blob/main/docs/a2a-ssh.md#which-harness-runs-the-agent';
+import { describeError } from './describe-error.js';
+import { cachingCardFetch, cardLocation, cardUrl, describeCard, hearsFleet } from './a2a-card.js';
+import type { A2AAgentInfo } from './a2a-card.js';
+import { inboxParams, senderMarks } from './a2a-inbox.js';
+import type { AdminRequest, SaidParams } from './a2a-inbox.js';
+import {
+    FINAL_STATES,
+    FLEET_EXTENSION,
+    HARNESS_EXTENSION,
+    INBOX_EXTENSION,
+    INTERRUPTED_STATES,
+    REFUSED_STATES,
+    RESTART_EXTENSION,
+    askToRestart,
+    extensionRequest,
+    onPayload,
+    partsText,
+    refusalReason,
+    sendRequest,
+    stateOf,
+    statusMessage,
+    statusMessageId,
+    statusOfTask,
+    stopsTurn,
+    tellFleet,
+    textPart,
+    turnEndReason
+} from './a2a-protocol.js';
 type A2AAgentOptions = {
     /** Where the secrets named by `auth` are read from; defaults to `process.env`. */
     readonly env?: Environment;
@@ -93,32 +96,6 @@ type A2AAgentOptions = {
 };
 /** A round trip that takes longer than this is not measured: the connection says itself when it is gone. */
 const PROBE_TIMEOUT_MS = 10_000;
-/** An action on another agent — or on itself — the agent asked for through the inbox. */
-type AdminRequest = { readonly action: AdminAction; readonly target: string };
-/** What the agent card told about the agent, for the dashboard. */
-type A2AAgentInfo = {
-    readonly name: string;
-    readonly description: string;
-    /** Version of the agent itself, as its card states it. */
-    readonly version: string;
-    /** A2A version flotti speaks to it, sent in the `A2A-Version` header. */
-    readonly protocolVersion: string;
-    /** Whether answers arrive as a stream; otherwise flotti asks for the task every so often. */
-    readonly streaming: boolean;
-    /** Whether the agent can restart itself when asked (the flotti restart extension). */
-    readonly restart: boolean;
-    /** Whether the agent says things of its own through the flotti inbox extension. */
-    readonly inbox: boolean;
-    /** Whether the agent wants the roster of the fleet through the flotti fleet extension. */
-    readonly fleet: boolean;
-    /** The program that runs the agent, as the harness extension of the card names it. */
-    readonly harness?: string;
-    /** Whether the card carries a signature. It is not verified: see README, "Talking to a remote agent". */
-    readonly signed: boolean;
-    /** Names of the security schemes the card declares. */
-    readonly security: readonly string[];
-    readonly skills: readonly { readonly id: string; readonly name: string; readonly description: string }[];
-};
 /** The task a conversation is at, as far as its last event told. */
 type CurrentTask = {
     readonly id: string;
@@ -150,19 +127,32 @@ type TurnDelivery = {
     /** Ends the turn on the dashboard, when the message was delivered at all. */
     readonly end: (reason: string) => void;
 };
-/** An agent card kept between reads. */
-type CachedCard = { body: string; etag: string | null; freshUntil: number };
-/** A turn is over once the agent answered with a message, or its task stopped or paused. */
-const FINAL_STATES: readonly TaskState[] = [
-    TaskState.TASK_STATE_COMPLETED,
-    TaskState.TASK_STATE_FAILED,
-    TaskState.TASK_STATE_CANCELED,
-    TaskState.TASK_STATE_REJECTED
-];
-const INTERRUPTED_STATES: readonly TaskState[] = [
-    TaskState.TASK_STATE_INPUT_REQUIRED,
-    TaskState.TASK_STATE_AUTH_REQUIRED
-];
+/** What the options of an agent set with a number, and what each is when they do not. */
+const TIMING_DEFAULTS = {
+    pollIntervalMs: 2_000,
+    reconnectAttempts: 5,
+    reconnectDelayMs: 500,
+    reconnectDelayMaxMs: 5_000,
+    restartTimeoutMs: 60_000,
+    reopenDelayMaxMs: 30_000,
+    healthIntervalMs: 15_000
+};
+type Timing = { readonly [K in keyof typeof TIMING_DEFAULTS]: number };
+/** The numbers of the options, each defaulted on its own. */
+function timing(options: A2AAgentOptions): Timing {
+    const entries = Object.entries(TIMING_DEFAULTS).map(([key, fallback]) => [key, options[key as keyof Timing] ?? fallback]);
+    return Object.fromEntries(entries) as Timing;
+}
+/** An SSH tunnel for an agent with `ssh` in its manifest; nothing for one without. */
+function sshConnection(agent: RemoteAgent, options: A2AAgentOptions): RemoteConnection | undefined {
+    return agent.ssh === undefined ? undefined : new SshConnection(agent.ssh, options.ssh);
+}
+/** Keeps the health of the connection, when there is one to keep open. */
+function healthTracker(connection: RemoteConnection | undefined, options: A2AAgentOptions): HealthTracker | undefined {
+    return connection === undefined ? undefined : new HealthTracker(options.health);
+}
+/** A failed attempt to catch up with a task that is to be tried again. */
+const TRY_AGAIN = Symbol('try again');
 /** A promise with the way to settle it from outside: the `send` of a message that waits its turn. */
 function settleable(): { delivery: Promise<void>; accepted: () => void; refused: (error: unknown) => void } {
     let accepted!: () => void;
@@ -185,12 +175,8 @@ class A2AAgent implements FleetAgent {
     private readonly env: Environment;
     private readonly fetch: typeof fetch;
     private readonly cardFetch: typeof fetch;
-    private readonly pollIntervalMs: number;
-    private readonly reconnectAttempts: number;
-    private readonly reconnectDelayMs: number;
-    private readonly reconnectDelayMaxMs: number;
-    private readonly restartTimeoutMs: number;
-    private readonly reopenDelayMaxMs: number;
+    /** The pauses, attempts and time limits of this agent, defaults filled in. */
+    private readonly timing: Timing;
     /** The way to the agent that has to be opened first — an SSH tunnel — if there is one. */
     private readonly connection: RemoteConnection | undefined;
     /** What the open connection says about the way to the agent. */
@@ -201,7 +187,6 @@ class A2AAgent implements FleetAgent {
     private readonly tracker: HealthTracker | undefined;
     /** Session the round trip is being measured in. */
     private probing: AbortSignal | undefined;
-    private readonly healthIntervalMs: number;
     /** HTTP client with nothing added: measures the round trip without counting it as the agent's activity. */
     private readonly plainFetch: typeof fetch;
     private readonly events: AgentEvents;
@@ -249,17 +234,16 @@ class A2AAgent implements FleetAgent {
         this.plainFetch = options.fetch ?? globalThis.fetch;
         this.fetch = this.authenticatingFetch(this.plainFetch);
         this.cardFetch = cachingCardFetch(this.fetch);
-        this.pollIntervalMs = options.pollIntervalMs ?? 2_000;
-        this.reconnectAttempts = options.reconnectAttempts ?? 5;
-        this.reconnectDelayMs = options.reconnectDelayMs ?? 500;
-        this.reconnectDelayMaxMs = options.reconnectDelayMaxMs ?? 5_000;
-        this.restartTimeoutMs = options.restartTimeoutMs ?? 60_000;
-        this.reopenDelayMaxMs = options.reopenDelayMaxMs ?? 30_000;
+        this.timing = timing(options);
         this.hooks = options;
-        this.connection = options.connection ?? (agent.ssh === undefined ? undefined : new SshConnection(agent.ssh, options.ssh));
-        this.connection?.onDrop((reason: string) => this.dropped(reason));
-        this.tracker = this.connection === undefined ? undefined : new HealthTracker(options.health);
-        this.healthIntervalMs = options.healthIntervalMs ?? 15_000;
+        this.connection = this.wayTo(agent, options);
+        this.tracker = healthTracker(this.connection, options);
+    }
+    /** The connection to open on the way to the agent, if there is one; its drop is watched. */
+    private wayTo(agent: RemoteAgent, options: A2AAgentOptions): RemoteConnection | undefined {
+        const connection = options.connection ?? sshConnection(agent, options);
+        connection?.onDrop((reason: string) => this.dropped(reason));
+        return connection;
     }
     get status(): AgentStatus {
         return this.currentStatus;
@@ -300,15 +284,19 @@ class A2AAgent implements FleetAgent {
         try {
             await this.connect();
         } catch (error) {
-            this.setStatus('error', describeError(error));
-            if (this.connection !== undefined) {
-                // A tunnel is kept up: a host that is away now is tried again until it is back.
-                void this.keepTrying(describeError(error), 1);
-            }
+            this.startFailed(error);
             throw error;
         }
         this.setStatus('idle');
         this.openInbox();
+    }
+    /** The start failed: the status says why, and a tunnel is tried again. */
+    private startFailed(error: unknown): void {
+        this.setStatus('error', describeError(error));
+        if (this.connection !== undefined) {
+            // A tunnel is kept up: a host that is away now is tried again until it is back.
+            void this.keepTrying(describeError(error), 1);
+        }
     }
     /**
      * A message from another agent carries the sender under the inbox extension
@@ -361,14 +349,22 @@ class A2AAgent implements FleetAgent {
         return true;
     }
     async cancel(): Promise<void> {
-        const task = this.task;
-        if (this.client === undefined || task === undefined || FINAL_STATES.includes(task.state)) {
+        const client = this.client;
+        const task = this.unfinishedTask();
+        if (client === undefined || task === undefined) {
             return;
         }
-        const canceled = await this.client.cancelTask({ tenant: '', id: task.id, metadata: undefined });
-        if (this.task?.id === canceled.id) {
-            this.apply({ payload: { $case: 'task', value: canceled } });
+        this.canceled(await client.cancelTask({ tenant: '', id: task.id, metadata: undefined }));
+    }
+    /** The task as it is once cancelled; shown when the conversation is still at it. */
+    private canceled(task: Task): void {
+        if (this.task?.id === task.id) {
+            this.apply({ payload: { $case: 'task', value: task } });
         }
+    }
+    /** The task the conversation is at, unless it is over. */
+    private unfinishedTask(): CurrentTask | undefined {
+        return this.task !== undefined && !FINAL_STATES.includes(this.task.state) ? this.task : undefined;
     }
     /**
      * A2A asks a person through the task itself — `input-required`, answered by
@@ -385,7 +381,7 @@ class A2AAgent implements FleetAgent {
      */
     async restart(): Promise<void> {
         const client = this.client;
-        const unfinished = this.task !== undefined && !FINAL_STATES.includes(this.task.state) ? this.task : undefined;
+        const unfinished = this.unfinishedTask();
         this.endSession();
         this.forgetConversation();
         if (client === undefined) {
@@ -405,24 +401,20 @@ class A2AAgent implements FleetAgent {
      */
     async clearContext(): Promise<void> {
         const client = this.client;
-        const unfinished = this.task !== undefined && !FINAL_STATES.includes(this.task.state) ? this.task : undefined;
+        const unfinished = this.unfinishedTask();
         if (client === undefined || (unfinished === undefined && !this.inTurn)) {
             this.forgetContext();
             return;
         }
         this.endSession();
         this.forgetContext();
-        if (unfinished !== undefined) {
-            await client.cancelTask({ tenant: '', id: unfinished.id, metadata: undefined }).catch(() => undefined);
-        }
+        await dropTask(client, unfinished);
         this.setStatus('idle');
         this.openInbox();
     }
     /** For an agent that cannot restart: drops the unfinished task, and the conversation starts anew. */
     private async startNewConversation(client: Client, unfinished: CurrentTask | undefined): Promise<void> {
-        if (unfinished !== undefined) {
-            await client.cancelTask({ tenant: '', id: unfinished.id, metadata: undefined }).catch(() => undefined);
-        }
+        await dropTask(client, unfinished);
         this.setStatus('idle', 'new conversation: the agent cannot be restarted remotely');
         this.openInbox();
     }
@@ -469,17 +461,16 @@ class A2AAgent implements FleetAgent {
         if (rewrite === undefined) {
             return input;
         }
-        const url = new URL(input instanceof Request ? input.url : input.toString());
-        const moved = rewrite(url);
+        const moved = rewrite(new URL(requestUrl(input)));
         if (moved === undefined) {
             return input;
         }
-        return input instanceof Request ? new Request(moved, input) : moved.href;
+        return movedRequest(input, moved);
     }
     /** The connection broke by itself: what was in work is lost, and the way is opened again. */
     private dropped(reason: string): void {
         this.tracker?.down();
-        if (this.currentStatus === 'stopped' || this.currentStatus === 'starting' || this.reopening) {
+        if (this.settling) {
             return;
         }
         this.endSession();
@@ -509,13 +500,8 @@ class A2AAgent implements FleetAgent {
     private async reopenUntilBack(reason: string, firstAttempt: number, signal: AbortSignal): Promise<void> {
         let why = reason;
         for (let attempt = firstAttempt; !signal.aborted; attempt++) {
-            if (attempt > 0) {
-                const wait = Math.min(1_000 * 2 ** (attempt - 1), this.reopenDelayMaxMs);
-                this.setStatus('error', `${why}; trying again in ${Math.ceil(wait / 1_000)} s`);
-                await pause(wait, signal);
-                if (signal.aborted) {
-                    return;
-                }
+            if (!await this.waitToReopen(attempt, why, signal)) {
+                return;
             }
             const failure = await this.reopenOnce(why, signal);
             if (failure === undefined) {
@@ -523,6 +509,15 @@ class A2AAgent implements FleetAgent {
             }
             why = failure;
         }
+    }
+    /** The pause before an attempt but the first, growing with each; false once the wait was aborted. */
+    private async waitToReopen(attempt: number, why: string, signal: AbortSignal): Promise<boolean> {
+        if (attempt > 0) {
+            const wait = Math.min(1_000 * 2 ** (attempt - 1), this.timing.reopenDelayMaxMs);
+            this.setStatus('error', `${why}; trying again in ${Math.ceil(wait / 1_000)} s`);
+            await pause(wait, signal);
+        }
+        return !signal.aborted;
     }
     /** One attempt to open the connection again: why it failed, or nothing once it is back. */
     private async reopenOnce(why: string, signal: AbortSignal): Promise<string | undefined> {
@@ -542,16 +537,13 @@ class A2AAgent implements FleetAgent {
     private get reopening(): boolean {
         return this.retrying !== undefined && !this.retrying.aborted;
     }
+    /** Whether the agent is stopped, starting or reopening: a drop now changes nothing. */
+    private get settling(): boolean {
+        return this.currentStatus === 'stopped' || this.currentStatus === 'starting' || this.reopening;
+    }
     private async connect(): Promise<void> {
-        const url = await this.openConnection() ?? this.agent.url;
-        if (this.endpoint?.headers === undefined) {
-            authHeaders(this.agent.auth, this.env);
-        }
-        if (url === undefined) {
-            throw new Error(`Agent ${this.agentId} has neither url nor ssh in its manifest.`);
-        }
+        const location = cardLocation(await this.address());
         const factory = this.clientFactory();
-        const location = cardLocation(url);
         const client = await factory.createFromUrl(location.base, location.path);
         // The extended card, when the agent has one for those who proved themselves.
         const card = await client.getAgentCard({ signal: this.session.signal });
@@ -559,6 +551,25 @@ class A2AAgent implements FleetAgent {
         this.card = describeCard(card, client.protocolVersion);
         this.toldHarness = this.endpoint?.harness ?? this.card.harness;
         this.measureRoundTrips();
+    }
+    /**
+     * The address of the agent: the one the connection gives once open, or the
+     * one of the manifest. The secret is checked first, when the connection
+     * brings no headers of its own.
+     */
+    private async address(): Promise<string> {
+        const url = await this.openConnection() ?? this.agent.url;
+        this.checkSecret();
+        if (url === undefined) {
+            throw new Error(`Agent ${this.agentId} has neither url nor ssh in its manifest.`);
+        }
+        return url;
+    }
+    /** A secret the manifest names but the environment lacks fails the connect, not the first message. */
+    private checkSecret(): void {
+        if (this.endpoint?.headers === undefined) {
+            authHeaders(this.agent.auth, this.env);
+        }
     }
     /** Opens the connection, when there is one: the address it gives, or nothing without one. */
     private async openConnection(): Promise<string | undefined> {
@@ -583,7 +594,7 @@ class A2AAgent implements FleetAgent {
         void (async () => {
             while (!signal.aborted) {
                 await this.measureRoundTrip(signal);
-                await pause(this.healthIntervalMs, signal);
+                await pause(this.timing.healthIntervalMs, signal);
             }
         })();
     }
@@ -593,17 +604,21 @@ class A2AAgent implements FleetAgent {
         if (endpoint === undefined) {
             return;
         }
-        const location = cardLocation(endpoint.url);
-        const card = location.path === '' ? location.base : new URL(location.path, location.base).href;
+        const took = await this.roundTrip(cardUrl(endpoint.url), signal);
+        if (took !== undefined) {
+            this.tracker?.latency(took);
+        }
+    }
+    /** Milliseconds the card at `card` took to come back; nothing when it did not, or the wait was aborted. */
+    private async roundTrip(card: string, signal: AbortSignal): Promise<number | undefined> {
         const started = performance.now();
         try {
             const response = await this.plainFetch(this.route(card), { signal: AbortSignal.any([signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]) });
             await response.body?.cancel();
-            if (response.ok && !signal.aborted) {
-                this.tracker?.latency(performance.now() - started);
-            }
+            return answered(response, signal) ? performance.now() - started : undefined;
         } catch {
             // Timed out, refused or cut off: the next round trip, or the drop, will say more.
+            return undefined;
         }
     }
     /** Makes clients for either transport the card may offer, A2A 0.3 agents included. */
@@ -620,20 +635,27 @@ class A2AAgent implements FleetAgent {
     }
     /** Connects again and again until the restarted agent is back or the time is up. */
     private async reconnect(): Promise<void> {
-        const deadline = Date.now() + this.restartTimeoutMs;
+        const deadline = Date.now() + this.timing.restartTimeoutMs;
         const signal = this.session.signal;
         for (let attempt = 0; ; attempt++) {
-            try {
-                await this.connect();
+            if (await this.connectBefore(deadline, signal)) {
                 return;
-            } catch (error) {
-                if (signal.aborted || Date.now() >= deadline) {
-                    throw new Error(`the agent did not come back after the restart: ${describeError(error)}`, {
-                        cause: error
-                    });
-                }
             }
             await pause(this.backoff(attempt), signal);
+        }
+    }
+    /** One attempt to connect to the restarted agent: true once it is back; throws once the time is up. */
+    private async connectBefore(deadline: number, signal: AbortSignal): Promise<boolean> {
+        try {
+            await this.connect();
+            return true;
+        } catch (error) {
+            if (signal.aborted || Date.now() >= deadline) {
+                throw new Error(`the agent did not come back after the restart: ${describeError(error)}`, {
+                    cause: error
+                });
+            }
+            return false;
         }
     }
     /** One message and everything the agent does about it, until the turn is over. */
@@ -684,7 +706,7 @@ class A2AAgent implements FleetAgent {
     ): Promise<void> {
         try {
             await this.exchange(client, message, signal, delivery.deliver);
-            delivery.end(signal.aborted ? 'cancelled' : this.turnEndReason());
+            delivery.end(signal.aborted ? 'cancelled' : turnEndReason(this.task?.state));
         } catch (error) {
             this.turnFailed(error, signal, delivery, refused);
         } finally {
@@ -715,6 +737,10 @@ class A2AAgent implements FleetAgent {
             await this.followStream(client, client.sendMessageStream(sendRequest(message), { signal }), signal, deliver);
             return;
         }
+        await this.sendAndPoll(client, message, signal, deliver);
+    }
+    /** For an agent that cannot stream: sends the message and asks for its task until the turn is over. */
+    private async sendAndPoll(client: Client, message: Message, signal: AbortSignal, deliver: () => void): Promise<void> {
         const result = await client.sendMessage(sendRequest(message), { signal });
         deliver();
         const over = 'messageId' in result
@@ -751,7 +777,7 @@ class A2AAgent implements FleetAgent {
         signal: AbortSignal,
         progress: StreamProgress
     ): Promise<AsyncGenerator<StreamResponse> | undefined> {
-        if (signal.aborted || this.turnIsOver()) {
+        if (this.streamDone(signal)) {
             return undefined;
         }
         const task = this.task;
@@ -768,11 +794,7 @@ class A2AAgent implements FleetAgent {
         progress: StreamProgress
     ): Promise<boolean> {
         try {
-            for await (const event of stream) {
-                if (this.takeEvent(event, deliver, progress)) {
-                    return true;
-                }
-            }
+            return await this.takeStream(stream, deliver, progress);
         } catch (error) {
             // Nothing came back yet: whether the agent got the message is unknown, and
             // guessing a task to reconnect to could pick the previous one.
@@ -780,6 +802,19 @@ class A2AAgent implements FleetAgent {
                 throw error;
             }
             progress.lastError = error;
+        }
+        return false;
+    }
+    /** Whether no stream is to be read any more: the wait was aborted, or the turn is over. */
+    private streamDone(signal: AbortSignal): boolean {
+        return signal.aborted || this.turnIsOver();
+    }
+    /** Takes the events of one stream until it ends; true once an event finished the turn. */
+    private async takeStream(stream: AsyncGenerator<StreamResponse>, deliver: () => void, progress: StreamProgress): Promise<boolean> {
+        for await (const event of stream) {
+            if (this.takeEvent(event, deliver, progress)) {
+                return true;
+            }
         }
         return false;
     }
@@ -804,19 +839,32 @@ class A2AAgent implements FleetAgent {
             if (!await this.waitToCatchUp(task, signal, progress)) {
                 return undefined;
             }
-            try {
-                return await this.resubscribe(client, task, signal);
-            } catch (error) {
-                if (signal.aborted) {
-                    return undefined;
-                }
-                progress.lastError = error;
+            const next = await this.tryResubscribe(client, task, signal, progress);
+            if (next !== TRY_AGAIN) {
+                return next;
             }
+        }
+    }
+    /** One attempt of `catchUp`: what `resubscribe` gives, or `TRY_AGAIN` after a failure the wait survived. */
+    private async tryResubscribe(
+        client: Client,
+        task: CurrentTask,
+        signal: AbortSignal,
+        progress: StreamProgress
+    ): Promise<AsyncGenerator<StreamResponse> | undefined | typeof TRY_AGAIN> {
+        try {
+            return await this.resubscribe(client, task, signal);
+        } catch (error) {
+            if (signal.aborted) {
+                return undefined;
+            }
+            progress.lastError = error;
+            return TRY_AGAIN;
         }
     }
     /** Waits before the next attempt to catch up, giving up after too many; false once the wait was aborted. */
     private async waitToCatchUp(task: CurrentTask, signal: AbortSignal, progress: StreamProgress): Promise<boolean> {
-        if (progress.failures >= this.reconnectAttempts) {
+        if (progress.failures >= this.timing.reconnectAttempts) {
             throw new Error(`lost the stream of task ${task.id}: ${describeError(progress.lastError ?? 'closed early')}`, {
                 cause: progress.lastError
             });
@@ -836,72 +884,59 @@ class A2AAgent implements FleetAgent {
         }
         return client.resubscribeTask({ tenant: '', id: task.id }, { signal });
     }
-    /**
-     * How the turn ended, in the words the event model shares with ACP. A turn
-     * without a task was answered with a message and is simply over.
-     */
-    private turnEndReason(): string {
-        switch (this.task?.state) {
-            case undefined:
-            case TaskState.TASK_STATE_COMPLETED:
-                return 'end_turn';
-            case TaskState.TASK_STATE_CANCELED:
-                return 'cancelled';
-            case TaskState.TASK_STATE_REJECTED:
-                return 'refusal';
-            case TaskState.TASK_STATE_INPUT_REQUIRED:
-                return 'input_required';
-            case TaskState.TASK_STATE_AUTH_REQUIRED:
-                return 'auth_required';
-            default:
-                return 'error';
-        }
-    }
     /** Whether the task of the turn has stopped or paused. */
     private turnIsOver(): boolean {
         const state = this.task?.state;
-        return state !== undefined && (FINAL_STATES.includes(state) || INTERRUPTED_STATES.includes(state));
+        return state !== undefined && stopsTurn(state);
     }
     /** For an agent that cannot stream: asks for the task until the turn is over. */
     private async poll(client: Client, signal: AbortSignal): Promise<void> {
-        let failures = 0;
+        const polling = { failures: 0 };
         while (!signal.aborted) {
-            await pause(this.pollIntervalMs, signal);
-            const task = this.task;
-            if (signal.aborted || task === undefined) {
+            await pause(this.timing.pollIntervalMs, signal);
+            if (await this.pollOnce(client, signal, polling)) {
                 return;
             }
-            try {
-                if (this.apply({ payload: { $case: 'task', value: await client.getTask({ tenant: '', id: task.id }, { signal }) } })) {
-                    return;
-                }
-                failures = 0;
-            } catch (error) {
-                if (signal.aborted || ++failures > this.reconnectAttempts) {
-                    throw error;
-                }
-            }
+        }
+    }
+    /** Asks for the task once; true when the turn is over or there is nothing to ask for any more. */
+    private async pollOnce(client: Client, signal: AbortSignal, polling: { failures: number }): Promise<boolean> {
+        const task = this.task;
+        if (signal.aborted || task === undefined) {
+            return true;
+        }
+        try {
+            const over = this.apply({ payload: { $case: 'task', value: await client.getTask({ tenant: '', id: task.id }, { signal }) } });
+            polling.failures = 0;
+            return over;
+        } catch (error) {
+            this.pollFailed(error, signal, polling);
+            return false;
+        }
+    }
+    /** A failed ask for the task is tried again, up to `reconnectAttempts` in a row; then it throws. */
+    private pollFailed(error: unknown, signal: AbortSignal, polling: { failures: number }): void {
+        if (signal.aborted || ++polling.failures > this.timing.reconnectAttempts) {
+            throw error;
         }
     }
     /** Turns one A2A event into dashboard events; tells whether the turn is over. */
     private apply(event: StreamResponse): boolean {
         this.tracker?.activity();
-        const payload = event.payload;
-        switch (payload?.$case) {
-            case 'message':
-                return this.applyMessage(payload.value);
-            case 'task':
-                return this.applyTask(payload.value);
-            case 'statusUpdate': {
-                this.contextId = payload.value.contextId || this.contextId;
-                return this.track(payload.value.taskId, payload.value.status);
+        return onPayload(event, {
+            message: message => this.applyMessage(message),
+            task: task => this.applyTask(task),
+            statusUpdate: update => this.applyStatusUpdate(update),
+            artifactUpdate: update => {
+                this.showArtifactUpdate(update);
+                return false;
             }
-            case 'artifactUpdate':
-                this.showArtifactUpdate(payload.value);
-                return false;
-            default:
-                return false;
-        }
+        }, false);
+    }
+    /** The task changed its state: tracked as the task of the turn. */
+    private applyStatusUpdate(update: TaskStatusUpdateEvent): boolean {
+        this.contextId = update.contextId || this.contextId;
+        return this.track(update.taskId, update.status);
     }
     /** The agent answered with a message: the turn is over, with no task. */
     private applyMessage(message: Message): boolean {
@@ -943,23 +978,25 @@ class A2AAgent implements FleetAgent {
      */
     private isStale(task: Task): boolean {
         const answering = this.answering;
-        return answering !== undefined
-            && task.id === answering.id
-            && task.status?.state === answering.state
-            && (task.status?.message?.messageId ?? '') === answering.statusMessageId;
+        return answering !== undefined && pausedOn(task, answering);
     }
     private track(taskId: string, status: Task['status']): boolean {
-        const state = status?.state ?? TaskState.TASK_STATE_UNSPECIFIED;
-        this.task = { id: taskId, state, statusMessageId: status?.message?.messageId ?? '' };
+        const state = stateOf(status);
+        this.task = { id: taskId, state, statusMessageId: statusMessageId(status) };
         this.answering = undefined;
-        if (status?.message !== undefined) {
-            this.showMessage(status.message);
+        const message = statusMessage(status);
+        if (message !== undefined) {
+            this.showMessage(message);
         }
+        this.showTaskState(state);
+        return stopsTurn(state);
+    }
+    /** The status of the agent follows the state of the task, when the state says something. */
+    private showTaskState(state: TaskState): void {
         const shown = statusOfTask(state);
         if (shown !== undefined) {
             this.setStatus(shown.status, shown.reason);
         }
-        return FINAL_STATES.includes(state) || INTERRUPTED_STATES.includes(state);
     }
     // --- the inbox: what the agent says of its own ----------------------------------------------------------
     /**
@@ -968,10 +1005,15 @@ class A2AAgent implements FleetAgent {
      */
     private openInbox(): void {
         const client = this.client;
-        if (client === undefined || this.card?.inbox !== true) {
+        const card = this.card;
+        if (client === undefined || card?.inbox !== true) {
             return;
         }
-        if (!this.card.streaming) {
+        this.followInboxOf(client, card);
+    }
+    /** Keeps the inbox open when the agent can stream; says so when it cannot. */
+    private followInboxOf(client: Client, card: A2AAgentInfo): void {
+        if (!card.streaming) {
             this.log('the agent offers the inbox but cannot stream: what it says of its own will not show here');
             return;
         }
@@ -984,34 +1026,45 @@ class A2AAgent implements FleetAgent {
      */
     private async followInbox(client: Client, signal: AbortSignal): Promise<void> {
         const progress: InboxProgress = { taskId: undefined, failures: 0, refused: false };
-        let lastError: unknown;
-        while (!signal.aborted && !progress.refused) {
-            lastError = undefined;
-            try {
-                await this.readInbox(client, progress, signal);
-            } catch (error) {
-                lastError = error;
-            }
-            if (signal.aborted || progress.refused) {
+        while (inboxOpen(signal, progress)) {
+            const lastError = await this.inboxAttempt(client, progress, signal);
+            if (!inboxOpen(signal, progress)) {
                 return;
             }
-            if (progress.failures++ === 0) {
-                this.log(`lost the inbox, reconnecting: ${describeError(lastError ?? 'closed early')}`);
-            }
+            this.inboxLost(lastError, progress);
             await pause(this.backoff(progress.failures - 1), signal);
+        }
+    }
+    /** Reads the inbox until its stream ends: the error it ended with, or nothing. */
+    private async inboxAttempt(client: Client, progress: InboxProgress, signal: AbortSignal): Promise<unknown> {
+        try {
+            await this.readInbox(client, progress, signal);
+            return undefined;
+        } catch (error) {
+            return error;
+        }
+    }
+    /** The stream of the inbox ended: counted, and the first loss in a row is a line in the tab. */
+    private inboxLost(lastError: unknown, progress: InboxProgress): void {
+        if (progress.failures++ === 0) {
+            this.log(`lost the inbox, reconnecting: ${describeError(lastError ?? 'closed early')}`);
         }
     }
     /** Reads one stream of the inbox until it ends. */
     private async readInbox(client: Client, progress: InboxProgress, signal: AbortSignal): Promise<void> {
         const stream = await this.inboxStream(client, progress, signal);
         for await (const event of stream ?? []) {
-            if (progress.failures > 0) {
-                this.log('the inbox is back');
-            }
-            progress.failures = 0;
-            this.tracker?.activity();
-            this.applyInbox(event, progress);
+            this.inboxEvent(event, progress);
         }
+    }
+    /** One event of the inbox: the inbox is back, if it was lost. */
+    private inboxEvent(event: StreamResponse, progress: InboxProgress): void {
+        if (progress.failures > 0) {
+            this.log('the inbox is back');
+        }
+        progress.failures = 0;
+        this.tracker?.activity();
+        this.applyInbox(event, progress);
     }
     /** The stream to read the inbox from: a new inbox, or the one open before; nothing when that one is over. */
     private async inboxStream(
@@ -1059,24 +1112,15 @@ class A2AAgent implements FleetAgent {
     }
     /** Shows one event of the inbox, and learns from it what became of the inbox task. */
     private applyInbox(event: StreamResponse, progress: InboxProgress): void {
-        const payload = event.payload;
-        switch (payload?.$case) {
-            case 'message':
-                this.refuseInbox(payload.value, progress);
-                return;
-            case 'task':
-                this.showTaskContents(payload.value, message => this.inboxMessage(message));
-                this.trackInbox(payload.value.id, payload.value.status, progress);
-                return;
-            case 'statusUpdate':
-                this.trackInbox(payload.value.taskId, payload.value.status, progress);
-                return;
-            case 'artifactUpdate':
-                this.showArtifactUpdate(payload.value);
-                return;
-            default:
-                return;
-        }
+        onPayload(event, {
+            message: message => this.refuseInbox(message, progress),
+            task: task => {
+                this.showTaskContents(task, message => this.inboxMessage(message));
+                this.trackInbox(task.id, task.status, progress);
+            },
+            statusUpdate: update => this.trackInbox(update.taskId, update.status, progress),
+            artifactUpdate: update => this.showArtifactUpdate(update)
+        }, undefined);
     }
     /** The agent answered the inbox request with a message: it keeps no inbox. */
     private refuseInbox(message: Message, progress: InboxProgress): void {
@@ -1086,13 +1130,13 @@ class A2AAgent implements FleetAgent {
     }
     private trackInbox(taskId: string, status: Task['status'], progress: InboxProgress): void {
         progress.taskId = taskId;
-        if (status?.message !== undefined) {
-            this.inboxMessage(status.message);
+        const message = statusMessage(status);
+        if (message !== undefined) {
+            this.inboxMessage(message);
         }
-        const state = status?.state ?? TaskState.TASK_STATE_UNSPECIFIED;
-        if (state === TaskState.TASK_STATE_REJECTED || state === TaskState.TASK_STATE_FAILED) {
-            const why = status?.message === undefined ? '' : `: ${partsText(status.message.parts)}`;
-            this.log(`the agent turned the inbox down${why}`);
+        const state = stateOf(status);
+        if (REFUSED_STATES.includes(state)) {
+            this.log(`the agent turned the inbox down${refusalReason(status)}`);
             progress.refused = true;
         } else if (FINAL_STATES.includes(state)) {
             // Closed by the agent — it is going away, say. The next inbox is a new one.
@@ -1104,21 +1148,31 @@ class A2AAgent implements FleetAgent {
         const params = inboxParams(message);
         if (params.kind === 'admin') {
             this.adminRequest(message.messageId, params.request);
-        } else if (params.cancel !== undefined) {
+            return;
+        }
+        this.inboxSaid(message, params);
+        if (params.busy !== undefined) {
+            this.noteBusyOnItsOwn(params.busy);
+        }
+    }
+    /** What the agent said through the inbox: a task taken back, a line of progress, or a message. */
+    private inboxSaid(message: Message, params: SaidParams): void {
+        if (params.cancel !== undefined) {
             this.events.emit({ type: 'cancel-delegation', delegationId: params.cancel });
         } else if (params.kind === 'progress') {
-            const id = message.messageId || randomUUID();
-            const text = partsText(message.parts);
-            if (!this.shown.has(id) && text !== '') {
-                this.events.emit({ type: 'progress', text });
-            }
-            this.shown.add(id);
+            this.showProgress(message);
         } else {
             this.showMessage(message, params.to, params.task);
         }
-        if (params.kind !== 'admin' && params.busy !== undefined) {
-            this.noteBusyOnItsOwn(params.busy);
+    }
+    /** A line of progress, shown once, whatever repeats it. */
+    private showProgress(message: Message): void {
+        const id = messageIdOf(message);
+        const text = partsText(message.parts);
+        if (!this.shown.has(id) && text !== '') {
+            this.events.emit({ type: 'progress', text });
         }
+        this.shown.add(id);
     }
     /** A request of the agent as an administrator of the fleet: handed over once, whatever repeats it. */
     private adminRequest(messageId: string, request: AdminRequest | undefined): void {
@@ -1126,6 +1180,10 @@ class A2AAgent implements FleetAgent {
             return;
         }
         this.takenRequests.add(messageId);
+        this.handOver(request);
+    }
+    /** Hands a request of an administrator to whatever takes such requests; a line in the tab otherwise. */
+    private handOver(request: AdminRequest | undefined): void {
         if (request === undefined) {
             this.log('the agent asked for an action of an administrator flotti does not know: "action" and "agent" say what and on whom');
         } else if (this.hooks.onAdminRequest === undefined) {
@@ -1137,10 +1195,9 @@ class A2AAgent implements FleetAgent {
     /** The agent said through the inbox whether it is busy on its own: outside a turn the status follows. */
     private noteBusyOnItsOwn(busy: boolean): void {
         this.busyOnItsOwn = busy;
-        if (!this.inTurn && busy && this.currentStatus === 'idle') {
-            this.setStatus('working');
-        } else if (!this.inTurn && !busy && this.currentStatus === 'working') {
-            this.setStatus('idle');
+        const [from, to]: readonly AgentStatus[] = busy ? ['idle', 'working'] : ['working', 'idle'];
+        if (!this.inTurn && this.currentStatus === from) {
+            this.setStatus(to);
         }
     }
     private log(text: string): void {
@@ -1155,7 +1212,7 @@ class A2AAgent implements FleetAgent {
      */
     fleetChanged(): void {
         const client = this.client;
-        if (client === undefined || this.rosterSent === undefined || this.rosterTimer !== undefined || !this.wantsRoster()) {
+        if (client === undefined || !this.rosterDue()) {
             return;
         }
         const signal = this.session.signal;
@@ -1166,7 +1223,11 @@ class A2AAgent implements FleetAgent {
     }
     /** Whether the agent is told who is in the fleet: it declares the extension, and the inbox it goes with. */
     private wantsRoster(): boolean {
-        return this.hooks.fleet !== undefined && this.card?.fleet === true && this.card.inbox && this.card.streaming;
+        return this.hooks.fleet !== undefined && hearsFleet(this.card);
+    }
+    /** Whether a change of the fleet is to be told: the inbox was asked for, and no roster is gathering yet. */
+    private rosterDue(): boolean {
+        return this.rosterSent !== undefined && this.rosterTimer === undefined && this.wantsRoster();
     }
     /** The roster as it is now, with the next version, and its entries as JSON to tell a change by. */
     private nextRoster(): { readonly roster: Roster; readonly key: string } {
@@ -1182,14 +1243,22 @@ class A2AAgent implements FleetAgent {
         try {
             await tellFleet(client, next.roster, signal);
         } catch (error) {
-            if (!signal.aborted) {
-                this.log(`could not tell the agent who is in the fleet: ${describeError(error)}`);
-            }
+            this.rosterFailed(error, signal);
             return;
         }
+        this.rosterTold(next, signal);
+    }
+    /** A roster that did not go out is a line in the tab, unless the session is over. */
+    private rosterFailed(error: unknown, signal: AbortSignal): void {
         if (!signal.aborted) {
-            this.rosterVersion = Math.max(this.rosterVersion, next.roster.version);
-            this.rosterSent = next.key;
+            this.log(`could not tell the agent who is in the fleet: ${describeError(error)}`);
+        }
+    }
+    /** The roster went out: the next one is told only when it differs. */
+    private rosterTold(sent: { readonly roster: Roster; readonly key: string }, signal: AbortSignal): void {
+        if (!signal.aborted) {
+            this.rosterVersion = Math.max(this.rosterVersion, sent.roster.version);
+            this.rosterSent = sent.key;
         }
     }
     /**
@@ -1197,22 +1266,14 @@ class A2AAgent implements FleetAgent {
      * is not for a person, and `task` — when it gives that agent a task.
      */
     private showMessage(message: Message, to?: string, task?: { readonly deadline?: string }): void {
-        const id = message.messageId || randomUUID();
+        const id = messageIdOf(message);
         if (this.shown.has(id)) {
             return;
         }
         this.shown.add(id);
         const text = partsText(message.parts);
         if (text !== '') {
-            this.events.emit({
-                type: 'message',
-                role: 'agent',
-                messageId: id,
-                text,
-                append: false,
-                ...(to === undefined ? {} : { to }),
-                ...(to === undefined || task === undefined ? {} : { delegation: { id, ...task } })
-            });
+            this.events.emit({ type: 'message', role: 'agent', messageId: id, text, append: false, ...addressee(id, to, task) });
         }
     }
     private showArtifact(taskId: string, artifactId: string, parts: readonly Part[], append: boolean): void {
@@ -1228,23 +1289,25 @@ class A2AAgent implements FleetAgent {
      * asked of the person.
      */
     private userMessage(text: string, options: SendOptions): Message {
-        const task = this.task;
-        const waiting = options.from === undefined && task !== undefined && INTERRUPTED_STATES.includes(task.state);
-        const { from, delegation } = options;
-        const body = composeText(text, options, this.agentId);
-        const told = from === undefined || this.card?.inbox === true ? body : `[from ${from}] ${body}`;
-        const params = { ...(from === undefined ? {} : { from }), ...(delegation === undefined ? {} : { task: delegation }) };
-        const marked = from !== undefined || delegation !== undefined;
         return {
             messageId: options.messageId ?? randomUUID(),
             contextId: this.contextId ?? '',
-            taskId: waiting ? task.id : '',
+            taskId: this.answeredTask(options),
             role: Role.ROLE_USER,
-            parts: [textPart(told)],
-            metadata: marked ? { [INBOX_EXTENSION]: params } : undefined,
-            extensions: marked ? [INBOX_EXTENSION] : [],
+            parts: [textPart(this.toldText(text, options))],
+            ...senderMarks(options),
             referenceTaskIds: []
         };
+    }
+    /** The task a message of a person answers, when the task is waiting for one; empty otherwise. */
+    private answeredTask(options: SendOptions): string {
+        const task = this.task;
+        return options.from === undefined && task !== undefined && INTERRUPTED_STATES.includes(task.state) ? task.id : '';
+    }
+    /** The text as the agent gets it: an agent without the inbox is told the sender in front of it. */
+    private toldText(text: string, options: SendOptions): string {
+        const body = composeText(text, options, this.agentId);
+        return options.from === undefined || this.card?.inbox === true ? body : `[from ${options.from}] ${body}`;
     }
     private setStatus(status: AgentStatus, reason?: string): void {
         if (status === this.currentStatus && reason === this.currentReason) {
@@ -1283,22 +1346,8 @@ class A2AAgent implements FleetAgent {
         this.shown.clear();
     }
     private backoff(attempt: number): number {
-        return Math.min(this.reconnectDelayMs * 2 ** attempt, this.reconnectDelayMaxMs);
+        return Math.min(this.timing.reconnectDelayMs * 2 ** attempt, this.timing.reconnectDelayMaxMs);
     }
-}
-/**
- * Where the card is: `<url>/.well-known/agent-card.json`, or the url itself
- * when it names a `.json` file — for agents that keep their card elsewhere.
- */
-function cardLocation(url: string): { readonly base: string; readonly path: string } {
-    const parsed = new URL(url);
-    if (parsed.pathname.endsWith('.json')) {
-        return { base: parsed.href, path: '' };
-    }
-    if (!parsed.pathname.endsWith('/')) {
-        parsed.pathname += '/';
-    }
-    return { base: parsed.href, path: AGENT_CARD_PATH };
 }
 /**
  * Headers that prove flotti to the agent. The secret is read from the
@@ -1321,222 +1370,42 @@ function secret(variable: string, env: Environment): string {
     }
     return value;
 }
-/**
- * Keeps the agent card between reads: while `Cache-Control: max-age` says it
- * is fresh it is not asked for at all, and after that it is asked for with
- * `If-None-Match`, so an unchanged card costs a `304`.
- */
-function cachingCardFetch(base: typeof fetch): typeof fetch {
-    let cached: CachedCard | undefined;
-    return async (input, init) => {
-        if (cached !== undefined && Date.now() < cached.freshUntil) {
-            return replayCard(cached.body);
-        }
-        const response = await base(input, { ...init, headers: revalidatingHeaders(init, cached) });
-        if (response.status === 304 && cached !== undefined) {
-            cached.freshUntil = Date.now() + freshFor(response.headers.get('Cache-Control'));
-            return replayCard(cached.body);
-        }
-        if (!response.ok) {
-            return response;
-        }
-        const body = await response.text();
-        cached = cacheEntry(body, response.headers);
-        return replayCard(body);
-    };
-}
-/** A kept card, answered as if the agent sent it. */
-function replayCard(body: string): Response {
-    return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } });
-}
-/** Headers of a card request; `If-None-Match` when the kept card has an `ETag`. */
-function revalidatingHeaders(init: RequestInit | undefined, cached: CachedCard | undefined): Headers {
-    const headers = new Headers(init?.headers);
-    if (cached?.etag != null) {
-        headers.set('If-None-Match', cached.etag);
-    }
-    return headers;
-}
-/** What to keep of a card just read; nothing when its `Cache-Control` says `no-store`. */
-function cacheEntry(body: string, headers: Headers): CachedCard | undefined {
-    const cacheControl = headers.get('Cache-Control');
-    return /\bno-store\b/i.test(cacheControl ?? '')
-        ? undefined
-        : { body, etag: headers.get('ETag'), freshUntil: Date.now() + freshFor(cacheControl) };
-}
-/** Milliseconds a response stays fresh by its `Cache-Control`; 0 means "check every time". */
-function freshFor(cacheControl: string | null): number {
-    if (cacheControl === null || /\bno-cache\b/i.test(cacheControl)) {
-        return 0;
-    }
-    const maxAge = /\bmax-age=(\d+)/i.exec(cacheControl);
-    return maxAge === null ? 0 : Number(maxAge[1]) * 1_000;
-}
-function describeCard(card: AgentCard, protocolVersion: string): A2AAgentInfo {
-    const harness = cardHarness(card);
-    return {
-        name: card.name,
-        description: card.description,
-        version: card.version,
-        protocolVersion,
-        streaming: card.capabilities?.streaming === true,
-        restart: (card.capabilities?.extensions ?? []).some(extension => extension.uri === RESTART_EXTENSION),
-        inbox: (card.capabilities?.extensions ?? []).some(extension => extension.uri === INBOX_EXTENSION),
-        fleet: (card.capabilities?.extensions ?? []).some(extension => extension.uri === FLEET_EXTENSION),
-        ...(harness === undefined ? {} : { harness }),
-        signed: (card.signatures ?? []).length > 0,
-        security: Object.keys(card.securitySchemes ?? {}),
-        skills: (card.skills ?? []).map(skill => ({ id: skill.id, name: skill.name, description: skill.description }))
-    };
-}
-/** The harness the card names in the harness extension; a missing or empty name is no name. */
-function cardHarness(card: AgentCard): string | undefined {
-    const extension = (card.capabilities?.extensions ?? []).find(item => item.uri === HARNESS_EXTENSION);
-    const harness: unknown = extension?.params?.['harness'];
-    return typeof harness === 'string' && harness.trim() !== '' ? harness : undefined;
-}
-/**
- * Asks the agent to restart itself through the restart extension. Any answer
- * but a failed or rejected task means the agent took the request.
- */
-async function askToRestart(client: Client): Promise<void> {
-    const request = extensionRequest(RESTART_EXTENSION, 'Restart requested by flotti.', { action: 'restart' });
-    const result = await client.sendMessage(sendRequest(request), {
-        serviceParameters: ServiceParameters.create(withA2AExtensions(RESTART_EXTENSION))
-    });
-    if ('messageId' in result) {
-        return;
-    }
-    const state = result.status?.state;
-    if (state === TaskState.TASK_STATE_FAILED || state === TaskState.TASK_STATE_REJECTED) {
-        const why = result.status?.message === undefined ? '' : `: ${partsText(result.status.message.parts)}`;
-        throw new Error(`the agent refused to restart${why}`);
+/** Cancels a task that is not over; a refusal changes nothing, the task is dropped either way. */
+async function dropTask(client: Client, task: CurrentTask | undefined): Promise<void> {
+    if (task !== undefined) {
+        await client.cancelTask({ tenant: '', id: task.id, metadata: undefined }).catch(() => undefined);
     }
 }
-/** Sends the roster of the fleet as a `fleet` request of the fleet extension; the answer says nothing. */
-async function tellFleet(client: Client, fleet: Roster, signal: AbortSignal): Promise<void> {
-    const request = extensionRequest(FLEET_EXTENSION, 'The fleet changed; the roster is in the metadata.', { action: 'fleet', ...fleet });
-    await client.sendMessage(sendRequest(request), {
-        signal,
-        serviceParameters: ServiceParameters.create(withA2AExtensions(FLEET_EXTENSION))
-    });
+/** The address a request goes to. */
+function requestUrl(input: string | URL | Request): string {
+    return input instanceof Request ? input.url : input.toString();
 }
-/**
- * A message that belongs to no conversation and asks something of an extension:
- * the request is in the metadata, under the extension URI; the text is for
- * agents and logs that show messages to people.
- */
-function extensionRequest(uri: string, text: string, params: Record<string, unknown>): Message {
-    return {
-        messageId: randomUUID(),
-        contextId: '',
-        taskId: '',
-        role: Role.ROLE_USER,
-        parts: [textPart(text)],
-        metadata: { [uri]: params },
-        extensions: [uri],
-        referenceTaskIds: []
-    };
+/** The request sent to `moved` instead; a plain address stays a plain address. */
+function movedRequest(input: string | URL | Request, moved: URL): string | Request {
+    return input instanceof Request ? new Request(moved, input) : moved.href;
 }
-/** What an inbox message says of itself under the extension URI. */
-type InboxParams = {
-    readonly kind: 'message' | 'progress';
-    readonly busy?: boolean;
-    readonly to?: string;
-    /** The message gives `to` a task; the id of the task is the id of the message. */
-    readonly task?: { readonly deadline?: string };
-    /** Id of a task the agent gave and takes back. */
-    readonly cancel?: string;
-} | {
-    /** A request of an administrator of the fleet: not a message, so `busy` and `to` are not read with it. */
-    readonly kind: 'admin';
-    readonly request: AdminRequest | undefined;
-};
-/** What an inbox message says of itself under the extension URI; anything else there is ignored. */
-function inboxParams(message: Message): InboxParams {
-    const params: unknown = message.metadata?.[INBOX_EXTENSION];
-    if (typeof params !== 'object' || params === null) {
-        return { kind: 'message' };
+/** Whether the agent answered a round trip, and the answer is still wanted. */
+function answered(response: Response, signal: AbortSignal): boolean {
+    return response.ok && !signal.aborted;
+}
+/** Whether a snapshot shows the task paused on the very question that was asked. */
+function pausedOn(task: Task, asked: CurrentTask): boolean {
+    return task.id === asked.id && task.status?.state === asked.state && statusMessageId(task.status) === asked.statusMessageId;
+}
+/** Whether the inbox is still to be read: the session goes on, and the agent did not turn it down. */
+function inboxOpen(signal: AbortSignal, progress: InboxProgress): boolean {
+    return !signal.aborted && !progress.refused;
+}
+/** The id of a message; one of its own for a message without. */
+function messageIdOf(message: Message): string {
+    return message.messageId || randomUUID();
+}
+/** Who a message of the agent is for, when not for a person, and the task it gives that agent. */
+function addressee(id: string, to?: string, task?: { readonly deadline?: string }): Pick<AgentEvent & { type: 'message' }, 'to' | 'delegation'> {
+    if (to === undefined) {
+        return {};
     }
-    const { kind, busy, to, task, cancel } = params as Record<string, unknown>;
-    if (kind === 'admin') {
-        return { kind, request: adminRequestOf(params as Record<string, unknown>) };
-    }
-    return {
-        kind: kind === 'progress' ? 'progress' : 'message',
-        ...(typeof busy === 'boolean' ? { busy } : {}),
-        ...(typeof to === 'string' && to !== '' ? { to } : {}),
-        ...(typeof task === 'object' && task !== null ? { task: taskParams(task as Record<string, unknown>) } : {}),
-        ...(typeof cancel === 'string' && cancel !== '' ? { cancel } : {})
-    };
-}
-function taskParams(task: Record<string, unknown>): { readonly deadline?: string } {
-    const { deadline } = task;
-    return typeof deadline === 'string' && deadline !== '' ? { deadline } : {};
-}
-/** `"action": "restart" | "clear-context"` on `"agent": "<id>"`; nothing when either is missing or unknown. */
-function adminRequestOf(params: Record<string, unknown>): AdminRequest | undefined {
-    const { action, agent } = params;
-    if ((action !== 'restart' && action !== 'clear-context') || typeof agent !== 'string' || agent === '') {
-        return undefined;
-    }
-    return { action, target: agent };
-}
-function sendRequest(message: Message) {
-    return { tenant: '', message, configuration: undefined, metadata: undefined };
-}
-function textPart(text: string): Part {
-    return { content: { $case: 'text', value: text }, metadata: undefined, filename: '', mediaType: 'text/plain' };
-}
-/** Text of the parts: text as it is, data as JSON, files as a line naming them. */
-function partsText(parts: readonly Part[]): string {
-    return parts.map(part => {
-        const content = part.content;
-        switch (content?.$case) {
-            case 'text':
-                return content.value;
-            case 'data':
-                return `\`\`\`json\n${JSON.stringify(content.value, null, 2)}\n\`\`\``;
-            case 'url':
-                return `[${part.filename || content.value}](${content.value})`;
-            case 'raw':
-                return `[${part.filename || 'file'}, ${part.mediaType || 'binary'}, ${content.value.length} bytes]`;
-            default:
-                return '';
-        }
-    }).filter(text => text !== '').join('\n');
-}
-/** How a task state shows on the dashboard; nothing for a state that says nothing. */
-function statusOfTask(state: TaskState): { status: AgentStatus; reason?: string } | undefined {
-    switch (state) {
-        case TaskState.TASK_STATE_SUBMITTED:
-        case TaskState.TASK_STATE_WORKING:
-            return { status: 'working' };
-        case TaskState.TASK_STATE_INPUT_REQUIRED:
-            return { status: 'waiting', reason: 'input required' };
-        case TaskState.TASK_STATE_AUTH_REQUIRED:
-            return { status: 'waiting', reason: 'authentication required' };
-        default:
-            return statusOfStoppedTask(state);
-    }
-}
-/** How a task that stopped shows on the dashboard; nothing for a state that says nothing. */
-function statusOfStoppedTask(state: TaskState): { status: AgentStatus; reason?: string } | undefined {
-    switch (state) {
-        case TaskState.TASK_STATE_COMPLETED:
-            return { status: 'idle' };
-        case TaskState.TASK_STATE_CANCELED:
-            return { status: 'idle', reason: 'canceled' };
-        case TaskState.TASK_STATE_FAILED:
-            return { status: 'error', reason: 'the task failed' };
-        case TaskState.TASK_STATE_REJECTED:
-            return { status: 'error', reason: 'the agent rejected the task' };
-        default:
-            return undefined;
-    }
-}
-function describeError(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
+    return task === undefined ? { to } : { to, delegation: { id, ...task } };
 }
 /** Waits, or stops waiting as soon as the signal is aborted. */
 function pause(ms: number, signal: AbortSignal): Promise<void> {
