@@ -21,8 +21,12 @@ type Environment = Readonly<Record<string, string | undefined>>;
 /** Where the settings live, relative to the home directory. */
 const SETTINGS_PATH = ['.flotti', 'settings.json'] as const;
 function home(env: Environment): string | undefined {
-    const found = env['HOME']?.trim() || env['USERPROFILE']?.trim();
-    return found === undefined || found === '' ? undefined : found;
+    return nonBlank(env['HOME']) ?? nonBlank(env['USERPROFILE']);
+}
+/** The value without the spaces around it; nothing when that leaves nothing. */
+function nonBlank(value: string | undefined): string | undefined {
+    const trimmed = value?.trim();
+    return trimmed === '' ? undefined : trimmed;
 }
 /** Absolute path of the settings file; `undefined` when the environment has no home directory. */
 function settingsFile(env: Environment): string | undefined {
@@ -56,6 +60,8 @@ function readSettingsField(env: Environment, name: string): unknown {
     const text = path === undefined ? undefined : settingsText(path);
     return text === undefined || path === undefined ? undefined : (settingsObject(text, path) as Record<string, unknown>)[name];
 }
+/** What reading a file that is not there fails with. */
+const ABSENT: ReadonlySet<string | undefined> = new Set(['ENOENT', 'ENOTDIR']);
 /**
  * Text of the settings file; `undefined` when there is no file yet.
  *
@@ -66,7 +72,7 @@ function settingsText(path: string): string | undefined {
         return readFileSync(path, 'utf8');
     } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
-        if (code === 'ENOENT' || code === 'ENOTDIR') {
+        if (ABSENT.has(code)) {
             return undefined;
         }
         throw new ConfigurationError('unreadable-file', `Settings could not be read (${code ?? 'unknown error'}): ${path}`, {
@@ -81,17 +87,30 @@ function settingsText(path: string): string | undefined {
  * @throws ConfigurationError when the text is not settings.
  */
 function parseSettings(text: string, path: string): Settings {
-    const { fleet, confirmAdminActions } = settingsObject(text, path) as { fleet?: unknown; confirmAdminActions?: unknown };
-    if (fleet !== undefined && (typeof fleet !== 'string' || fleet.trim() === '')) {
-        throw new ConfigurationError('wrong-type', `${path}: fleet must be a non-empty string`, { path });
-    }
-    if (confirmAdminActions !== undefined && typeof confirmAdminActions !== 'boolean') {
-        throw new ConfigurationError('wrong-type', `${path}: confirmAdminActions must be true or false`, { path });
-    }
+    const fields = settingsObject(text, path) as { fleet?: unknown; confirmAdminActions?: unknown };
+    const fleet = fleetField(fields.fleet, path);
+    const confirmAdminActions = confirmField(fields.confirmAdminActions, path);
     return {
         ...(fleet === undefined ? {} : { fleet }),
         ...(confirmAdminActions === undefined ? {} : { confirmAdminActions })
     };
+}
+/** @throws ConfigurationError when the fleet is there but is not a path. */
+function fleetField(fleet: unknown, path: string): string | undefined {
+    if (fleet !== undefined && !isNonEmptyString(fleet)) {
+        throw new ConfigurationError('wrong-type', `${path}: fleet must be a non-empty string`, { path });
+    }
+    return fleet;
+}
+function isNonEmptyString(value: unknown): value is string {
+    return typeof value === 'string' && value.trim() !== '';
+}
+/** @throws ConfigurationError when `confirmAdminActions` is there but is not true or false. */
+function confirmField(confirmAdminActions: unknown, path: string): boolean | undefined {
+    if (confirmAdminActions !== undefined && typeof confirmAdminActions !== 'boolean') {
+        throw new ConfigurationError('wrong-type', `${path}: confirmAdminActions must be true or false`, { path });
+    }
+    return confirmAdminActions;
 }
 /** @throws ConfigurationError when the text is not a JSON object. */
 function settingsObject(text: string, path: string): object {
@@ -101,10 +120,13 @@ function settingsObject(text: string, path: string): object {
     } catch (error) {
         throw new ConfigurationError('not-json', `${path}: the settings are not valid JSON`, { path, cause: error });
     }
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    if (!isJsonObject(value)) {
         throw new ConfigurationError('wrong-type', `${path}: the settings must be a JSON object`, { path });
     }
     return value;
+}
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 /**
  * Saves the settings, keeping whatever else the file holds. Written to a
@@ -132,8 +154,8 @@ function keptSettings(path: string): Record<string, unknown> {
     let kept: Record<string, unknown> = {};
     try {
         const current: unknown = JSON.parse(readFileSync(path, 'utf8'));
-        if (typeof current === 'object' && current !== null && !Array.isArray(current)) {
-            kept = current as Record<string, unknown>;
+        if (isJsonObject(current)) {
+            kept = current;
         }
     } catch {
         // No file yet, or one we could not read: what we write replaces it.
