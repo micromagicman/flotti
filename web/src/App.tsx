@@ -15,11 +15,12 @@ import type { AgentFeed } from './feed.js';
 import type { Link } from './fleet-state.js';
 import { useAgentColors } from './use-agent-colors.js';
 import { useAttention } from './use-attention.js';
-import type { Permission } from './use-attention.js';
 /** The tab is kept in the address, so a reload opens the same one. */
 const BROADCAST = 'all';
 /** No agent id starts with `_`, so the settings tab cannot hide an agent. */
 const SETTINGS = '_settings';
+/** The settings opened at the agents, to add one (#116). */
+const ADD_AGENT = '_add-agent';
 /** The list of every conversation of agents; a conversation of two has a tab of its own, `_pair:…`. */
 const CONVERSATIONS = '_conversations';
 function tabFromHash(): string {
@@ -36,12 +37,23 @@ function useTab(): [string, (tab: string) => void] {
         window.location.hash = `/${encodeURIComponent(next)}`;
     }];
 }
-/** Offered while the browser has not been told yes or no; a refusal is the person's to undo in the browser. */
-function NotifyButton({ permission, onAsk }: { readonly permission: Permission; readonly onAsk: () => void }) {
+function SettingsIcon() {
+    return (
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
+            <path d="M12.92 6.31 14.87 6.66 14.87 9.34 12.92 9.69 12.67 10.28 13.80 11.91 11.91 13.80 10.28 12.67 9.69 12.92 9.34 14.87 6.66 14.87 6.31 12.92 5.72 12.67 4.09 13.80 2.20 11.91 3.33 10.28 3.08 9.69 1.13 9.34 1.13 6.66 3.08 6.31 3.33 5.72 2.20 4.09 4.09 2.20 5.72 3.33 6.31 3.08 6.66 1.13 9.34 1.13 9.69 3.08 10.28 3.33 11.91 2.20 13.80 4.09 12.67 5.72Z" />
+            <circle cx="8" cy="8" r="2.1" />
+        </svg>
+    );
+}
+/** The settings as an icon, right of the connection status (#116): the name for a screen reader, the tooltip for a mouse. */
+function SettingsButton({ open, onOpen }: { readonly open: boolean; readonly onOpen: () => void }) {
     const t = useT();
-    return permission === 'default'
-        ? <button type="button" className="btn btn-sm notify" onClick={onAsk} title={t.topbar.notifyHint}>{t.topbar.notify}</button>
-        : null;
+    return (
+        <button type="button" className="btn btn-sm btn-ghost icon-btn topbar-settings" aria-label={t.topbar.settings} title={t.topbar.settings}
+            aria-current={open ? 'page' : undefined} onClick={onOpen}>
+            <SettingsIcon />
+        </button>
+    );
 }
 /** What the open tab has shown: the last event of an agent, or how many messages of a conversation. */
 function useSeen(tab: string | undefined, shown: number | undefined): Record<string, number> {
@@ -84,7 +96,7 @@ function useConversations(state: ReturnType<typeof useFleet>[0], tab: string) {
     return { all, open, pair: lanePair !== undefined && lanePair.every((id) => ids.includes(id)) ? lanePair : undefined };
 }
 function isPanelTab(tab: string, pair: unknown): boolean {
-    return tab === BROADCAST || tab === SETTINGS || tab === CONVERSATIONS || pair !== undefined;
+    return tab === BROADCAST || tab === SETTINGS || tab === ADD_AGENT || tab === CONVERSATIONS || pair !== undefined;
 }
 function useAppModel() {
     const [state, dispatch] = useFleet();
@@ -100,14 +112,14 @@ function useAppModel() {
     return { state, dispatch, tab, setTab, attention, colors, conversations, seenSeq, agent, feed, live, quotes, jump };
 }
 type AppModel = ReturnType<typeof useAppModel>;
-function Topbar({ attention, link }: { readonly attention: ReturnType<typeof useAttention>; readonly link: Link }) {
+function Topbar({ link, settingsOpen, onSettings }: { readonly link: Link; readonly settingsOpen: boolean; readonly onSettings: () => void }) {
     const t = useT();
     return (
         <header className="topbar">
             <Logo />
             <span className="topbar-side">
-                <NotifyButton permission={attention.permission} onAsk={attention.askPermission} />
                 <span className={`link link-${link}`} role="status">{t.link[link]}</span>
+                <SettingsButton open={settingsOpen} onOpen={onSettings} />
             </span>
         </header>
     );
@@ -120,9 +132,10 @@ function ConversationMain({ model }: { readonly model: AppModel }) {
         : <ConversationPanel key={tab} pair={conversations.pair} conversation={conversations.open} feeds={state.feeds} quotes={quotes} onOpen={setTab} conversationsId={CONVERSATIONS} {...fleet} />;
 }
 function Main({ model }: { readonly model: AppModel }) {
-    const { state, dispatch, tab, setTab, colors, conversations, agent, feed, live, quotes, jump } = model;
-    if (tab === SETTINGS) {
-        return <main className="main"><SettingsPanel agents={live} /></main>;
+    const { state, dispatch, tab, setTab, attention, colors, conversations, agent, feed, live, quotes, jump } = model;
+    if (tab === SETTINGS || tab === ADD_AGENT) {
+        const notify = { permission: attention.permission, onAsk: attention.askPermission };
+        return <main className="main"><SettingsPanel key={tab} agents={live} notify={notify} atAgents={tab === ADD_AGENT} /></main>;
     }
     if (agent === undefined && (tab === CONVERSATIONS || conversations.pair !== undefined)) {
         return <main className="main"><ConversationMain model={model} /></main>;
@@ -143,15 +156,15 @@ function selectedTab({ tab, agent, conversations }: AppModel): string {
     if (conversations.pair !== undefined) {
         return conversations.open?.id ?? tab;
     }
-    return tab === SETTINGS || tab === CONVERSATIONS ? tab : BROADCAST;
+    return tab === SETTINGS || tab === ADD_AGENT || tab === CONVERSATIONS ? tab : BROADCAST;
 }
 function App() {
     const model = useAppModel();
-    const { state, setTab, attention, colors, conversations, seenSeq } = model;
-    const tabs = { broadcastId: BROADCAST, settingsId: SETTINGS, conversationsId: CONVERSATIONS };
+    const { state, tab, setTab, colors, conversations, seenSeq } = model;
+    const tabs = { broadcastId: BROADCAST, addAgentId: ADD_AGENT, conversationsId: CONVERSATIONS };
     return (
         <div className="app">
-            <Topbar attention={attention} link={state.link} />
+            <Topbar link={state.link} settingsOpen={tab === SETTINGS} onSettings={() => setTab(SETTINGS)} />
             <Sidebar agents={state.agents} feeds={state.feeds} colors={colors} conversations={conversations.all}
                 seenSeq={seenSeq} selected={selectedTab(model)} onSelect={setTab} {...tabs} />
             <Main model={model} />

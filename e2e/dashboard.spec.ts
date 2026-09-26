@@ -139,6 +139,8 @@ test.afterAll(async () => {
 });
 const tab = (page: Page, name: string) => page.getByRole('tab', { name: new RegExp(`^${name}`) });
 const feed = (page: Page, name: string) => page.getByRole('log', { name: `Output of ${name}` });
+/** The settings: an icon in the header, right of the connection status (#116). */
+const settingsButton = (page: Page, name = 'Settings') => page.getByRole('banner').getByRole('button', { name, exact: true });
 async function say(page: Page, name: string, text: string): Promise<void> {
     await tab(page, name).click();
     const field = page.getByRole('textbox', { name: `Message to ${name}` });
@@ -147,7 +149,7 @@ async function say(page: Page, name: string, text: string): Promise<void> {
 }
 test('every agent has a tab with its status', async ({ page }) => {
     await page.goto(url);
-    await expect(page.getByRole('tab')).toHaveText([/All agents/, /claude/, /codex/, /relay/, /Settings/]);
+    await expect(page.getByRole('tab')).toHaveText([/All agents/, /claude/, /codex/, /relay/, /Add agent/]);
     for (const name of ['claude', 'codex', 'relay']) {
         await expect(tab(page, name).locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     }
@@ -733,11 +735,58 @@ test('a waiting agent stands out, counts in the title and notifies while the pag
     await expect(page).toHaveTitle('flotti');
     await expect.poll(() => notifications(page)).toEqual([expect.objectContaining({ closed: true })]);
 });
-test('asks for permission to notify only when the person clicks for it', async ({ page }) => {
+test('asks for permission to notify only when the person ticks Notify me in the settings', async ({ page }) => {
     await page.addInitScript(pretendNotifications, 'default');
     await page.goto(url);
-    await page.getByRole('button', { name: 'Notify me' }).click();
     await expect(page.getByRole('button', { name: 'Notify me' })).toHaveCount(0);
+    await settingsButton(page).click();
+    const notify = page.getByRole('checkbox', { name: 'Notify me' });
+    await expect(notify).not.toBeChecked();
+    await expect(page.getByRole('form', { name: 'Notifications' })).toContainText('A notification when an agent waits for you and flotti is out of sight');
+    await notify.check();
+    await expect(notify).toBeChecked();
+    await expect(notify).toBeDisabled();
+});
+test('Notify me stays unticked and locked when the browser was told no', async ({ page }) => {
+    await page.addInitScript(pretendNotifications, 'denied');
+    await page.goto(`${url}#/_settings`);
+    const notify = page.getByRole('checkbox', { name: 'Notify me' });
+    await expect(notify).not.toBeChecked();
+    await expect(notify).toBeDisabled();
+});
+test('the settings are an icon right of the connection status, and open the settings', async ({ page }) => {
+    await page.goto(url);
+    const settings = settingsButton(page);
+    await expect(settings).toBeVisible();
+    await expect(settings).toHaveText('');
+    await expect(settings).toHaveAttribute('title', 'Settings');
+    await expect(settings.locator('svg')).toBeVisible();
+    const status = await page.getByRole('banner').getByRole('status').boundingBox();
+    const icon = await settings.boundingBox();
+    expect(icon?.x ?? 0).toBeGreaterThanOrEqual((status?.x ?? 0) + (status?.width ?? 0));
+    await expect(page.getByRole('tab', { name: /^Settings/ })).toHaveCount(0);
+    await settings.click();
+    await expect(page.getByRole('heading', { name: 'Fleet settings' })).toBeVisible();
+    await expect(settings).toHaveAttribute('aria-current', 'page');
+});
+test('Add agent stands where the settings were, and leads to adding a local or a remote agent', async ({ page }) => {
+    await page.goto(url);
+    await expect(page.getByRole('tab').last()).toHaveText(/^Add agent/);
+    await tab(page, 'Add agent').click();
+    await expect(tab(page, 'Add agent')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('button', { name: 'Add local agent' })).toBeFocused();
+    await expect(page.getByRole('button', { name: 'Add local agent' })).toBeInViewport();
+    await expect(page.getByRole('button', { name: 'Add remote agent' })).toBeInViewport();
+});
+test('on a narrow screen the settings icon and Add agent are in sight, and the header fits', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(url);
+    await expect(settingsButton(page)).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    await tab(page, 'Add agent').click();
+    await expect(page.getByRole('button', { name: 'Add local agent' })).toBeInViewport();
+    await settingsButton(page).click();
+    await expect(page.getByRole('heading', { name: 'Fleet settings' })).toBeVisible();
 });
 test('the restart button restarts a local agent and starts over with a remote one', async ({ page }) => {
     await page.goto(url);
@@ -770,7 +819,8 @@ test('the language is picked in the settings: the page speaks it at once, and af
     await expect(page.getByRole('log', { name: 'Вывод claude' })).toContainText('you said: hello claude');
     await expect(page.getByRole('textbox', { name: 'Сообщение для claude' })).toBeVisible();
     await expect(page.getByRole('group', { name: 'Вид' }).getByRole('button', { name: 'Память' })).toBeVisible();
-    await page.getByRole('tab', { name: /^Настройки/ }).click();
+    await expect(tab(page, 'Добавить агента')).toBeVisible();
+    await settingsButton(page, 'Настройки').click();
     await page.getByRole('combobox', { name: 'Язык дашборда' }).selectOption('en');
     await expect(page.getByRole('heading', { name: 'Fleet settings' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.lang)).toBe('en');
@@ -851,7 +901,7 @@ test('makes an agent an administrator in the settings; its action waits for a pe
 });
 test('adds a local agent in the settings, with no file edited by hand, and it answers in its tab', async ({ page }) => {
     await page.goto(url);
-    await tab(page, 'Settings').click();
+    await settingsButton(page).click();
     await page.getByRole('button', { name: 'Add local agent' }).click();
     const form = page.getByRole('form', { name: 'New local agent' });
     await field(page, 'Id').fill('helper');
@@ -956,7 +1006,7 @@ test('switches the fleet directory, and saves it for the next run', async ({ pag
     await page.goto(`${url}#/_settings`);
     await field(page, 'Fleet directory path').fill(next);
     await page.getByRole('button', { name: 'Switch' }).click();
-    await expect(page.getByRole('tab')).toHaveText([/All agents/, /newcomer/, /Settings/]);
+    await expect(page.getByRole('tab')).toHaveText([/All agents/, /newcomer/, /Add agent/]);
     await expect(settingsRow(page, 'newcomer').locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     await expect(page.getByRole('form', { name: 'Fleet directory' })).toContainText(`${next} — saved in`);
     const saved = JSON.parse(readFileSync(join(workspace, '.flotti', 'settings.json'), 'utf8')) as { fleet: string };

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { AgentConfig, AgentSummary, FleetInfo } from '../../../src/dashboard-protocol.js';
 import { fromConfig, newDraft } from '../agent-draft.js';
@@ -7,6 +7,7 @@ import { api } from '../api.js';
 import { AgentForm } from './AgentForm.js';
 import { ConnectionHealthView } from './ConnectionHealth.js';
 import { NotificationSettingsSection } from './NotificationSettings.js';
+import type { BrowserNotify } from './NotificationSettings.js';
 import { LanguageSection } from './LanguageSection.js';
 import { StatusBadge } from './StatusBadge.js';
 import { useT } from '../i18n/I18n.js';
@@ -15,6 +16,10 @@ import type { Messages } from '../i18n/en.js';
 type SettingsPanelProps = {
     /** The fleet as the socket says it, with live statuses. */
     readonly agents: readonly AgentSummary[];
+    /** Notifications of this browser: whether it may show them, and the request for it. */
+    readonly notify: BrowserNotify;
+    /** Opened by Add agent (#116): at the agents, the first way to add one in focus. */
+    readonly atAgents?: boolean;
 };
 /** What is being edited: nothing, a new agent of a kind, or an agent of the fleet. */
 type Editing =
@@ -254,8 +259,25 @@ function AgentEditor({ editing, onDone }: { readonly editing: Editing; readonly 
     }
     return <AgentForm initial={draft} isNew={editing.mode === 'new'} onSave={save} onCancel={onDone} />;
 }
-function AgentList({ agents, onEditing }: { readonly agents: readonly AgentSummary[]; readonly onEditing: (editing: Editing) => void }) {
+type AgentListProps = {
+    readonly agents: readonly AgentSummary[];
+    readonly onEditing: (editing: Editing) => void;
+    readonly atAgents: boolean;
+};
+/** The first way to add an agent, in sight and in focus when Add agent opened the settings. */
+function useAddInFocus(atAgents: boolean) {
+    const addFirst = useRef<HTMLButtonElement>(null);
+    useEffect(() => {
+        if (atAgents) {
+            addFirst.current?.scrollIntoView({ block: 'center' });
+            addFirst.current?.focus({ preventScroll: true });
+        }
+    }, [atAgents]);
+    return addFirst;
+}
+function AgentList({ agents, onEditing, atAgents }: AgentListProps) {
     const t = useT();
+    const addFirst = useAddInFocus(atAgents);
     return (
         <div className="settings-section">
             <h2>{t.settings.agentsTitle}</h2>
@@ -266,20 +288,20 @@ function AgentList({ agents, onEditing }: { readonly agents: readonly AgentSumma
                 ))}
             </ul>
             <div className="actions">
-                <button type="button" className="btn" onClick={() => onEditing({ mode: 'new', kind: 'local' })}>{t.settings.addLocal}</button>
+                <button type="button" className="btn" ref={addFirst} onClick={() => onEditing({ mode: 'new', kind: 'local' })}>{t.settings.addLocal}</button>
                 <button type="button" className="btn" onClick={() => onEditing({ mode: 'new', kind: 'remote' })}>{t.settings.addRemote}</button>
             </div>
         </div>
     );
 }
 /** Every section of the settings, the language of the page last. */
-function SettingsSections({ agents, onEditing }: { readonly agents: readonly AgentSummary[]; readonly onEditing: (editing: Editing) => void }) {
+function SettingsSections({ agents, onEditing, notify, atAgents }: AgentListProps & { readonly notify: BrowserNotify }) {
     return (
         <>
             <SshConnect />
             <FleetDirectory />
-            <AgentList agents={agents} onEditing={onEditing} />
-            <NotificationSettingsSection />
+            <AgentList agents={agents} onEditing={onEditing} atAgents={atAgents} />
+            <NotificationSettingsSection notify={notify} />
             <AdminConfirm />
             <LanguageSection />
         </>
@@ -290,14 +312,14 @@ function SettingsSections({ agents, onEditing }: { readonly agents: readonly Age
  * removed, started and stopped. Everything is written to the agent
  * directories, so the files stay the truth and can still be edited by hand.
  */
-function SettingsPanel({ agents }: SettingsPanelProps) {
+function SettingsPanel({ agents, notify, atAgents = false }: SettingsPanelProps) {
     const [editing, setEditing] = useState<Editing>();
     const { settings } = useT();
     return (
         <section className="settings" aria-label={settings.label}>
             <h1>{settings.title}</h1>
             {editing === undefined
-                ? <SettingsSections agents={agents} onEditing={setEditing} />
+                ? <SettingsSections agents={agents} onEditing={setEditing} notify={notify} atAgents={atAgents} />
                 : <AgentEditor editing={editing} onDone={() => setEditing(undefined)} />}
         </section>
     );

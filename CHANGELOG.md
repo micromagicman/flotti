@@ -12,6 +12,9 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 - **No line under every answer.** A turn that ended normally draws nothing in the feed any more; for a
   remote agent every answer is a turn, so a dashed line followed each of its messages. A turn that ended
   for another reason still says why (#115).
+- **Settings as an icon, Add agent in their place.** The settings open from a gear icon right of the connection
+  status; «Notify me» is a checkbox in the Notifications section of the settings; the sidebar ends with
+  **Add agent**, which opens the settings at the agents with Add local agent in focus (#116).
 
 ## [0.4.0] — 2026-09-25
 
