@@ -57,7 +57,6 @@ export default tseslint.config(
             'src/fleet-mcp.ts',
             'src/fleet-settings.ts',
             'src/fleet.ts',
-            'src/local-agent.ts',
             'src/manifest.ts',
             'src/memory-bank.ts',
             'src/memory-store.ts',
