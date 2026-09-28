@@ -9,6 +9,7 @@
  */
 import type { AgentEvent, AgentStatus } from './agent-events.js';
 import type { NotificationEvents } from './dashboard-protocol.js';
+import { describeError } from './describe-error.js';
 import type { SupervisorNotice } from './supervisor.js';
 import type { Agent } from './types.js';
 /** What happened to the agent: which of the switches of {@link NotificationEvents} it falls under. */
@@ -75,9 +76,6 @@ type Watch = {
 const READY: ReadonlySet<AgentStatus> = new Set(['idle', 'working', 'waiting']);
 /** Longest gist a notification carries; the dashboard has the rest. */
 const GIST_LENGTH = 300;
-function describeError(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-}
 function gist(text: string): string {
     const flat = text.replace(/\s+/g, ' ').trim();
     return flat.length > GIST_LENGTH ? `${flat.slice(0, GIST_LENGTH - 1)}…` : flat;
@@ -94,29 +92,73 @@ function classify(agent: Agent, previous: AgentStatus, status: AgentStatus, reas
     if (status === 'waiting') {
         return 'waiting';
     }
-    const fell = (status === 'starting' && READY.has(previous) && reason !== 'restarting') || status === 'error';
-    if (!fell) {
-        return undefined;
-    }
-    const connection = status === 'starting' || /reconnect|trying again|tunnel|ssh/i.test(reason ?? '');
-    return overSsh(agent) && connection ? 'connection' : 'error';
+    return fell(previous, status, reason) ? failure(agent, status, reason) : undefined;
 }
-/** The words of a notification about the agent. */
-function wording(kind: NoticeKind, name: string, watch: Watch, reason: string | undefined): { title: string; body: string } {
-    switch (kind) {
-        case 'waiting': {
-            const asked = watch.permission === undefined ? undefined : `Asks for permission: ${watch.permission}`;
-            return { title: `${name} is waiting for you`, body: gist(asked ?? watch.message?.text ?? reason ?? 'Open flotti to answer.') };
-        }
-        case 'error':
-            return { title: `${name} failed`, body: gist(reason ?? 'The agent stopped with an error.') };
-        case 'connection':
-            return { title: `${name} lost its SSH connection`, body: gist(reason ?? 'flotti is reconnecting.') };
-    }
+/** Whether the agent failed, or dropped from ready back to starting other than by a restart. */
+function fell(previous: AgentStatus, status: AgentStatus, reason: string | undefined): boolean {
+    return status === 'error' || (status === 'starting' && READY.has(previous) && reason !== 'restarting');
+}
+/** Which failure it is: a lost connection of an agent over SSH, or an error. */
+function failure(agent: Agent, status: AgentStatus, reason: string | undefined): NoticeKind {
+    return overSsh(agent) && lostConnection(status, reason) ? 'connection' : 'error';
+}
+function lostConnection(status: AgentStatus, reason: string | undefined): boolean {
+    return status === 'starting' || /reconnect|trying again|tunnel|ssh/i.test(reason ?? '');
+}
+/** Whether this kind is a failure — an error or a lost connection — rather than waiting, or nothing. */
+function isFailure(kind: NoticeKind | undefined): boolean {
+    return kind !== undefined && kind !== 'waiting';
+}
+/** A failure that turns into the other failure: the person has been told already, the open episode goes on. */
+function anotherFailure(open: NoticeKind | undefined, kind: NoticeKind | undefined): boolean {
+    return isFailure(open) && isFailure(kind) && kind !== open;
+}
+/** Whether the new status closes the open episode: it is of another kind, or no episode at all and not a restart. */
+function endsEpisode(open: Episode | undefined, kind: NoticeKind | undefined, status: AgentStatus): boolean {
+    return open !== undefined && (kind === undefined ? status !== 'starting' : kind !== open.kind);
+}
+type Wording = { title: string; body: string };
+/** The words of a notification about the agent, by what happened to it. */
+const WORDINGS: { readonly [K in NoticeKind]: (name: string, watch: Watch, reason: string | undefined) => Wording } = {
+    waiting: (name, watch, reason) => ({ title: `${name} is waiting for you`, body: gist(waitingGist(watch, reason)) }),
+    error: (name, _watch, reason) => ({ title: `${name} failed`, body: gist(reason ?? 'The agent stopped with an error.') }),
+    connection: (name, _watch, reason) => ({ title: `${name} lost its SSH connection`, body: gist(reason ?? 'flotti is reconnecting.') })
+};
+/** What an agent waits for: the permission it asks, else its question, else the reason. */
+function waitingGist(watch: Watch, reason: string | undefined): string {
+    return asked(watch.permission) ?? said(watch, reason);
+}
+/** What the agent last said, else the reason it waits. */
+function said(watch: Watch, reason: string | undefined): string {
+    return watch.message?.text ?? reason ?? 'Open flotti to answer.';
+}
+function asked(permission: string | undefined): string | undefined {
+    return permission === undefined ? undefined : `Asks for permission: ${permission}`;
+}
+function wording(kind: NoticeKind, name: string, watch: Watch, reason: string | undefined): Wording {
+    return WORDINGS[kind](name, watch, reason);
+}
+/** Nothing to send: the settings switch this kind off, or no channel is on. */
+function silent(config: NotifierConfig, kind: NoticeKind): boolean {
+    return !config.events[kind] || config.channels.length === 0;
+}
+/** Whether the settings ask to tell again while the agent still waits. */
+function repeats(config: NotifierConfig, kind: NoticeKind): boolean {
+    return kind === 'waiting' && config.repeatMinutes > 0;
+}
+/** The agent's message with a new piece: added to its end, or a new text. */
+function withPiece(last: Watch['message'], event: AgentEvent & { type: 'message' }): string {
+    return last?.id === event.messageId && event.append ? `${last.text}${event.text}` : event.text;
 }
 /** Address of the dashboard opened on the tab of the agent. */
 function agentUrl(dashboardUrl: string, agentId: string): string {
     return `${dashboardUrl.endsWith('/') ? dashboardUrl : `${dashboardUrl}/`}#/${encodeURIComponent(agentId)}`;
+}
+/** A piece of a message: the agent's own is kept as the question of an agent that may come to wait. */
+function heard(watch: Watch, event: AgentEvent & { type: 'message' }): void {
+    if (event.role === 'agent') {
+        watch.message = { id: event.messageId, text: withPiece(watch.message, event) };
+    }
 }
 /**
  * Watches the events of every agent and notifies over the channels of the
@@ -157,9 +199,8 @@ class Notifier {
         const watch = this.watch(event.agentId);
         if (event.type === 'permission') {
             watch.permission = event.title;
-        } else if (event.type === 'message' && event.role === 'agent') {
-            const same = watch.message?.id === event.messageId && event.append;
-            watch.message = { id: event.messageId, text: same ? `${watch.message?.text ?? ''}${event.text}` : event.text };
+        } else if (event.type === 'message') {
+            heard(watch, event);
         } else if (event.type === 'status') {
             this.follow(event.agentId, watch, event.status, event.reason);
         }
@@ -170,17 +211,24 @@ class Notifier {
         watch.status = status;
         const agent = this.agent(agentId);
         const kind = agent === undefined ? undefined : classify(agent, previous, status, reason);
-        const open = watch.episode;
-        if (open !== undefined && (kind === undefined ? status !== 'starting' : kind !== open.kind)) {
-            if (open.kind !== 'waiting' && kind !== undefined && kind !== 'waiting') {
-                return;
-            }
+        if (anotherFailure(watch.episode?.kind, kind)) {
+            return;
+        }
+        this.settle(watch, kind, status);
+        this.open(agent, watch, kind, reason);
+    }
+    /** The episode that is over ends; a permission is forgotten once the agent stops waiting. */
+    private settle(watch: Watch, kind: NoticeKind | undefined, status: AgentStatus): void {
+        if (endsEpisode(watch.episode, kind, status)) {
             this.end(watch);
         }
         if (status !== 'waiting') {
             watch.permission = undefined;
         }
-        if (kind !== undefined && watch.episode === undefined && agent !== undefined) {
+    }
+    /** A new episode begins when there is something to tell and none is open. */
+    private open(agent: Agent | undefined, watch: Watch, kind: NoticeKind | undefined, reason: string | undefined): void {
+        if (agent !== undefined && kind !== undefined && watch.episode === undefined) {
             this.begin(agent, watch, kind, reason);
         }
     }
@@ -195,7 +243,7 @@ class Notifier {
         const config = this.options.config();
         const episode: Episode = { key: `${agent.id}-${kind}-${++this.episodes}`, kind, channels: [] };
         watch.episode = episode;
-        if (!config.events[kind] || config.channels.length === 0) {
+        if (silent(config, kind)) {
             return;
         }
         const notice = (): Notice => ({
@@ -207,7 +255,7 @@ class Notifier {
         });
         episode.channels.push(...config.channels);
         this.send(episode.channels, notice());
-        if (kind === 'waiting' && config.repeatMinutes > 0) {
+        if (repeats(config, kind)) {
             this.repeat(episode, notice, config.repeatMinutes);
         }
     }
