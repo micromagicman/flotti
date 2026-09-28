@@ -396,6 +396,8 @@ input[type="checkbox"]:disabled { cursor: not-allowed; }
 .tab[aria-selected="true"] { background: var(--nav-bg-selected); }
 .tab:focus-visible { outline: var(--ring); outline-offset: -2px; }
 .tab-broadcast { margin-bottom: 8px; }
+/* The two tabs of the whole fleet stand under a heading of their own (#114), the agents under the next one. */
+.tab-broadcast.tab-fleet { margin-bottom: 0; }
 .tab-name { font-weight: 600; display: flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; }
 .tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 /* The conversations of agents (#50): a heading, the newest pairs, and the list of them all when they do not fit. */
@@ -772,6 +774,9 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
     /* Next to All agents, in sight without scrolling the row. */
     .tab-broadcast { order: -2; }
     .tab-conversations { order: -1; }
+    /* Both tabs of the whole fleet lead the row (#114). */
+    .tab-fleet { order: -3; }
+    .tab-fleet .tab-name, .tab-fleet .tab-hint { white-space: nowrap; }
     .tab-conversations .tab-name, .tab-conversations .tab-hint { white-space: nowrap; }
     .lane-title { flex-basis: 100%; font-size: 16px; }
     .tab.tab-holds-open { background: var(--nav-bg-selected); }
@@ -921,3 +926,31 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
     .note-card { padding: 12px 14px; }
     .back-btn { display: inline-flex; margin-bottom: 8px; }
 }
+/*
+ * The feed of every message of the fleet (#114): a row of agents to filter by,
+ * then the messages two lines each, like a list of mail.
+ */
+.fleet-feed { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.fleet-head { padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.fleet-head h1 { font-size: 18px; margin: 0; flex: 1 1 auto; min-width: 0; }
+.fleet-chips { display: flex; gap: 4px; overflow-x: auto; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--panel); scrollbar-width: thin; }
+.fleet-chips .view-tab { flex: none; }
+.fleet-list { flex: 1; overflow-y: auto; padding: 0 8px; display: flex; flex-direction: column; position: relative; min-width: 0; }
+.fleet-cap { font-size: 12px; color: var(--muted); text-align: center; margin: 0; padding: 8px 0 6px; }
+.fleet-empty { margin: auto; }
+.fleet-unseen { position: sticky; bottom: 4px; align-self: center; z-index: 2; flex-shrink: 0; }
+.fleet-row { font: inherit; color: inherit; text-align: left; border: 0; border-bottom: 1px solid var(--border); background: transparent; cursor: pointer; width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 8px; flex-shrink: 0; transition: var(--ctl-tr); }
+.fleet-row:hover { background: var(--nav-bg-hover); }
+.fleet-row:focus-visible { outline: var(--ring); outline-offset: -2px; }
+.fleet-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.fleet-route { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1; flex-wrap: wrap; }
+.fleet-who { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; min-width: 0; }
+.fleet-arrow { color: var(--muted); }
+.fleet-kind { font-size: 11px; color: var(--muted); padding: 0 6px; border: 1px solid var(--border); border-radius: 4px; white-space: nowrap; }
+.fleet-open { font-size: 12px; color: var(--muted); opacity: 0; transition: opacity .16s ease; white-space: nowrap; }
+.fleet-row:hover .fleet-open, .fleet-row:focus-visible .fleet-open { opacity: 1; }
+@media (hover: none) { .fleet-open { opacity: 1; } }
+.fleet-when { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fleet-text { color: var(--muted); font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .fleet-open-text { display: none; } }
+@media (prefers-reduced-motion: reduce) { .fleet-row, .fleet-open { transition: none; } }

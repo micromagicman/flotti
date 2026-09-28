@@ -149,7 +149,7 @@ async function say(page: Page, name: string, text: string): Promise<void> {
 }
 test('every agent has a tab with its status', async ({ page }) => {
     await page.goto(url);
-    await expect(page.getByRole('tab')).toHaveText([/All agents/, /claude/, /codex/, /relay/, /Add agent/]);
+    await expect(page.getByRole('tab')).toHaveText([/All agents/, /All messages/, /claude/, /codex/, /relay/, /Add agent/]);
     for (const name of ['claude', 'codex', 'relay']) {
         await expect(tab(page, name).locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     }
@@ -262,6 +262,65 @@ test('the conversation of two agents has a tab of its own: one lane, read-only, 
     await expect(page.getByRole('textbox')).toHaveCount(0);
     await page.getByRole('button', { name: 'Write to claude' }).click();
     await expect(page.getByRole('textbox', { name: 'Message to claude' })).toBeVisible();
+});
+/** The feed of every message of the fleet (#114), and a message in it by who wrote to whom. */
+const fleetFeed = (page: Page) => page.getByRole('log', { name: 'Messages' });
+const fleetRow = (page: Page, from: string, to: string) => fleetFeed(page).getByRole('button', { name: new RegExp(`^${from} to ${to},`) });
+const feedFilter = (page: Page) => page.getByRole('group', { name: 'Show messages of' });
+test('every message of the fleet is in one feed, apart from the agents: who wrote to whom and when, and only messages (#114)', async ({ page }) => {
+    await page.goto(url);
+    await expect(page.locator('.sidebar .side-head')).toHaveText(['Fleet', 'Agents', 'Conversations']);
+    await tab(page, 'All messages').click();
+    await expect(page.getByRole('heading', { name: 'All messages' })).toBeVisible();
+    await expect(fleetFeed(page)).toContainText('The latest 200 messages of the fleet');
+    await expect(fleetRow(page, 'You', 'relay').filter({ hasText: 'write to claude' })).toHaveCount(1);
+    await expect(fleetRow(page, 'relay', 'claude').filter({ hasText: 'Please rerun the e2e job' })).toHaveCount(1);
+    await expect(fleetRow(page, 'claude', 'relay').filter({ hasText: 'you said: [from relay] Please rerun the e2e job' })).toHaveCount(1);
+    await expect(fleetRow(page, 'claude', 'You').filter({ hasText: 'you said: hello claude' })).toHaveCount(1);
+    await expect(fleetRow(page, 'relay', 'claude').first().locator('.fleet-when')).toHaveText(/^\d{1,2}:\d{2}/);
+    await expect(fleetFeed(page)).not.toContainText('Turn ended');
+});
+test('the feed of the fleet is filtered by one agent, whether it wrote or got the message, and All shows every one again (#114)', async ({ page }) => {
+    await page.goto(`${url}#/_feed`);
+    await feedFilter(page).getByRole('button', { name: 'claude', exact: true }).click();
+    await expect(feedFilter(page).getByRole('button', { name: 'claude', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(fleetRow(page, 'relay', 'claude')).not.toHaveCount(0);
+    await expect(fleetRow(page, 'claude', 'relay')).not.toHaveCount(0);
+    await expect(fleetRow(page, 'You', 'relay')).toHaveCount(0);
+    const names = await fleetFeed(page).getByRole('button').evaluateAll((rows) => rows.map((row) => row.getAttribute('aria-label') ?? ''));
+    expect(names.every((name) => /^(claude to|.* to claude,)/.test(name))).toBe(true);
+    await feedFilter(page).getByRole('button', { name: 'All', exact: true }).click();
+    await expect(fleetRow(page, 'You', 'relay')).not.toHaveCount(0);
+});
+test('a message of the feed of the fleet opens where it lives: between two agents their conversation, between a person and an agent its tab (#114)', async ({ page }) => {
+    await page.goto(url);
+    await tab(page, 'All messages').click();
+    await fleetRow(page, 'relay', 'claude').filter({ hasText: 'Please rerun the e2e job' }).click();
+    await expect(lane(page).locator('.lane-row.message-found')).toContainText('Please rerun the e2e job');
+    await tab(page, 'All messages').click();
+    const toRelay = fleetRow(page, 'You', 'relay').filter({ hasText: 'write to claude' });
+    await toRelay.focus();
+    await toRelay.press('Enter');
+    await expect(feed(page, 'relay').locator('.message-found')).toContainText('write to claude');
+});
+test('the feed of the fleet shows a new message as it comes, without a reload (#114)', async ({ page, context }) => {
+    await page.goto(`${url}#/_feed`);
+    await expect(fleetFeed(page)).toBeVisible();
+    const other = await context.newPage();
+    await other.goto(url);
+    await say(other, 'codex', 'live in the feed');
+    await expect(fleetRow(page, 'You', 'codex').filter({ hasText: 'live in the feed' })).toHaveCount(1);
+    await expect(fleetRow(page, 'codex', 'You').filter({ hasText: 'you said: live in the feed' })).toHaveCount(1);
+    await other.close();
+});
+test('on a narrow screen both tabs of the whole fleet lead the row, and the feed fits the screen (#114)', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(url);
+    await expect(tab(page, 'All agents')).toBeInViewport();
+    await expect(tab(page, 'All messages')).toBeInViewport();
+    await tab(page, 'All messages').click();
+    await expect(fleetRow(page, 'relay', 'claude').first()).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 /** The channels of a colour, 0–255: `#rrggbb`, `rgb()`, or the `color(srgb …)` a `color-mix()` computes to. */
 function channels(color: string): number[] {
@@ -1006,7 +1065,7 @@ test('switches the fleet directory, and saves it for the next run', async ({ pag
     await page.goto(`${url}#/_settings`);
     await field(page, 'Fleet directory path').fill(next);
     await page.getByRole('button', { name: 'Switch' }).click();
-    await expect(page.getByRole('tab')).toHaveText([/All agents/, /newcomer/, /Add agent/]);
+    await expect(page.getByRole('tab')).toHaveText([/All agents/, /All messages/, /newcomer/, /Add agent/]);
     await expect(settingsRow(page, 'newcomer').locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     await expect(page.getByRole('form', { name: 'Fleet directory' })).toContainText(`${next} — saved in`);
     const saved = JSON.parse(readFileSync(join(workspace, '.flotti', 'settings.json'), 'utf8')) as { fleet: string };
