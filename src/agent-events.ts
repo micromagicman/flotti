@@ -1,5 +1,6 @@
 import type { ConnectionHealth, HealthListener } from './connection-health.js';
 import type { MemoryStatus } from './dashboard-protocol.js';
+import { present } from './present.js';
 /**
  * The one shape every agent of the fleet has for the dashboard, whether it is a
  * local process spoken to over ACP or a remote service spoken to over A2A: the
@@ -276,12 +277,12 @@ type SendOptions = {
 /** The fields of a `message` or `queued` event a sent message carries on, beyond its text. */
 function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message' }, 'from' | 'replyTo' | 'turnAnswer' | 'forwarded' | 'retryOf' | 'delegation'> {
     return {
-        ...(options.from === undefined ? {} : { from: options.from }),
-        ...(options.replyTo === undefined ? {} : { replyTo: options.replyTo }),
-        ...(options.turnAnswer === true ? { turnAnswer: true as const } : {}),
-        ...(options.forwarded === undefined ? {} : { forwarded: options.forwarded }),
-        ...(options.retryOf === undefined ? {} : { retryOf: options.retryOf }),
-        ...(options.delegation === undefined ? {} : { delegation: options.delegation })
+        ...present('from', options.from),
+        ...present('replyTo', options.replyTo),
+        ...present('turnAnswer', options.turnAnswer === true ? true as const : undefined),
+        ...present('forwarded', options.forwarded),
+        ...present('retryOf', options.retryOf),
+        ...present('delegation', options.delegation)
     };
 }
 /** Why a message taken back out of the line never reached the agent: its `send` rejects with it. */
@@ -295,31 +296,35 @@ function waitingInLine(events: readonly AgentEvent[]): (AgentEvent & { type: 'qu
     for (const event of events) {
         if (event.type === 'queued') {
             waiting.set(event.messageId, event);
-        } else if (event.type === 'unqueued' || (event.type === 'message' && event.role === 'user')) {
+        } else if (leavesLine(event)) {
             waiting.delete(event.messageId);
         }
     }
     return [...waiting.values()];
+}
+/** Whether the event takes a queued message out of the line: it was taken back, or the agent took it. */
+function leavesLine(event: AgentEvent): event is AgentEvent & { type: 'unqueued' | 'message' } {
+    return event.type === 'unqueued' || (event.type === 'message' && event.role === 'user');
 }
 /**
  * The line above a message about a task: the agent that gets a task learns
  * that its answer is the result, the one that gave it how it ended.
  */
 function delegationLine(mark: DelegationMark): string {
-    switch (mark.state) {
-        case 'completed':
-        case 'working':
-            return `The task ${mark.id} you gave is ${mark.state}.`;
-        case 'failed':
-            return `The task ${mark.id} you gave has failed.`;
-        case 'canceled':
-            return `The task ${mark.id} you gave was canceled.`;
-        case undefined:
-            break;
-    }
+    return mark.state === undefined ? givenLine(mark) : OUTCOME_LINES[mark.state](mark.id);
+}
+/** The line above a task given to the agent that reads it. */
+function givenLine(mark: DelegationMark): string {
     const due = mark.deadline === undefined ? '' : ` It is due by ${mark.deadline}.`;
     return `Task ${mark.id}, given to you.${due} What you answer in this turn is its result; end the turn when it is done.`;
 }
+/** The line above the outcome of a task, told to the agent that gave it, by how the task ended. */
+const OUTCOME_LINES: { readonly [S in DelegationState]: (id: string) => string } = {
+    completed: (id) => `The task ${id} you gave is completed.`,
+    working: (id) => `The task ${id} you gave is working.`,
+    failed: (id) => `The task ${id} you gave has failed.`,
+    canceled: (id) => `The task ${id} you gave was canceled.`
+};
 /** Whose message it was, as the agent that reads it is told. */
 function whose(author: string | undefined, reader: string): string {
     if (author === undefined) {
@@ -334,21 +339,24 @@ function whose(author: string | undefined, reader: string): string {
  * its own way.
  */
 function composeText(text: string, options: SendOptions, reader: string): string {
-    const parts: string[] = [];
-    if (options.replyTo !== undefined) {
-        const quoted = options.replyTo.text.split('\n').map((line) => `> ${line}`).join('\n');
-        parts.push(`In reply to a message from ${whose(options.replyTo.author, reader)}:\n${quoted}`);
+    return [
+        replyPart(options.replyTo, reader),
+        options.delegation === undefined ? undefined : delegationLine(options.delegation),
+        text.trim() === '' ? undefined : text,
+        forwardPart(options.forwarded, reader)
+    ].filter((part): part is string => part !== undefined).join('\n\n');
+}
+/** The quoted message a reply answers, above the answer. */
+function replyPart(replyTo: Quote | undefined, reader: string): string | undefined {
+    if (replyTo === undefined) {
+        return undefined;
     }
-    if (options.delegation !== undefined) {
-        parts.push(delegationLine(options.delegation));
-    }
-    if (text.trim() !== '') {
-        parts.push(text);
-    }
-    if (options.forwarded !== undefined) {
-        parts.push(`Forwarded from ${whose(options.forwarded.author, reader)}:\n\n${options.forwarded.text}`);
-    }
-    return parts.join('\n\n');
+    const quoted = replyTo.text.split('\n').map((line) => `> ${line}`).join('\n');
+    return `In reply to a message from ${whose(replyTo.author, reader)}:\n${quoted}`;
+}
+/** The message sent on, under what was written above it. */
+function forwardPart(forwarded: Forwarded | undefined, reader: string): string | undefined {
+    return forwarded === undefined ? undefined : `Forwarded from ${whose(forwarded.author, reader)}:\n\n${forwarded.text}`;
 }
 /** An agent of the fleet as the dashboard drives it, local or remote. */
 interface FleetAgent {
