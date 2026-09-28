@@ -27,9 +27,10 @@ describe('LocalAgentProcess: clearing the context', { timeout: 20_000 }, () => {
         const waiting = harness.talk('wait');
         await harness.next((event) => event.type === 'status' && event.status === 'working');
         const queued = harness.agent.send('next');
-        await harness.agent.clearContext();
+        // Awaited together: when clearing fails, the queued message is refused too,
+        // and that has to fail this test rather than leak past its end (#122).
+        await Promise.all([harness.agent.clearContext(), queued]);
         strictEqual(await waiting, 'cancelled');
-        await queued;
         await eventually(() => harness.recorded('session/prompt').length === 2);
         deepStrictEqual(prompts(harness, session), [['wait', true], ['next', false]]);
         strictEqual(harness.recorded('session/cancel').length, 1);

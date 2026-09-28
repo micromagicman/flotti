@@ -26,6 +26,13 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   status; «Notify me» is a checkbox in the Notifications section of the settings; the sidebar ends with
   **Add agent**, which opens the settings at the agents with Add local agent in focus (#116).
 
+### Fixed
+
+- **A steady test on Windows CI.** The test of clearing the context while a message is in work gives the
+  pretend agent the same 5 s to end a cancelled message as a real one, instead of 1 s a loaded Windows
+  runner did not always meet; and when clearing fails, the test now fails on its own instead of leaking an
+  unhandled rejection past its end. Nothing changes in how flotti behaves (#122).
+
 ## [0.4.0] — 2026-09-25
 
 Agents that remember and know their fleet: memory of its own for every local agent, the roster of the

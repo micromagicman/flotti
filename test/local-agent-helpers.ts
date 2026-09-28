@@ -71,7 +71,9 @@ class Harness {
             maxRetries: 2,
             backoffBaseMs: 10,
             backoffMaxMs: 50,
-            cancelTimeoutMs: 1000,
+            // The product default: a loaded CI runner (Windows) has taken over a second
+            // to end a cancelled message of the pretend agent (#122).
+            cancelTimeoutMs: 5000,
             stopTimeoutMs: 1000,
             ...setup.options
         });
