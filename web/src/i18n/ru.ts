@@ -134,7 +134,11 @@ const ru: Messages = {
         conversations: 'Переписки',
         allConversations: 'Все переписки',
         pairs: (n) => `${count(n, 'пара', 'пары', 'пар')} агентов`,
-        conversationOf: (names, n) => `Переписка ${names}, ${count(n, 'сообщение', 'сообщения', 'сообщений')}`
+        conversationOf: (names, n) => `Переписка ${names}, ${count(n, 'сообщение', 'сообщения', 'сообщений')}`,
+        fleet: 'Флот',
+        agents: 'Агенты',
+        allMessages: 'Все сообщения',
+        allMessagesHint: (n) => `Последние ${f.number(n)} по флоту`
     },
     health: {
         label: 'SSH-соединение',
@@ -259,6 +263,25 @@ const ru: Messages = {
         selected: (n) => `выбрано: ${count(n, 'агент', 'агента', 'агентов')}`,
         delivery: 'Доставка',
         result: deliveryResult
+    },
+    fleetFeed: {
+        title: 'Все сообщения',
+        label: 'Все сообщения флота',
+        log: 'Сообщения',
+        cap: (n) => `Последние ${count(n, 'сообщение', 'сообщения', 'сообщений')} флота · более ранние остаются во вкладках агентов`,
+        filter: 'Показать сообщения',
+        all: 'Все',
+        none: 'Во флоте пока нет сообщений.',
+        noneOf: (name) => `У ${name} пока нет сообщений.`,
+        unseen: (n) => `↓ ${count(n, 'новое', 'новых', 'новых')}`,
+        kind: { forwarded: 'пересылка', task: 'задача', result: 'итог задачи' },
+        openIn: (place) => `Открыть: ${place}`,
+        opens: (place) => `Откроется ${place}`,
+        tabOf: (name) => `вкладка ${name}`,
+        pairOf: (one, other) => `переписка ${one} ↔ ${other}`,
+        row: (from, to, when, place) => `${from} → ${to}, ${when}. Откроется ${place}`,
+        when: (time, today) => (today ? f.time(time) : f.weekdayTime(time)),
+        whenFull: (time) => f.dateTime(time)
     },
     conversation: {
         of: (names) => `Переписка ${names}`,

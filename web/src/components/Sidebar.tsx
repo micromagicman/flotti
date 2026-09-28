@@ -4,6 +4,7 @@ import type { AgentColors } from '../agent-colors.js';
 import { shownInSidebar } from '../conversations.js';
 import type { Conversation } from '../conversations.js';
 import type { AgentFeed } from '../feed.js';
+import { FLEET_FEED_SIZE } from '../fleet-feed.js';
 import { AgentMark, PairMarks, nameOf } from './AgentMark.js';
 import { PoorConnectionMark } from './ConnectionHealth.js';
 import { StatusBadge } from './StatusBadge.js';
@@ -19,6 +20,8 @@ type SidebarProps = {
     readonly seenSeq: Readonly<Record<string, number>>;
     readonly selected: string;
     readonly broadcastId: string;
+    /** The feed of every message of the fleet (#114). */
+    readonly feedId: string;
     /** Where the settings stood: the settings opened at the agents, to add one (#116). */
     readonly addAgentId: string;
     readonly conversationsId: string;
@@ -125,11 +128,27 @@ function ConversationTabs({ agents, colors, conversations, seenSeq, selected, co
         </>
     );
 }
-function Sidebar({ agents, feeds, colors, conversations, seenSeq, selected, broadcastId, addAgentId, conversationsId, onSelect }: SidebarProps) {
+type FleetTabsProps = Pick<SidebarProps, 'selected' | 'broadcastId' | 'feedId' | 'onSelect'>;
+/**
+ * The two tabs of the whole fleet under a heading of their own (#114): the
+ * broadcast and the feed of every message, apart from the agents below them.
+ */
+function FleetTabs({ selected, broadcastId, feedId, onSelect }: FleetTabsProps) {
+    const t = useT();
+    return (
+        <>
+            <div className="side-head" aria-hidden="true">{t.sidebar.fleet}</div>
+            <SideTab className="tab tab-broadcast tab-fleet" selected={selected === broadcastId} onClick={() => onSelect(broadcastId)} name={t.sidebar.allAgents} hint={t.sidebar.broadcast} />
+            <SideTab className="tab tab-feed tab-fleet" selected={selected === feedId} onClick={() => onSelect(feedId)} name={t.sidebar.allMessages} hint={t.sidebar.allMessagesHint(FLEET_FEED_SIZE)} />
+            <div className="side-head" aria-hidden="true">{t.sidebar.agents}</div>
+        </>
+    );
+}
+function Sidebar({ agents, feeds, colors, conversations, seenSeq, selected, broadcastId, feedId, addAgentId, conversationsId, onSelect }: SidebarProps) {
     const t = useT();
     return (
         <nav className="sidebar" role="tablist" aria-label={t.sidebar.label} aria-orientation="vertical">
-            <SideTab className="tab tab-broadcast" selected={selected === broadcastId} onClick={() => onSelect(broadcastId)} name={t.sidebar.allAgents} hint={t.sidebar.broadcast} />
+            <FleetTabs selected={selected} broadcastId={broadcastId} feedId={feedId} onSelect={onSelect} />
             {agents.map((agent) => (
                 <AgentTab key={agent.id} agent={agent} feed={feeds[agent.id]} color={colors[agent.id]} selected={agent.id === selected} onSelect={onSelect}
                     unread={agent.id !== selected && (feeds[agent.id]?.lastSeq ?? 0) > (seenSeq[agent.id] ?? 0)} />

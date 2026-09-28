@@ -129,7 +129,11 @@ const en = {
         conversations: 'Conversations',
         allConversations: 'All conversations',
         pairs: (n: number) => `${f.number(n)} pair${s(n)} of agents`,
-        conversationOf: (names: string, n: number) => `Conversation of ${names}, ${f.number(n)} message${s(n)}`
+        conversationOf: (names: string, n: number) => `Conversation of ${names}, ${f.number(n)} message${s(n)}`,
+        fleet: 'Fleet',
+        agents: 'Agents',
+        allMessages: 'All messages',
+        allMessagesHint: (n: number) => `The latest ${f.number(n)} of the fleet`
     },
     health: {
         label: 'SSH connection',
@@ -254,6 +258,25 @@ const en = {
         selected: (n: number) => `${f.number(n)} agent${s(n)} selected`,
         delivery: 'Delivery',
         result: deliveryResult
+    },
+    fleetFeed: {
+        title: 'All messages',
+        label: 'Every message of the fleet',
+        log: 'Messages',
+        cap: (n: number) => `The latest ${f.number(n)} messages of the fleet · older ones stay in the tabs of the agents`,
+        filter: 'Show messages of',
+        all: 'All',
+        none: 'No messages in the fleet yet.',
+        noneOf: (name: string) => `No messages of ${name} yet.`,
+        unseen: (n: number) => `↓ ${f.number(n)} new`,
+        kind: { forwarded: 'forwarded', task: 'task', result: 'task result' },
+        openIn: (place: string) => `Open in ${place}`,
+        opens: (place: string) => `Opens ${place}`,
+        tabOf: (name: string) => `the tab of ${name}`,
+        pairOf: (one: string, other: string) => `the conversation ${one} ↔ ${other}`,
+        row: (from: string, to: string, when: string, place: string) => `${from} to ${to}, ${when}. Opens ${place}`,
+        when: (time: Date, today: boolean) => (today ? f.time(time) : f.weekdayTime(time)),
+        whenFull: (time: Date) => f.dateTime(time)
     },
     conversation: {
         of: (names: string) => `Conversation of ${names}`,

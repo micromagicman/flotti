@@ -9,6 +9,7 @@ import type {
     AgentEvent,
     AgentStatus,
     Delegation,
+    DelegationMark,
     Forwarded,
     PermissionOption,
     Quote,
@@ -34,6 +35,8 @@ type FeedItem =
         readonly replyTo?: Quote;
         /** A message sent on as it was; `text` is then what was written above it. */
         readonly forwarded?: Forwarded;
+        /** The task the message gives, or — with a `state` — the outcome of one. */
+        readonly delegation?: DelegationMark;
     }
     | { readonly kind: 'thought'; readonly key: string; readonly text: string }
     | { readonly kind: 'progress'; readonly key: string; readonly text: string }
@@ -146,7 +149,8 @@ function newMessage(event: AgentEvent & { type: 'message' }): FeedItem {
         ...(event.from === undefined ? {} : { from: event.from }),
         ...(event.to === undefined ? {} : { to: event.to }),
         ...(event.replyTo === undefined ? {} : { replyTo: event.replyTo }),
-        ...(event.forwarded === undefined ? {} : { forwarded: event.forwarded })
+        ...(event.forwarded === undefined ? {} : { forwarded: event.forwarded }),
+        ...(event.delegation === undefined ? {} : { delegation: event.delegation })
     };
 }
 /**

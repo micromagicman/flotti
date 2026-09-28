@@ -4,6 +4,14 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ## [Unreleased]
 
+### Added
+
+- **Every message of the fleet in one feed.** The sidebar opens with a «Fleet» section — All agents (the
+  broadcast) and **All messages** — above the agents. The feed shows the latest 200 messages of the whole
+  fleet, two lines each: who wrote to whom, when, and the start of the text; it updates live, a row of
+  agent chips filters it to one agent, and a click opens a message in the tab of its agent or in the
+  conversation of the two agents (#114).
+
 ### Changed
 
 - **A messenger for AI agents.** The README, the npm description and `flotti --help` now present flotti
