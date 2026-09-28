@@ -7,7 +7,7 @@
  * and no note larger than {@link MAX_NOTE_BYTES}.
  */
 import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
-import type { Stats } from 'node:fs';
+import type { Dirent, Stats } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import type { MemoryBank, MemoryNote, MemoryNoteSummary } from './dashboard-protocol.js';
 import { baseName, linksOf } from './memory-links.js';
@@ -27,6 +27,8 @@ class MemoryError extends Error {
 /** A note found in the bank: what the list shows, and its text when it is small enough to read. */
 type Found = { readonly summary: MemoryNoteSummary; readonly text: string | undefined };
 type Walk = { readonly found: Found[]; truncated: boolean };
+/** The notes of a bank, and whether there were more than {@link MAX_NOTES}. */
+type Notes = { readonly found: readonly Found[]; readonly truncated: boolean };
 /** Where the memory bank of the agent is on this machine, or why it is not here. */
 function bankDirectory(agent: Agent): { readonly directory: string } | { readonly reason: string } {
     if (agent.kind === 'remote') {
@@ -59,26 +61,42 @@ function withoutFrontMatter(text: string): string {
  * elaborate than a line is not read.
  */
 function frontMatter(text: string): Record<string, string> {
-    const block = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)?.[1];
     const fields: Record<string, string> = {};
-    for (const line of block?.split(/\r?\n/) ?? []) {
-        const match = /^([A-Za-z_][\w-]*):[ \t]*(.*?)[ \t]*$/.exec(line);
-        if (match?.[1] !== undefined && match[2] !== undefined) {
-            fields[match[1]] = unquote(match[2]);
-        }
+    for (const line of frontMatterLines(text)) {
+        addField(fields, line);
     }
     return fields;
 }
+/** The lines of the YAML front matter; none without one. */
+function frontMatterLines(text: string): string[] {
+    const block = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)?.[1];
+    return block?.split(/\r?\n/) ?? [];
+}
+/** Adds the field of a `key: value` line of the front matter; any other line adds nothing. */
+function addField(fields: Record<string, string>, line: string): void {
+    const match = /^([A-Za-z_][\w-]*):[ \t]*(.*?)[ \t]*$/.exec(line);
+    if (match?.[1] !== undefined && match[2] !== undefined) {
+        fields[match[1]] = unquote(match[2]);
+    }
+}
 function unquote(value: string): string {
     if (value.startsWith('"')) {
-        try {
-            const parsed: unknown = JSON.parse(value);
-            return typeof parsed === 'string' ? parsed : value;
-        } catch {
-            return value;
-        }
+        return unquoteDouble(value);
     }
     return /^'.*'$/.test(value) ? value.slice(1, -1).replace(/''/g, "'") : value;
+}
+/** A value in double quotes, read as JSON; as it is when it is not a JSON string. */
+function unquoteDouble(value: string): string {
+    try {
+        const parsed: unknown = JSON.parse(value);
+        return typeof parsed === 'string' ? parsed : value;
+    } catch {
+        return value;
+    }
+}
+/** The text of the first `# heading` of the markdown; nothing without one. */
+function firstHeading(markdown: string): string | undefined {
+    return /^#[ \t]+(.+?)[ \t#]*$/m.exec(markdown)?.[1]?.trim();
 }
 /** The `title` of the front matter, else the first `# heading` of the note, else its file name. */
 function titleOf(text: string, path: string): string {
@@ -86,8 +104,7 @@ function titleOf(text: string, path: string): string {
     if (given) {
         return given;
     }
-    const heading = /^#[ \t]+(.+?)[ \t#]*$/m.exec(withoutFrontMatter(text));
-    return heading?.[1]?.trim() || baseName(path);
+    return firstHeading(withoutFrontMatter(text)) || baseName(path);
 }
 function summaryOf(path: string, info: Stats, text: string | undefined): MemoryNoteSummary {
     return {
@@ -101,8 +118,8 @@ function summaryOf(path: string, info: Stats, text: string | undefined): MemoryN
 }
 /** The note in this file, when it is a file inside the bank — followed through any link. */
 async function noteAt(root: string, file: string): Promise<Found | undefined> {
-    const real = await realpath(file).catch(() => undefined);
-    if (real === undefined || !inside(root, real)) {
+    const real = await realInside(root, file);
+    if (real === undefined) {
         return undefined;
     }
     const info = await stat(real);
@@ -111,6 +128,11 @@ async function noteAt(root: string, file: string): Promise<Found | undefined> {
     }
     const text = info.size > MAX_NOTE_BYTES ? undefined : await readFile(real, 'utf8');
     return { summary: summaryOf(relative(root, file).split(sep).join('/'), info, text), text };
+}
+/** The real path of the file, links followed, when it is inside the bank. */
+async function realInside(root: string, file: string): Promise<string | undefined> {
+    const real = await realpath(file).catch(() => undefined);
+    return real !== undefined && inside(root, real) ? real : undefined;
 }
 /**
  * Adds the notes of a folder and of the folders in it. Hidden entries
@@ -125,15 +147,27 @@ async function walkFolder(root: string, folder: string, depth: number, walk: Wal
             walk.truncated = true;
             return;
         }
-        const path = join(folder, entry.name);
-        if (entry.isDirectory() && depth < MAX_DEPTH) {
-            await walkFolder(root, path, depth + 1, walk);
-        } else if (/\.md$/i.test(entry.name) && (entry.isFile() || entry.isSymbolicLink())) {
-            const note = await noteAt(root, path).catch(() => undefined);
-            if (note !== undefined) {
-                walk.found.push(note);
-            }
-        }
+        await walkEntry(root, join(folder, entry.name), entry, depth, walk);
+    }
+}
+/** Adds what one entry of a folder at `depth` holds: the notes of a folder in it, or the note of a file. */
+async function walkEntry(root: string, path: string, entry: Dirent, depth: number, walk: Walk): Promise<void> {
+    if (entry.isDirectory() && depth < MAX_DEPTH) {
+        await walkFolder(root, path, depth + 1, walk);
+        return;
+    }
+    if (isNoteEntry(entry)) {
+        await addNote(root, path, walk);
+    }
+}
+/** Whether the entry may be a note: a `.md` file, or a link to one. */
+function isNoteEntry(entry: Dirent): boolean {
+    return /\.md$/i.test(entry.name) && (entry.isFile() || entry.isSymbolicLink());
+}
+async function addNote(root: string, path: string, walk: Walk): Promise<void> {
+    const note = await noteAt(root, path).catch(() => undefined);
+    if (note !== undefined) {
+        walk.found.push(note);
     }
 }
 function matches({ summary, text }: Found, query: string): boolean {
@@ -144,7 +178,7 @@ function matches({ summary, text }: Found, query: string): boolean {
  * Every note of the bank at `root` (a real path), in the order of their paths,
  * and whether there were more than {@link MAX_NOTES}.
  */
-async function collectNotes(root: string): Promise<{ readonly found: readonly Found[]; readonly truncated: boolean }> {
+async function collectNotes(root: string): Promise<Notes> {
     const walk: Walk = { found: [], truncated: false };
     await walkFolder(root, root, 0, walk);
     return walk;
@@ -158,16 +192,25 @@ async function readMemoryBank(agent: Agent, query = ''): Promise<MemoryBank> {
     if ('reason' in place) {
         return { available: false, reason: place.reason };
     }
-    const root = await bankRoot(place.directory);
-    const walk: Walk = { found: [], truncated: false };
-    if (root !== undefined) {
-        await walkFolder(root, root, 0, walk);
-    } else if (await lstat(place.directory).then(() => true, () => false)) {
+    const walk = await walkBank(place.directory);
+    if (walk === undefined) {
         // Something is there that is not a folder: an unavailable bank is not an empty one.
         return { available: false, reason: `${place.directory} is not a folder: the memory bank cannot be read.` };
     }
+    return bankOf(place.directory, walk, query);
+}
+/** The notes of the bank in this directory, none when there is none; nothing when something there is not a folder. */
+async function walkBank(directory: string): Promise<Notes | undefined> {
+    const root = await bankRoot(directory);
+    if (root !== undefined) {
+        return collectNotes(root);
+    }
+    return await lstat(directory).then(() => true, () => false) ? undefined : { found: [], truncated: false };
+}
+/** The bank as the dashboard shows it: the notes that match the query. */
+function bankOf(directory: string, walk: Notes, query: string): MemoryBank {
     const notes = walk.found.filter((found) => matches(found, query)).map(({ summary }) => summary);
-    return { available: true, directory: place.directory, notes, ...(walk.truncated ? { truncated: true as const } : {}) };
+    return { available: true, directory, notes, ...(walk.truncated ? { truncated: true as const } : {}) };
 }
 /**
  * The path of a note as the page names it, checked: folders and a `.md` file,
@@ -195,8 +238,7 @@ async function readMemoryNote(agent: Agent, path: string): Promise<MemoryNote> {
         throw new MemoryError(404, place.reason);
     }
     const parts = notePath(path);
-    const root = await bankRoot(place.directory);
-    const found = root === undefined ? undefined : await noteAt(root, join(root, ...parts)).catch(() => undefined);
+    const found = await findNote(place.directory, parts);
     if (found === undefined) {
         throw new MemoryError(404, `There is no note ${parts.join('/')} in the memory bank.`);
     }
@@ -206,6 +248,11 @@ async function readMemoryNote(agent: Agent, path: string): Promise<MemoryNote> {
     const { modifiedAt, size } = found.summary;
     return { path: parts.join('/'), file: join(place.directory, ...parts), modifiedAt, size, text: found.text };
 }
+/** The note at these parts of its path in the bank at `directory`; nothing when there is none. */
+async function findNote(directory: string, parts: readonly string[]): Promise<Found | undefined> {
+    const root = await bankRoot(directory);
+    return root === undefined ? undefined : noteAt(root, join(root, ...parts)).catch(() => undefined);
+}
 export {
     MAX_NOTE_BYTES,
     MAX_NOTES,
@@ -213,6 +260,7 @@ export {
     bankDirectory,
     bankRoot,
     collectNotes,
+    firstHeading,
     frontMatter,
     inside,
     readMemoryBank,

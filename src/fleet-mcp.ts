@@ -2,11 +2,13 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { AdminAction, Forwarded, SendOptions } from './agent-events.js';
+import type { AdminAction, Delegation, Forwarded, SendOptions } from './agent-events.js';
 import type { AgentSummary, Delivery } from './dashboard-protocol.js';
 import type { DelegationCancel, DelegationStart } from './delegations.js';
+import { describeError } from './describe-error.js';
 import type { AdminOutcome } from './fleet-admin.js';
 import { MEMORY_TOOLS, callMemoryTool, isMemoryTool } from './memory-tools.js';
+import { present } from './present.js';
 /**
  * The fleet as tools: an MCP server flotti hands to every ACP agent it starts,
  * in `mcpServers` of `session/new`, so a bare Claude Code or Codex can see its
@@ -61,6 +63,10 @@ type JsonRpcRequest = {
 };
 type ToolResult = { readonly content: { type: 'text'; text: string }[]; readonly isError?: boolean };
 type ToolArguments = Readonly<Record<string, unknown>>;
+/** A JSON-RPC method the server answers: its result for the caller. */
+type Method = (caller: string, fields: Record<string, unknown>) => object | Promise<object>;
+/** A tool of the fleet: its result for the caller. */
+type Tool = (fleet: FleetDirectory, caller: string, args: ToolArguments) => Promise<ToolResult>;
 /**
  * The last message one agent got from another — through the tools, or sent on
  * by the supervisor: what `reply` and `forward` act on.
@@ -207,6 +213,22 @@ class FleetMcpServer {
     private readonly agentsByToken = new Map<string, string>();
     private readonly received = new Map<string, Received>();
     private fleet: FleetDirectory | undefined;
+    /** The JSON-RPC methods, by name. */
+    private readonly methods: ReadonlyMap<string, Method> = new Map<string, Method>([
+        ['initialize', (caller, fields) => initializeResult(caller, fields, this.isAdmin(caller), this.memoryBank(caller) !== undefined)],
+        ['ping', () => ({})],
+        ['tools/list', (caller) => ({ tools: this.toolsOf(caller) })],
+        ['tools/call', (caller, fields) => this.callTool(caller, fields)]
+    ]);
+    /** The tools every agent is listed, by name; the memory tools and those of an administrator are apart. */
+    private readonly tools: ReadonlyMap<string, Tool> = new Map<string, Tool>([
+        ['list_agents', (fleet, caller) => Promise.resolve(listAgents(fleet, caller))],
+        ['send_message', (fleet, caller, args) => this.send(fleet, caller, stringArgument(args, 'to'), stringArgument(args, 'text'))],
+        ['reply', (fleet, caller, args) => this.reply(fleet, caller, args)],
+        ['forward', (fleet, caller, args) => this.forward(fleet, caller, args)],
+        ['delegate', (fleet, caller, args) => this.delegate(fleet, caller, args)],
+        ['cancel_delegation', (fleet, caller, args) => this.cancelDelegation(fleet, caller, stringArgument(args, 'id'))]
+    ]);
     private constructor(private readonly server: Server, readonly port: number) {}
     /** Starts listening on a free port of the loopback; the tools answer once {@link serve} names the fleet. */
     static async start(): Promise<FleetMcpServer> {
@@ -272,8 +294,7 @@ class FleetMcpServer {
      * request is answered with why not, and there is no caller.
      */
     private admit(request: IncomingMessage, response: ServerResponse): string | undefined {
-        const path = new URL(request.url ?? '/', 'http://localhost').pathname;
-        if (path !== MCP_PATH) {
+        if (pathOf(request) !== MCP_PATH) {
             respond(response, 404, { error: 'not found' });
             return undefined;
         }
@@ -308,33 +329,25 @@ class FleetMcpServer {
     }
     /** The answer to one JSON-RPC message; nothing for a notification or a response. */
     private async answer(caller: string, message: JsonRpcRequest): Promise<object | undefined> {
-        if (typeof message !== 'object' || message === null || typeof message.method !== 'string') {
-            return message?.id === undefined ? undefined : rpcError(message.id, -32600, 'not a JSON-RPC request');
+        if (!isRequest(message)) {
+            return notARequest(message);
         }
-        if (message.id === undefined) {
-            return undefined;
-        }
+        return message.id === undefined ? undefined : this.result(caller, message.id, message.method, message.params);
+    }
+    /** The response to a request: its result, or the error it ended with. */
+    private async result(caller: string, id: string | number | null, method: string, params: unknown): Promise<object> {
         try {
-            return { jsonrpc: '2.0', id: message.id, result: await this.call(caller, message.method, message.params) };
+            return { jsonrpc: '2.0', id, result: await this.call(caller, method, params) };
         } catch (error) {
-            const code = error instanceof RpcError ? error.code : -32603;
-            return rpcError(message.id, code, error instanceof Error ? error.message : String(error));
+            return rpcError(id, rpcCode(error), describeError(error));
         }
     }
     private async call(caller: string, method: string, params: unknown): Promise<object> {
-        const fields = isObject(params) ? params : {};
-        switch (method) {
-            case 'initialize':
-                return initializeResult(caller, fields, this.isAdmin(caller), this.memoryBank(caller) !== undefined);
-            case 'ping':
-                return {};
-            case 'tools/list':
-                return { tools: this.toolsOf(caller) };
-            case 'tools/call':
-                return this.callTool(caller, fields);
-            default:
-                throw new RpcError(-32601, `no method ${method}`);
+        const answer = this.methods.get(method);
+        if (answer === undefined) {
+            throw new RpcError(-32601, `no method ${method}`);
         }
+        return answer(caller, isObject(params) ? params : {});
     }
     /** `tools/call`: arguments the tool cannot take come back as an error result, not a protocol error. */
     private callTool(caller: string, fields: Record<string, unknown>): Promise<ToolResult> {
@@ -346,35 +359,17 @@ class FleetMcpServer {
                 throw error;
             });
     }
+    /** A tool by its name; any other than those of every agent is a memory tool, one of an administrator, or none. */
     private async tool(caller: string, name: string, args: ToolArguments): Promise<ToolResult> {
         const fleet = this.fleet;
         if (fleet === undefined) {
             return failure('the fleet is not up yet; try again in a moment');
         }
-        switch (name) {
-            case 'list_agents':
-                return text(JSON.stringify(fleet.agents().map((agent) =>
-                    agent.id === caller ? { ...agent, you: true } : agent), null, 2));
-            case 'send_message':
-                return this.send(fleet, caller, stringArgument(args, 'to'), stringArgument(args, 'text'));
-            case 'reply':
-                return this.reply(fleet, caller, args);
-            case 'forward':
-                return this.forward(fleet, caller, args);
-            default:
-                return this.taskTool(fleet, caller, name, args);
+        const tool = this.tools.get(name);
+        if (tool !== undefined) {
+            return tool(fleet, caller, args);
         }
-    }
-    /** The tools of tasks one agent gives another; any other is a memory tool, one of an administrator, or none. */
-    private taskTool(fleet: FleetDirectory, caller: string, name: string, args: ToolArguments): Promise<ToolResult> {
-        switch (name) {
-            case 'delegate':
-                return this.delegate(fleet, caller, args);
-            case 'cancel_delegation':
-                return this.cancelDelegation(fleet, caller, stringArgument(args, 'id'));
-            default:
-                return isMemoryTool(name) ? this.memoryTool(caller, name, args) : this.adminTool(fleet, caller, name, args);
-        }
+        return isMemoryTool(name) ? this.memoryTool(caller, name, args) : this.adminTool(fleet, caller, name, args);
     }
     /** The tools the caller is listed: the memory tools with a memory bank, those of an administrator to one. */
     private toolsOf(caller: string): readonly object[] {
@@ -402,7 +397,7 @@ class FleetMcpServer {
     }
     /** `restart_agent` and `clear_context`: whether the caller may is for the fleet to say. */
     private async adminTool(fleet: FleetDirectory, caller: string, name: string, args: ToolArguments): Promise<ToolResult> {
-        const action = Object.hasOwn(ADMIN_ACTIONS, name) ? ADMIN_ACTIONS[name] : undefined;
+        const action = adminAction(name);
         if (action === undefined) {
             throw new RpcError(-32602, `no tool ${name}`);
         }
@@ -418,9 +413,8 @@ class FleetMcpServer {
         if (last === undefined) {
             return failure('no agent has written to you yet; use send_message and name the agent');
         }
-        const quoted = last.text.trim() === '' && last.forwarded !== undefined ? last.forwarded.text : last.text;
         return this.send(fleet, caller, last.from, stringArgument(args, 'text'), {
-            replyTo: { agentId: caller, messageId: last.messageId, author: last.from, text: quoted }
+            replyTo: { agentId: caller, messageId: last.messageId, author: last.from, text: original(last).text }
         });
     }
     /**
@@ -432,29 +426,16 @@ class FleetMcpServer {
         if (last === undefined) {
             return failure('no agent has written to you yet: there is nothing to forward');
         }
-        const comment = typeof args['comment'] === 'string' ? args['comment'].trim() : '';
-        const forwarded = last.text.trim() === '' && last.forwarded !== undefined
-            ? last.forwarded
-            : { author: last.from, text: last.text };
-        return this.send(fleet, caller, stringArgument(args, 'to'), comment, { forwarded });
+        const comment = optionalText(args, 'comment');
+        return this.send(fleet, caller, stringArgument(args, 'to'), comment, { forwarded: original(last) });
     }
     /** The `delegate` tool: the id of the task, or why it failed at once. */
     private async delegate(fleet: FleetDirectory, caller: string, args: ToolArguments): Promise<ToolResult> {
         const to = stringArgument(args, 'to');
         const task = stringArgument(args, 'text');
-        const minutes = args['deadline_minutes'];
-        if (minutes !== undefined && (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes <= 0)) {
-            throw new ArgumentError('deadline_minutes must be a number of minutes above zero');
-        }
-        const deadline = minutes === undefined ? undefined : new Date(Date.now() + minutes * 60_000).toISOString();
-        const { delegation, queued } = await fleet.delegate(caller, to, task, deadline);
-        const id = delegation.delegationId;
-        if (delegation.state === 'failed') {
-            return failure(`Task ${id} failed at once: ${delegation.result ?? 'no reason given'}`);
-        }
-        const due = deadline === undefined ? '' : ` It is due by ${deadline}.`;
-        return text(`Task ${id} is with "${to}"${queued ? ', waiting in line until it is done with what it is doing' : ''}.${due} `
-            + `Its outcome comes to you as a message from "${to}"; cancel_delegation takes it back.`);
+        const deadline = deadlineOf(args['deadline_minutes']);
+        const start = await fleet.delegate(caller, to, task, deadline);
+        return start.delegation.state === 'failed' ? failedAtOnce(start.delegation) : delegated(to, start, deadline);
     }
     /** The `cancel_delegation` tool. */
     private cancelDelegation(fleet: FleetDirectory, caller: string, id: string): Promise<ToolResult> {
@@ -464,26 +445,82 @@ class FleetMcpServer {
                 ? text(`Task ${id} is canceled; "${delegation.to}" was told to stop.`)
                 : text(`Task ${id} was over already: ${delegation.state}.`));
         } catch (error) {
-            return Promise.resolve(failure(error instanceof Error ? error.message : String(error)));
+            return Promise.resolve(failure(describeError(error)));
         }
     }
     private async send(fleet: FleetDirectory, from: string, to: string, message: string, extras: Extras = {}): Promise<ToolResult> {
-        if (to === from) {
-            return failure('that is you: name another agent');
-        }
-        if (!fleet.agents().some((agent) => agent.id === to)) {
-            return failure(`there is no agent "${to}" in the fleet; list_agents names them`);
+        const refusal = sendRefusal(fleet, from, to);
+        if (refusal !== undefined) {
+            return failure(refusal);
         }
         const messageId = randomUUID();
         const delivery = await deliver(fleet, to, message, { from, messageId, ...extras });
         if (delivery.result === 'failed') {
-            return failure(`"${to}" did not get it: ${delivery.error ?? 'no reason given'}`);
+            return undelivered(to, delivery);
         }
-        this.delivered({ to, from, messageId, text: message, ...(extras.forwarded === undefined ? {} : { forwarded: extras.forwarded }) });
-        return text(delivery.result === 'taken'
-            ? `"${to}" has it. Its answer comes to you as a message from "${to}".`
-            : `"${to}" is busy: the message waits in line and reaches it once it is done.`);
+        this.delivered({ to, from, messageId, text: message, ...present('forwarded', extras.forwarded) });
+        return sent(to, delivery);
     }
+}
+/** Why a message cannot be sent at all; nothing when it can. */
+function sendRefusal(fleet: FleetDirectory, from: string, to: string): string | undefined {
+    if (to === from) {
+        return 'that is you: name another agent';
+    }
+    if (!fleet.agents().some((agent) => agent.id === to)) {
+        return `there is no agent "${to}" in the fleet; list_agents names them`;
+    }
+    return undefined;
+}
+/** The result of a message the receiver did not get. */
+function undelivered(to: string, delivery: Delivery): ToolResult {
+    return failure(`"${to}" did not get it: ${delivery.error ?? 'no reason given'}`);
+}
+/** The result of a message sent: taken now, or waiting in line. */
+function sent(to: string, delivery: Delivery): ToolResult {
+    return text(delivery.result === 'taken'
+        ? `"${to}" has it. Its answer comes to you as a message from "${to}".`
+        : `"${to}" is busy: the message waits in line and reaches it once it is done.`);
+}
+/** The `list_agents` tool: the fleet, with the caller's own entry marked. */
+function listAgents(fleet: FleetDirectory, caller: string): ToolResult {
+    return text(JSON.stringify(fleet.agents().map((agent) =>
+        agent.id === caller ? { ...agent, you: true } : agent), null, 2));
+}
+/**
+ * The message a reply quotes and a forward carries: the one forwarded to the
+ * caller when the last message is a bare forward, the last message itself otherwise.
+ */
+function original(last: Received): Forwarded {
+    return last.text.trim() === '' && last.forwarded !== undefined ? last.forwarded : { author: last.from, text: last.text };
+}
+/** What each tool of an administrator does; nothing for any other name. */
+function adminAction(name: string): AdminAction | undefined {
+    return Object.hasOwn(ADMIN_ACTIONS, name) ? ADMIN_ACTIONS[name] : undefined;
+}
+/** The deadline of a task given `deadline_minutes`, as an ISO 8601 time; nothing without one. */
+function deadlineOf(minutes: unknown): string | undefined {
+    if (minutes === undefined) {
+        return undefined;
+    }
+    if (!isPositiveNumber(minutes)) {
+        throw new ArgumentError('deadline_minutes must be a number of minutes above zero');
+    }
+    return new Date(Date.now() + minutes * 60_000).toISOString();
+}
+function isPositiveNumber(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+/** The result of a task that failed at once: why. */
+function failedAtOnce(delegation: Delegation): ToolResult {
+    return failure(`Task ${delegation.delegationId} failed at once: ${delegation.result ?? 'no reason given'}`);
+}
+/** The result of a task given: who has it, whether it waits in line, and when it is due. */
+function delegated(to: string, { delegation, queued }: DelegationStart, deadline: string | undefined): ToolResult {
+    const line = queued ? ', waiting in line until it is done with what it is doing' : '';
+    const due = deadline === undefined ? '' : ` It is due by ${deadline}.`;
+    return text(`Task ${delegation.delegationId} is with "${to}"${line}.${due} `
+        + `Its outcome comes to you as a message from "${to}"; cancel_delegation takes it back.`);
 }
 /** Sends through the fleet; a send that throws is a failed delivery. */
 async function deliver(fleet: FleetDirectory, to: string, message: string, options: SendOptions): Promise<Delivery> {
@@ -491,7 +528,7 @@ async function deliver(fleet: FleetDirectory, to: string, message: string, optio
         return await fleet.send(to, message, options);
     } catch (error) {
         // The fleet changed under the call: the sender or the receiver is gone.
-        return { agentId: to, result: 'failed', error: error instanceof Error ? error.message : String(error) };
+        return { agentId: to, result: 'failed', error: describeError(error) };
     }
 }
 /** The answer to `initialize`: the protocol version, the capabilities, who the caller is and whether it administers. */
@@ -505,6 +542,26 @@ function initializeResult(caller: string, fields: Record<string, unknown>, admin
             + 'agents and write to them' + (memory ? ', and keep your own memory across conversations with the memory_* tools.' : '.')
             + (admin ? ' You are an administrator of the fleet: you may also restart agents and clear their context.' : '')
     };
+}
+/** A request the server answers: an object with a method. */
+function isRequest(message: JsonRpcRequest): message is JsonRpcRequest & { readonly method: string } {
+    return typeof message === 'object' && message !== null && typeof message.method === 'string';
+}
+/** The answer to a message that is not a request: an error when it has an id, nothing otherwise. */
+function notARequest(message: JsonRpcRequest | null): object | undefined {
+    return message?.id === undefined ? undefined : rpcError(message.id, -32600, 'not a JSON-RPC request');
+}
+function rpcCode(error: unknown): number {
+    return error instanceof RpcError ? error.code : -32603;
+}
+/** The path a request asks for. */
+function pathOf(request: IncomingMessage): string {
+    return new URL(request.url ?? '/', 'http://localhost').pathname;
+}
+/** An optional text argument, trimmed; empty when it is not text. */
+function optionalText(args: ToolArguments, name: string): string {
+    const value = args[name];
+    return typeof value === 'string' ? value.trim() : '';
 }
 function stringArgument(args: ToolArguments, name: string): string {
     const value = args[name];

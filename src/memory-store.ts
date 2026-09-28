@@ -16,7 +16,8 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, open, readFile, realpath, rename, rm, stat, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { MAX_NOTE_BYTES, bankRoot, collectNotes, frontMatter, inside, withoutFrontMatter } from './memory-bank.js';
+import { describeError } from './describe-error.js';
+import { MAX_NOTE_BYTES, bankRoot, collectNotes, firstHeading, frontMatter, inside, withoutFrontMatter } from './memory-bank.js';
 import type { Found } from './memory-bank.js';
 /** The one scope of the MVP: the memory of the agent itself. The fleet's is stage 2. */
 const AGENT_SCOPE = 'agent';
@@ -48,6 +49,8 @@ type StoredNote = {
     readonly body: string;
 };
 type NoteSummary = Omit<StoredNote, 'body' | 'revision'>;
+/** A file of a note that is there, and what it is. */
+type NoteFile = { readonly file: string; readonly modifiedMs: number; readonly size: number };
 type SearchHit = NoteSummary & { readonly snippet: string };
 /** What `memory_write` answers once the note is on disk. */
 type WriteReceipt = { readonly id: string; readonly revision: string; readonly scope: 'agent'; readonly at: string };
@@ -100,13 +103,16 @@ function checkScope(scope: unknown): void {
 function idParts(id: string): string[] {
     const bare = id.trim().replace(/\.md$/i, '');
     const parts = bare.split('/');
-    const refused = bare === '' || bare.length > MAX_ID_LENGTH || /[\\\0:]/.test(bare)
-        || parts.some((part) => part === '' || part.startsWith('.') || part.trim() !== part);
-    if (refused) {
+    if (isRefusedId(bare, parts)) {
         throw new MemoryStoreError('invalid', `"${id}" is not an id of a note: it is a path inside the memory bank `
             + '— folders and a name joined with "/", none of them empty or starting with "." — without ".md".');
     }
     return parts;
+}
+/** Whether an id, without `.md`, names no note: empty, too long, or with a part that cannot be one. */
+function isRefusedId(bare: string, parts: readonly string[]): boolean {
+    return bare === '' || bare.length > MAX_ID_LENGTH || /[\\\0:]/.test(bare)
+        || parts.some((part) => part === '' || part.startsWith('.') || part.trim() !== part);
 }
 function revisionOf(content: string | Buffer): string {
     return createHash('sha256').update(content).digest('hex').slice(0, 16);
@@ -118,16 +124,23 @@ function oneLine(value: string, limit: number): string {
 function noteOf(id: string, text: string, modifiedMs: number): StoredNote {
     const fields = frontMatter(text);
     const body = withoutFrontMatter(text).replace(/^\r?\n/, '');
-    const heading = /^#[ \t]+(.+?)[ \t#]*$/m.exec(body)?.[1]?.trim();
-    const updated = Date.parse(fields['updated'] ?? '');
     return {
         id,
-        title: oneLine(fields['title'] || heading || id.split('/').at(-1) || id, MAX_TITLE_LENGTH),
+        title: titleIn(fields, body, id),
         description: oneLine(fields['description'] ?? '', MAX_DESCRIPTION_LENGTH),
-        updated: new Date(Number.isNaN(updated) ? modifiedMs : updated).toISOString(),
+        updated: updatedIn(fields, modifiedMs),
         revision: revisionOf(text),
         body
     };
+}
+/** The title of a note: its `title`, else its first `# heading`, else the last part of its id. */
+function titleIn(fields: Readonly<Record<string, string>>, body: string, id: string): string {
+    return oneLine(fields['title'] || firstHeading(body) || id.split('/').at(-1) || id, MAX_TITLE_LENGTH);
+}
+/** When a note was last written: its `updated`, else the time of its file. */
+function updatedIn(fields: Readonly<Record<string, string>>, modifiedMs: number): string {
+    const updated = Date.parse(fields['updated'] ?? '');
+    return new Date(Number.isNaN(updated) ? modifiedMs : updated).toISOString();
 }
 function summaryOf(note: StoredNote): NoteSummary {
     return { id: note.id, title: note.title, description: note.description, updated: note.updated };
@@ -139,14 +152,18 @@ function noteText(title: string, description: string, updated: string, body: str
 }
 /** An id for a new note, made of its title, that no note has yet. */
 async function freshId(root: string, title: string): Promise<string> {
-    const slug = title.toLowerCase().normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60)
-        .replace(/-+$/, '') || 'note';
+    const slug = slugOf(title);
     for (let count = 1; ; count += 1) {
         const id = count === 1 ? slug : `${slug}-${count}`;
         if (await fileAt(join(root, `${id}.md`)) === undefined) {
             return id;
         }
     }
+}
+/** The title as a name of a file: lower case, words joined with `-`; `note` when nothing is left. */
+function slugOf(title: string): string {
+    return title.toLowerCase().normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60)
+        .replace(/-+$/, '') || 'note';
 }
 /** The file there, when it is one. */
 async function fileAt(path: string): Promise<{ readonly modifiedMs: number; readonly size: number } | undefined> {
@@ -162,16 +179,14 @@ class MemoryStore {
     /** The note with this id, with its revision. */
     async read(id: string): Promise<StoredNote> {
         const parts = idParts(id);
-        const root = await this.root(false);
-        const file = root === undefined ? undefined : await this.noteFile(root, parts, false);
-        const found = file === undefined ? undefined : await fileAt(file);
-        if (root === undefined || file === undefined || found === undefined) {
+        const found = await this.noteThere(parts);
+        if (found === undefined) {
             throw new MemoryStoreError('not-found', `There is no note "${parts.join('/')}" in the memory bank.`);
         }
         if (found.size > MAX_NOTE_BYTES) {
             throw new MemoryStoreError('invalid', `The note "${parts.join('/')}" is larger than ${MAX_NOTE_BYTES / 1024 / 1024} MB.`);
         }
-        return noteOf(parts.join('/'), await readFile(file, 'utf8'), found.modifiedMs);
+        return noteOf(parts.join('/'), await readFile(found.file, 'utf8'), found.modifiedMs);
     }
     /**
      * Writes the note and confirms once it is on disk. A note that is there
@@ -197,13 +212,12 @@ class MemoryStore {
     async delete(id: string, expectedRevision?: string): Promise<{ readonly id: string; readonly deleted: true }> {
         const parts = idParts(id);
         return exclusive(this.directory, async () => {
-            const root = await this.root(false);
-            const file = root === undefined ? undefined : await this.noteFile(root, parts, false);
-            if (file === undefined || await fileAt(file) === undefined) {
+            const found = await this.noteThere(parts);
+            if (found === undefined) {
                 throw new MemoryStoreError('not-found', `There is no note "${parts.join('/')}" in the memory bank: nothing was deleted.`);
             }
-            await this.checkRevision(file, parts.join('/'), expectedRevision, false);
-            await unlink(file);
+            await this.checkRevision(found.file, parts.join('/'), expectedRevision, false);
+            await unlink(found.file);
             return { id: parts.join('/'), deleted: true as const };
         });
     }
@@ -249,6 +263,20 @@ class MemoryStore {
         return found.filter((note): note is Found & { text: string } => note.text !== undefined)
             .map(({ summary, text }) => noteOf(summary.path.replace(/\.md$/i, ''), text, summary.modifiedAt));
     }
+    /** The file of the note with these parts of its id, when the note is there. */
+    private async noteThere(parts: readonly string[]): Promise<NoteFile | undefined> {
+        const file = await this.existingNoteFile(parts);
+        if (file === undefined) {
+            return undefined;
+        }
+        const found = await fileAt(file);
+        return found === undefined ? undefined : { file, ...found };
+    }
+    /** The file a note with these parts of its id would be in, when there is a bank; nothing is made. */
+    private async existingNoteFile(parts: readonly string[]): Promise<string | undefined> {
+        const root = await this.root(false);
+        return root === undefined ? undefined : this.noteFile(root, parts, false);
+    }
     /**
      * The real path of the bank; with `create`, a bank not there yet is made.
      *
@@ -256,17 +284,21 @@ class MemoryStore {
      */
     private async root(create: boolean): Promise<string | undefined> {
         if (create) {
-            try {
-                await mkdir(this.directory, { recursive: true });
-            } catch (error) {
-                throw new MemoryStoreError('unavailable', `The memory bank cannot be created: ${describe(error)}`);
-            }
+            await this.makeBank();
         }
         const root = await bankRoot(this.directory);
         if (root === undefined && create) {
             throw new MemoryStoreError('unavailable', `The memory bank ${this.directory} is not a folder.`);
         }
         return root;
+    }
+    /** Makes the bank, with the folders it is in. */
+    private async makeBank(): Promise<void> {
+        try {
+            await mkdir(this.directory, { recursive: true });
+        } catch (error) {
+            throw new MemoryStoreError('unavailable', `The memory bank cannot be created: ${describeError(error)}`);
+        }
     }
     /**
      * The file of the note inside the bank; its folders are made when `create`.
@@ -275,20 +307,10 @@ class MemoryStore {
     private async noteFile(root: string, parts: readonly string[], create: boolean): Promise<string | undefined> {
         const folder = join(root, ...parts.slice(0, -1));
         if (create) {
-            await mkdir(folder, { recursive: true }).catch((error: unknown) => {
-                throw new MemoryStoreError('unavailable', `The folder of the note cannot be created: ${describe(error)}`);
-            });
+            await makeFolder(folder);
         }
         const real = await realpath(folder).catch(() => undefined);
-        if (real === undefined) {
-            return undefined;
-        }
-        const file = join(real, `${parts.at(-1) ?? ''}.md`);
-        const target = await realpath(file).catch(() => file);
-        if ((real !== root && !inside(root, real)) || !inside(root, target)) {
-            throw new MemoryStoreError('invalid', `"${parts.join('/')}" leads out of the memory bank.`);
-        }
-        return file;
+        return real === undefined ? undefined : fileInside(root, real, parts);
     }
     /**
      * @param mustMatchExisting A note that is there must be named with its
@@ -298,22 +320,61 @@ class MemoryStore {
     private async checkRevision(file: string, id: string, expected: string | undefined, mustMatchExisting: boolean): Promise<void> {
         const current = await readFile(file).then(revisionOf, () => undefined);
         if (current === undefined) {
-            if (expected !== undefined) {
-                throw new MemoryStoreError('conflict', `Conflict: note "${id}" is not there any more, so it is not at revision `
-                    + `${expected}. Nothing was written; search again.`);
-            }
+            checkGone(id, expected);
             return;
         }
         if (expected === undefined && !mustMatchExisting) {
             return;
         }
-        if (expected !== current) {
-            throw new MemoryStoreError('conflict', expected === undefined
-                ? `Conflict: note "${id}" exists already (revision ${current}). Nothing was written: read it, then write `
-                    + 'with expected_revision to change it, or leave out id to add a new note.'
-                : `Conflict: note "${id}" changed since revision ${expected}; it is at ${current} now. Nothing was written: `
-                    + 'read it again and decide.');
-        }
+        checkCurrent(id, expected, current);
+    }
+}
+/** Makes the folder of a note, with the folders it is in. */
+async function makeFolder(folder: string): Promise<void> {
+    await mkdir(folder, { recursive: true }).catch((error: unknown) => {
+        throw new MemoryStoreError('unavailable', `The folder of the note cannot be created: ${describeError(error)}`);
+    });
+}
+/**
+ * The file of the note in `real`, the real path of its folder.
+ *
+ * @throws MemoryStoreError (invalid) when the folder or the file leads out of the bank.
+ */
+async function fileInside(root: string, real: string, parts: readonly string[]): Promise<string> {
+    const file = join(real, `${parts.at(-1) ?? ''}.md`);
+    const target = await realpath(file).catch(() => file);
+    if (!within(root, real) || !inside(root, target)) {
+        throw new MemoryStoreError('invalid', `"${parts.join('/')}" leads out of the memory bank.`);
+    }
+    return file;
+}
+/** Whether the path is the bank itself or inside it. */
+function within(root: string, path: string): boolean {
+    return path === root || inside(root, path);
+}
+/**
+ * A note that is gone may not be named with a revision.
+ *
+ * @throws MemoryStoreError (conflict) when it is.
+ */
+function checkGone(id: string, expected: string | undefined): void {
+    if (expected !== undefined) {
+        throw new MemoryStoreError('conflict', `Conflict: note "${id}" is not there any more, so it is not at revision `
+            + `${expected}. Nothing was written; search again.`);
+    }
+}
+/**
+ * A note that is there must be at the revision named.
+ *
+ * @throws MemoryStoreError (conflict) when it is not, or no revision is named.
+ */
+function checkCurrent(id: string, expected: string | undefined, current: string): void {
+    if (expected !== current) {
+        throw new MemoryStoreError('conflict', expected === undefined
+            ? `Conflict: note "${id}" exists already (revision ${current}). Nothing was written: read it, then write `
+                + 'with expected_revision to change it, or leave out id to add a new note.'
+            : `Conflict: note "${id}" changed since revision ${expected}; it is at ${current} now. Nothing was written: `
+                + 'read it again and decide.');
     }
 }
 /** Writes the note at `file` and gives the receipt: the note is on disk by then. */
@@ -349,11 +410,8 @@ async function writeAtomically(file: string, text: string): Promise<void> {
         await rename(temporary, file);
     } catch (error) {
         await rm(temporary, { force: true }).catch(() => undefined);
-        throw error instanceof MemoryStoreError ? error : new MemoryStoreError('unavailable', `The note was not saved: ${describe(error)}`);
+        throw error instanceof MemoryStoreError ? error : new MemoryStoreError('unavailable', `The note was not saved: ${describeError(error)}`);
     }
-}
-function describe(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
 }
 export { AGENT_SCOPE, MemoryStore, MemoryStoreError, checkScope, idParts };
 export type { MemoryIndex, NoteSummary, SearchHit, StoredNote, WriteReceipt, WriteRequest };

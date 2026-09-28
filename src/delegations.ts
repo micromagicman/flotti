@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentEvent, AgentEventBody, AgentStatus, Delegation, DelegationState, Quote, SendOptions } from './agent-events.js';
+import type { AgentEvent, AgentEventBody, AgentStatus, Delegation, DelegationMark, DelegationState, Quote, SendOptions } from './agent-events.js';
+import { describeError } from './describe-error.js';
+import { present } from './present.js';
 /** What the tasks need of the fleet: the supervisor gives it. */
 interface DelegationFleet {
     /** The status of the agent; nothing when there is no such agent in the fleet. */
@@ -54,31 +56,57 @@ type TaskTurn = {
     /** The messages of the agent in the turn, by `messageId`, in the order they began. */
     readonly said: Map<string, string>;
 };
+/** A message of an agent, as its tab shows it. */
+type MessageEvent = AgentEvent & { type: 'message' };
+/** How a task ends: its state, and why when it did not complete. */
+type Outcome = { readonly state: DelegationState; readonly why?: string };
+/** Why a task cannot be given, by one check; nothing when this check lets it be given. */
+type RefusalCheck = (delegation: Delegation, status: AgentStatus | undefined) => string | undefined;
 /** A task the agent asks about that it never gave. */
 class UnknownDelegationError extends Error {}
 /** Turn ends that are a pause, not an end: the agent waits for a person and goes on after. */
 const PAUSES: readonly string[] = ['input_required', 'auth_required'];
 /** The longest a timer of Node waits. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
-function describeError(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-}
+/** How a task ends by the way the turn of the agent on it ended, for the ends flotti knows. */
+const OUTCOMES: ReadonlyMap<string, Outcome> = new Map<string, Outcome>([
+    ['end_turn', { state: 'completed' }],
+    ['cancelled', { state: 'canceled', why: 'the agent that got it cancelled its turn' }],
+    ['refusal', { state: 'failed', why: 'the agent refused it' }],
+    ['max_tokens', { state: 'failed', why: 'the agent ran out of tokens' }],
+    ['error', { state: 'failed', why: 'the turn of the agent on it ended with an error' }]
+]);
+/** Why a task cannot be given, checked in this order: the first that says something is the reason. */
+const REFUSAL_CHECKS: readonly RefusalCheck[] = [
+    ({ to }, status) => status === undefined ? `there is no agent "${to}" in the fleet` : undefined,
+    ({ from, to }) => to === from ? 'an agent does not give tasks to itself' : undefined,
+    ({ to }, status) => status === 'stopped' ? `"${to}" is stopped` : undefined,
+    ({ deadline }) => deadline !== undefined && Number.isNaN(Date.parse(deadline)) ? `the deadline "${deadline}" is not a time` : undefined,
+    ({ deadline }) => deadline !== undefined && Date.parse(deadline) <= Date.now() ? 'its deadline has passed already' : undefined
+];
 /** How a task ends by the way the turn of the agent on it ended, and why when it did not complete. */
-function outcomeOf(reason: string): { state: DelegationState; why?: string } {
-    switch (reason) {
-        case 'end_turn':
-            return { state: 'completed' };
-        case 'cancelled':
-            return { state: 'canceled', why: 'the agent that got it cancelled its turn' };
-        case 'refusal':
-            return { state: 'failed', why: 'the agent refused it' };
-        case 'max_tokens':
-            return { state: 'failed', why: 'the agent ran out of tokens' };
-        case 'error':
-            return { state: 'failed', why: 'the turn of the agent on it ended with an error' };
-        default:
-            return { state: 'failed', why: `the turn of the agent on it ended: ${reason}` };
-    }
+function outcomeOf(reason: string): Outcome {
+    return OUTCOMES.get(reason) ?? { state: 'failed', why: `the turn of the agent on it ended: ${reason}` };
+}
+/** The text of a message once this event of it is taken: added to its end, or set anew. */
+function spoken(before: string | undefined, event: MessageEvent): string {
+    return event.append ? (before ?? '') + event.text : event.text;
+}
+/** Whether the task is still in the making and the agent gave it or got it. */
+function involves(task: Task, agentId: string): boolean {
+    return task.view.state === 'working' && (task.view.to === agentId || task.view.from === agentId);
+}
+/** The task as it ended: in its new state, with the result when there is one. */
+function ended({ delegationId, from, to, text, deadline }: Delegation, state: DelegationState, result: string): Delegation {
+    return {
+        delegationId,
+        from,
+        to,
+        text,
+        state,
+        ...present('deadline', deadline),
+        ...(result === '' ? {} : { result })
+    };
 }
 /**
  * Whether a message is still on its way after `ms`: true then, false once it
@@ -132,7 +160,7 @@ class Delegations {
      * waiting in line.
      */
     delegate(from: string, to: string, text: string, options: DelegateOptions = {}): Promise<DelegationStart> {
-        const known = options.id === undefined ? undefined : this.tasks.get(options.id);
+        const known = this.known(options.id);
         if (known !== undefined) {
             return Promise.resolve({ delegation: known.view, queued: false });
         }
@@ -166,20 +194,17 @@ class Delegations {
     take(agentId: string, event: AgentEvent): void {
         if (event.type === 'turn-end') {
             this.turnEnded(agentId, event.reason);
-        } else if (event.type === 'message' && event.role === 'user') {
-            this.messageCame(agentId, event);
-        } else if (event.type === 'message' && event.to === undefined) {
-            const turn = this.turns.get(agentId);
-            if (turn !== undefined && !turn.paused) {
-                turn.said.set(event.messageId, event.append ? (turn.said.get(event.messageId) ?? '') + event.text : event.text);
-            }
+            return;
+        }
+        if (event.type === 'message') {
+            this.messageShown(agentId, event);
         }
     }
     /** The agent left the fleet: the tasks it gave and the tasks it got fail. */
     left(agentId: string): void {
         this.turns.delete(agentId);
         for (const task of this.tasks.values()) {
-            if (task.view.state === 'working' && (task.view.to === agentId || task.view.from === agentId)) {
+            if (involves(task, agentId)) {
                 this.stop(task, 'failed', `"${agentId}" left the fleet`, task.view.from !== agentId);
             }
         }
@@ -192,6 +217,10 @@ class Delegations {
         this.tasks.clear();
         this.turns.clear();
     }
+    /** The task given before under this id; nothing for a new one. */
+    private known(id: string | undefined): Task | undefined {
+        return id === undefined ? undefined : this.tasks.get(id);
+    }
     private newTask(from: string, to: string, text: string, options: DelegateOptions): Task {
         const id = options.id ?? randomUUID();
         const messageId = randomUUID();
@@ -202,7 +231,7 @@ class Delegations {
                 to,
                 text,
                 state: 'working',
-                ...(options.deadline === undefined ? {} : { deadline: options.deadline })
+                ...present('deadline', options.deadline)
             },
             messageId,
             quote: { agentId: to, messageId, author: from, text },
@@ -212,22 +241,13 @@ class Delegations {
         return task;
     }
     /** Why the task cannot be given at all; nothing when it can. */
-    private refusal({ from, to, deadline }: Delegation): string | undefined {
-        const status = this.fleet.status(to);
-        if (status === undefined) {
-            return `there is no agent "${to}" in the fleet`;
-        }
-        if (to === from) {
-            return 'an agent does not give tasks to itself';
-        }
-        if (status === 'stopped') {
-            return `"${to}" is stopped`;
-        }
-        if (deadline !== undefined && Number.isNaN(Date.parse(deadline))) {
-            return `the deadline "${deadline}" is not a time`;
-        }
-        if (deadline !== undefined && Date.parse(deadline) <= Date.now()) {
-            return 'its deadline has passed already';
+    private refusal(delegation: Delegation): string | undefined {
+        const status = this.fleet.status(delegation.to);
+        for (const check of REFUSAL_CHECKS) {
+            const why = check(delegation, status);
+            if (why !== undefined) {
+                return why;
+            }
         }
         return undefined;
     }
@@ -241,7 +261,7 @@ class Delegations {
         const sent = this.fleet.send(to, text, {
             from,
             messageId: task.messageId,
-            delegation: { id, ...(deadline === undefined ? {} : { deadline }) }
+            delegation: { id, ...present('deadline', deadline) }
         });
         const queued = queuedAfter(sent, this.queuedAfterMs, (error, late) => {
             this.settle(task, 'failed', `"${to}" did not get it: ${describeError(error)}`, late || tellFailure);
@@ -263,7 +283,7 @@ class Delegations {
             return;
         }
         const { to } = task.view;
-        const working = this.turns.get(to)?.task === task;
+        const working = this.isWorkedOn(task);
         if (!working) {
             this.fleet.withdraw(to, task.messageId);
         }
@@ -272,16 +292,48 @@ class Delegations {
             void this.fleet.cancel(to).catch(() => undefined);
         }
     }
-    private messageCame(agentId: string, event: AgentEvent & { type: 'message' }): void {
-        const mark = event.delegation;
-        const task = mark === undefined || mark.state !== undefined ? undefined : this.tasks.get(mark.id);
-        if (task !== undefined && task.view.to === agentId && task.messageId === event.messageId) {
+    /** Whether the agent the task went to is working on it now. */
+    private isWorkedOn(task: Task): boolean {
+        return this.turns.get(task.view.to)?.task === task;
+    }
+    /** A message in the tab of the agent: one it got, or one it says. */
+    private messageShown(agentId: string, event: MessageEvent): void {
+        if (event.role === 'user') {
+            this.messageCame(agentId, event);
+            return;
+        }
+        if (event.to === undefined) {
+            this.said(agentId, event);
+        }
+    }
+    /** What the agent says in the turn it spends on a task, kept for the result; nothing while the turn is paused. */
+    private said(agentId: string, event: MessageEvent): void {
+        const turn = this.turns.get(agentId);
+        if (turn !== undefined && !turn.paused) {
+            turn.said.set(event.messageId, spoken(turn.said.get(event.messageId), event));
+        }
+    }
+    private messageCame(agentId: string, event: MessageEvent): void {
+        const task = this.handedTask(agentId, event);
+        if (task !== undefined) {
             this.begin(agentId, task);
             return;
         }
+        this.resume(agentId);
+    }
+    /** The task this message hands the agent; nothing for any other message. */
+    private handedTask(agentId: string, event: MessageEvent): Task | undefined {
+        const task = this.markedTask(event.delegation);
+        return task !== undefined && task.view.to === agentId && task.messageId === event.messageId ? task : undefined;
+    }
+    /** The task a message carries as the task itself, not as its outcome. */
+    private markedTask(mark: DelegationMark | undefined): Task | undefined {
+        return mark === undefined || mark.state !== undefined ? undefined : this.tasks.get(mark.id);
+    }
+    /** The answer a paused turn waited for: the work on the task goes on. */
+    private resume(agentId: string): void {
         const turn = this.turns.get(agentId);
         if (turn?.paused === true) {
-            // The answer a paused turn waited for: the work on the task goes on.
             turn.paused = false;
         }
     }
@@ -316,16 +368,7 @@ class Delegations {
             return;
         }
         clearTimeout(task.timer);
-        const { delegationId, from, to, text, deadline } = task.view;
-        task.view = {
-            delegationId,
-            from,
-            to,
-            text,
-            state,
-            ...(deadline === undefined ? {} : { deadline }),
-            ...(result === '' ? {} : { result })
-        };
+        task.view = ended(task.view, state, result);
         this.show(task);
         if (tell) {
             this.tellGiver(task);
