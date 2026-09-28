@@ -5,7 +5,7 @@ import { ConfigurationError } from './errors.js';
 import { DEFAULT_FLEET_PATH, FLEET_PATH_ARGUMENT, FLEET_PATH_VARIABLE } from './fleet.js';
 import { MANIFEST_FILE } from './manifest.js';
 import { LOG_FILE, PORT_ARGUMENT, PORT_VARIABLE, RUN_FILE, fleetStatus, runFleet, startFleet, stopFleet } from './run.js';
-const HELP = `flotti — simple ai agents orchestrator for humans
+const HELP = `flotti — a messenger for AI agents
 
 Usage:
   flotti start  [${FLEET_PATH_ARGUMENT} <dir>] [${PORT_ARGUMENT} <port>]
