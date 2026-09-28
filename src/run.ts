@@ -62,6 +62,19 @@ type Running = {
     readonly stopped: Promise<void>;
     stop(): Promise<void>;
 };
+/** What every command takes from its options, with the defaults. */
+type CommandContext = {
+    readonly print: (line: string) => void;
+    readonly argv: readonly string[];
+    readonly env: Environment;
+};
+function commandContext(options: RunOptions): CommandContext {
+    return {
+        print: options.print ?? console.log,
+        argv: options.argv ?? process.argv.slice(2),
+        env: options.env ?? process.env
+    };
+}
 function runFile(fleet: Fleet): string {
     return join(fleet.location.path, RUN_FILE);
 }
@@ -71,13 +84,14 @@ function writeRecord(path: string, record: RunRecord): void {
 function readRecord(path: string): RunRecord | undefined {
     try {
         const record = JSON.parse(readFileSync(path, 'utf8')) as Partial<RunRecord>;
-        if (typeof record.pid === 'number' && typeof record.url === 'string' && typeof record.token === 'string') {
-            return record as RunRecord;
-        }
+        return isRunRecord(record) ? record : undefined;
     } catch {
         // No file, or not ours to understand: nothing is running as far as we can tell.
+        return undefined;
     }
-    return undefined;
+}
+function isRunRecord(record: Partial<RunRecord>): record is RunRecord {
+    return typeof record.pid === 'number' && typeof record.url === 'string' && typeof record.token === 'string';
 }
 function isAlive(pid: number): boolean {
     try {
@@ -89,15 +103,26 @@ function isAlive(pid: number): boolean {
 }
 /** The port the argument or the variable names, or the default one. */
 function dashboardPort(argv: readonly string[], env: Readonly<Record<string, string | undefined>>): number {
-    const index = argv.findIndex((argument) => argument === PORT_ARGUMENT || argument.startsWith(`${PORT_ARGUMENT}=`));
-    const argument = argv[index];
-    const fromArgument = argument === undefined
-        ? undefined
-        : argument.includes('=') ? argument.slice(PORT_ARGUMENT.length + 1) : argv[index + 1];
-    const value = fromArgument ?? env[PORT_VARIABLE];
+    const value = portArgument(argv) ?? env[PORT_VARIABLE];
     if (value === undefined || value.trim() === '') {
         return DEFAULT_PORT;
     }
+    return parsePort(value);
+}
+/** The value of the first `--port` argument; `undefined` when there is none. */
+function portArgument(argv: readonly string[]): string | undefined {
+    const index = argv.findIndex(isPortArgument);
+    const argument = argv[index];
+    if (argument === undefined) {
+        return undefined;
+    }
+    return argument.includes('=') ? argument.slice(PORT_ARGUMENT.length + 1) : argv[index + 1];
+}
+function isPortArgument(argument: string): boolean {
+    return argument === PORT_ARGUMENT || argument.startsWith(`${PORT_ARGUMENT}=`);
+}
+/** @throws ConfigurationError when the value is not a port. */
+function parsePort(value: string): number {
     const port = Number(value);
     if (!Number.isInteger(port) || port < 0 || port > 65535) {
         throw new ConfigurationError(
@@ -251,11 +276,10 @@ function stopSignal(): { readonly promise: Promise<void>; readonly resolve: () =
  * dashboard listens; the agents keep starting in the background.
  */
 async function runFleet(options: RunOptions = {}): Promise<Running> {
-    const print = options.print ?? console.log;
-    const argv = options.argv ?? process.argv.slice(2);
+    const { print, argv, env } = commandContext(options);
     const fleet = loadFleet(options);
     const created = prepareFleet(fleet);
-    const port = options.dashboard?.port ?? dashboardPort(argv, options.env ?? process.env);
+    const port = options.dashboard?.port ?? dashboardPort(argv, env);
     const token = randomBytes(24).toString('hex');
     const file = new RunFile(claimFleet(fleet), token);
     const parts = await startSupervisor(fleet, file, options);
@@ -290,17 +314,15 @@ async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
  * @returns Whether flotti is not running any more.
  */
 async function stopFleet(options: RunOptions = {}): Promise<boolean> {
-    const print = options.print ?? console.log;
+    const { print } = commandContext(options);
     const fleet = loadFleet(options);
-    const path = runFile(fleet);
-    const record = readRecord(path);
-    if (record === undefined || !isAlive(record.pid)) {
-        rmSync(path, { force: true });
+    const record = runningRecord(fleet);
+    if (record === undefined) {
+        rmSync(runFile(fleet), { force: true });
         print(`flotti is not running for ${fleet.location.path}.`);
         return true;
     }
-    const asked = await askToStop(record);
-    if (!asked) {
+    if (!(await askToStop(record))) {
         process.kill(record.pid, 'SIGTERM');
     }
     print(`Stopping flotti (process ${record.pid})…`);
@@ -343,9 +365,7 @@ function readFrom(path: string): string {
  * @returns Whether the fleet runs now.
  */
 async function startFleet(options: RunOptions = {}): Promise<boolean> {
-    const print = options.print ?? console.log;
-    const argv = options.argv ?? process.argv.slice(2);
-    const env = options.env ?? process.env;
+    const { print, argv, env } = commandContext(options);
     const fleet = loadFleet(options);
     // What `run` would refuse is refused here, in the terminal, rather than in the log.
     dashboardPort(argv, env);
@@ -393,26 +413,45 @@ function reportStarted(record: RunRecord, fleet: Fleet, log: string, print: (lin
     print(`Log: ${log}`);
     print('flotti status lists the agents, flotti stop stops them.');
 }
+/** The flotti `start` put in the background, while `start` waits for it. */
+type StartWatch = {
+    readonly child: ChildProcess;
+    readonly state: { exited?: number | null };
+    readonly fleet: Fleet;
+    readonly log: string;
+    readonly print: (line: string) => void;
+    readonly until: number;
+};
 /** Waits for the flotti `start` put in the background to open its dashboard, and says how it went. */
 async function waitForStart(child: ChildProcess, fleet: Fleet, log: string, print: (line: string) => void): Promise<boolean> {
-    const state = watchChild(child);
-    const until = Date.now() + START_TIMEOUT_MS;
-    for (;;) {
-        const record = readRecord(runFile(fleet));
-        if (record !== undefined && record.pid === child.pid) {
-            reportStarted(record, fleet, log, print);
-            return true;
-        }
-        if (state.exited !== undefined) {
-            print(readFrom(log).trimEnd() || `flotti did not start (exit code ${state.exited}).`);
-            return false;
-        }
-        if (Date.now() > until) {
-            print(`flotti (process ${child.pid}) has not opened the dashboard in ${START_TIMEOUT_MS / 1000} s; see ${log}.`);
-            return false;
-        }
+    const watch: StartWatch = { child, state: watchChild(child), fleet, log, print, until: Date.now() + START_TIMEOUT_MS };
+    let outcome = startOutcome(watch);
+    while (outcome === undefined) {
         await new Promise((resolve) => setTimeout(resolve, 100));
+        outcome = startOutcome(watch);
     }
+    return outcome;
+}
+/** Whether the start went well, said to the user once it is known; `undefined` while it is still going. */
+function startOutcome(watch: StartWatch): boolean | undefined {
+    const record = readRecord(runFile(watch.fleet));
+    if (record !== undefined && record.pid === watch.child.pid) {
+        reportStarted(record, watch.fleet, watch.log, watch.print);
+        return true;
+    }
+    return startFailure(watch);
+}
+/** `false`, said to the user, once the child went or took too long; `undefined` while it may still start. */
+function startFailure(watch: StartWatch): false | undefined {
+    if (watch.state.exited !== undefined) {
+        watch.print(readFrom(watch.log).trimEnd() || `flotti did not start (exit code ${watch.state.exited}).`);
+        return false;
+    }
+    if (Date.now() > watch.until) {
+        watch.print(`flotti (process ${watch.child.pid}) has not opened the dashboard in ${START_TIMEOUT_MS / 1000} s; see ${watch.log}.`);
+        return false;
+    }
+    return undefined;
 }
 /** Rows of text with the columns lined up. */
 function table(rows: readonly (readonly string[])[]): string[] {
@@ -427,7 +466,7 @@ function table(rows: readonly (readonly string[])[]): string[] {
  * @returns Whether the fleet runs.
  */
 async function fleetStatus(options: RunOptions = {}): Promise<boolean> {
-    const print = options.print ?? console.log;
+    const { print } = commandContext(options);
     const fleet = loadFleet(options);
     const record = runningRecord(fleet);
     if (record === undefined) {
@@ -458,11 +497,14 @@ function healthCells(health: ConnectionHealth | undefined, now: number): string[
         return ['-', '-', '-', ''];
     }
     return [
-        health.latencyMs === undefined ? '?' : `${health.latencyMs} ms`,
+        latencyCell(health),
         `${health.reconnects} (${health.reconnectsLastHour} in 1 h)`,
         health.upSince === undefined ? 'down' : formatDuration(now - Date.parse(health.upSince)),
         health.poor.length === 0 ? '' : `POOR: ${health.poor.join(', ')}`
     ];
+}
+function latencyCell(health: ConnectionHealth): string {
+    return health.latencyMs === undefined ? '?' : `${health.latencyMs} ms`;
 }
 /**
  * One line per agent — id, local or remote, harness, status — under a header;
@@ -474,14 +516,20 @@ function printAgents(agents: readonly AgentSummary[], print: (line: string) => v
         return;
     }
     const connected = agents.some((agent) => agent.health !== undefined);
-    const header = ['ID', 'TYPE', 'HARNESS', 'STATUS', ...(connected ? ['LATENCY', 'RECONNECTS', 'UP', ''] : [])];
-    const rows = agents.map((agent) => [
-        agent.id, agent.kind, agent.harness ?? '-', agent.status,
-        ...(connected ? healthCells(agent.health, now) : [])
-    ]);
+    const header = agentHeader(connected);
+    const rows = agents.map((agent) => agentRow(agent, connected, now));
     for (const line of table([header, ...rows])) {
         print(line);
     }
+}
+function agentHeader(connected: boolean): string[] {
+    return ['ID', 'TYPE', 'HARNESS', 'STATUS', ...(connected ? ['LATENCY', 'RECONNECTS', 'UP', ''] : [])];
+}
+function agentRow(agent: AgentSummary, connected: boolean, now: number): string[] {
+    return [
+        agent.id, agent.kind, agent.harness ?? '-', agent.status,
+        ...(connected ? healthCells(agent.health, now) : [])
+    ];
 }
 export { LOG_FILE, PORT_ARGUMENT, PORT_VARIABLE, RUN_FILE, dashboardPort, fleetStatus, printAgents, runFleet, startFleet, stopFleet };
 export type { RunOptions, Running };
