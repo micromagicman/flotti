@@ -28,20 +28,22 @@ function done(action: AdminAction, target: string | undefined): string {
     return action === 'restart' ? `${target} перезапущен` : `контекст ${target} очищен`;
 }
 function adminAction(state: AdminActionState, admin: string, action: AdminAction, target: string | undefined, reason: string | undefined): string {
-    const what = doing(action, target);
-    switch (state) {
-        case 'pending':
-            return `${admin} просит ${what}`;
-        case 'scheduled':
-            return `${admin} собирается ${what}, когда закончит ход`;
-        case 'done':
-            return `${admin}: ${done(action, target)}`;
-        case 'refused':
-            return `${admin} не может ${what}: ${reason ?? 'отказано'}`;
-        case 'failed':
-            return `${admin}: не удалось ${what}: ${reason ?? 'причина не указана'}`;
-    }
+    return ADMIN_LINES[state]({ admin, action, target, reason });
 }
+type AdminLine = {
+    readonly admin: string;
+    readonly action: AdminAction;
+    readonly target: string | undefined;
+    readonly reason: string | undefined;
+};
+/** Строка действия администратора по его состоянию. */
+const ADMIN_LINES: { readonly [S in AdminActionState]: (line: AdminLine) => string } = {
+    pending: ({ admin, action, target }) => `${admin} просит ${doing(action, target)}`,
+    scheduled: ({ admin, action, target }) => `${admin} собирается ${doing(action, target)}, когда закончит ход`,
+    done: ({ admin, action, target }) => `${admin}: ${done(action, target)}`,
+    refused: ({ admin, action, target, reason }) => `${admin} не может ${doing(action, target)}: ${reason ?? 'отказано'}`,
+    failed: ({ admin, action, target, reason }) => `${admin}: не удалось ${doing(action, target)}: ${reason ?? 'причина не указана'}`
+};
 const status: Readonly<Record<AgentStatus, string>> = {
     starting: 'запускается',
     idle: 'свободен',

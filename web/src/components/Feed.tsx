@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import type { RefObject, UIEvent } from 'react';
+import type { JSX, RefObject, UIEvent } from 'react';
 import type { AgentStatus } from '../../../src/agent-events.js';
 import type { AgentSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
@@ -79,6 +79,10 @@ function AdminAllowance({ item, onAdminAnswer }: Pick<AdminEntryProps, 'item' | 
         </div>
     );
 }
+/** Whether the action cleared the context of the agent of this tab: done, and done to it. */
+function clearsContextOf(item: AdminActionItem, agentId: string): boolean {
+    return item.state === 'done' && item.action === 'clear-context' && item.target === agentId;
+}
 /**
  * An action of an administrator: a line in both tabs, a request with Allow and
  * Refuse while it waits for a person, and — in the tab of the agent whose
@@ -88,7 +92,7 @@ function AdminActionEntry({ item, agentId, agents, onAdminAnswer }: AdminEntryPr
     const name = (id: string): string => agents.find((agent) => agent.id === id)?.name ?? id;
     const t = useT();
     const text = adminActionText(item, name, t);
-    if (item.state === 'done' && item.action === 'clear-context' && item.target === agentId) {
+    if (clearsContextOf(item, agentId)) {
         return <div className="item context-cleared" role="separator" aria-label={t.feed.contextClearedLabel(text)}><span>{t.feed.contextCleared} · {text}</span></div>;
     }
     if (item.state !== 'pending') {
@@ -112,27 +116,50 @@ function ToolEntry({ item }: { readonly item: FeedItem & { kind: 'tool' } }) {
     );
 }
 /** Everything in the feed but messages, tasks, permission requests and actions of administrators. */
-function NoteEntry({ item }: { readonly item: Exclude<FeedItem, { kind: 'message' | 'permission' | 'undelivered' | 'delegation' | 'admin-action' }> }) {
+type NoteItem = Exclude<FeedItem, { kind: 'message' | 'permission' | 'undelivered' | 'delegation' | 'admin-action' }>;
+type NoteOf<K extends NoteItem['kind']> = NoteItem & { kind: K };
+type NoteView<K extends NoteItem['kind']> = (props: { readonly item: NoteOf<K> }) => JSX.Element | null;
+function ThoughtNote({ item }: { readonly item: NoteOf<'thought'> }) {
     const t = useT();
-    switch (item.kind) {
-        case 'thought':
-            return <details className="item thought"><summary>{t.feed.thinking}</summary><div className="text">{item.text}</div></details>;
-        case 'progress':
-            return <div className="item progress">{item.text}</div>;
-        case 'tool':
-            return <ToolEntry item={item} />;
-        case 'turn-end':
-            // A normal end of turn has no look (#115): for an A2A agent every answer is a turn, and a line would follow each.
-            return item.reason === 'end_turn' ? null : <div className="item turn-end-note">{t.feed.turnEnded(item.reason)}</div>;
-        case 'status':
-            return <div className={`item status-line status-line-${item.status}`}>{t.status[item.status]}{item.reason === undefined || item.reason === item.status ? '' : `: ${item.reason}`}</div>;
-        case 'log':
-            return <div className="item log">{item.source === 'flotti' ? 'flotti: ' : ''}{item.text}</div>;
-        case 'raw':
-            return <details className="item raw"><summary>{t.feed.rawMessage(item.protocol.toUpperCase())}</summary><pre>{JSON.stringify(item.payload, null, 2)}</pre></details>;
-    }
+    return <details className="item thought"><summary>{t.feed.thinking}</summary><div className="text">{item.text}</div></details>;
 }
-function FeedEntry({ item, onAnswer, onAdminAnswer, line, ...fleet }: { readonly item: FeedItem } & Omit<FeedProps, 'items' | 'jump'>) {
+function ProgressNote({ item }: { readonly item: NoteOf<'progress'> }) {
+    return <div className="item progress">{item.text}</div>;
+}
+function TurnEndNote({ item }: { readonly item: NoteOf<'turn-end'> }) {
+    const t = useT();
+    // A normal end of turn has no look (#115): for an A2A agent every answer is a turn, and a line would follow each.
+    return item.reason === 'end_turn' ? null : <div className="item turn-end-note">{t.feed.turnEnded(item.reason)}</div>;
+}
+function StatusNote({ item }: { readonly item: NoteOf<'status'> }) {
+    const t = useT();
+    return <div className={`item status-line status-line-${item.status}`}>{t.status[item.status]}{item.reason === undefined || item.reason === item.status ? '' : `: ${item.reason}`}</div>;
+}
+function LogNote({ item }: { readonly item: NoteOf<'log'> }) {
+    return <div className="item log">{item.source === 'flotti' ? 'flotti: ' : ''}{item.text}</div>;
+}
+function RawNote({ item }: { readonly item: NoteOf<'raw'> }) {
+    const t = useT();
+    return <details className="item raw"><summary>{t.feed.rawMessage(item.protocol.toUpperCase())}</summary><pre>{JSON.stringify(item.payload, null, 2)}</pre></details>;
+}
+/** How each kind of note looks. */
+const NOTES: { readonly [K in NoteItem['kind']]: NoteView<K> } = {
+    thought: ThoughtNote,
+    progress: ProgressNote,
+    tool: ToolEntry,
+    'turn-end': TurnEndNote,
+    status: StatusNote,
+    log: LogNote,
+    raw: RawNote
+};
+function NoteEntry({ item }: { readonly item: NoteItem }) {
+    // The view is the one of the note's own kind: TypeScript cannot tie the two together by itself.
+    const Note = NOTES[item.kind] as NoteView<NoteItem['kind']>;
+    return <Note item={item} />;
+}
+type EntryProps = Omit<FeedProps, 'items' | 'jump'>;
+type Fleet = Omit<EntryProps, 'onAnswer' | 'onAdminAnswer' | 'line'>;
+function FeedEntry({ item, onAnswer, onAdminAnswer, line, ...fleet }: { readonly item: FeedItem } & EntryProps) {
     switch (item.kind) {
         case 'message':
             return <Message item={item} {...fleet} />;
@@ -140,6 +167,13 @@ function FeedEntry({ item, onAnswer, onAdminAnswer, line, ...fleet }: { readonly
             return <Undelivered item={item} onSendAgain={line.onSendAgain} {...fleet} />;
         case 'permission':
             return <Permission item={item} onAnswer={onAnswer} />;
+        default:
+            return cardEntry(item, onAdminAnswer, fleet);
+    }
+}
+/** A task, an action of an administrator, or a note. */
+function cardEntry(item: Exclude<FeedItem, { kind: 'message' | 'undelivered' | 'permission' }>, onAdminAnswer: FeedProps['onAdminAnswer'], fleet: Fleet) {
+    switch (item.kind) {
         case 'delegation':
             return <DelegationCard item={item} agents={fleet.agents} colors={fleet.colors} />;
         case 'admin-action':
@@ -169,16 +203,23 @@ function usePinnedScroll(items: readonly unknown[], queue: readonly QueuedMessag
 /** Brings the message a quote points at into view, and flashes it so the eye finds it. */
 function useJump(list: RefObject<HTMLDivElement | null>, agentId: string, jump: Jump | undefined) {
     useEffect(() => {
-        const target = jump?.agentId === agentId ? list.current?.querySelector<HTMLElement>(`[data-seq="${jump.seq}"]`) : undefined;
-        if (target === undefined || target === null) {
-            return;
+        const target = jump?.agentId === agentId ? messageAt(list.current, jump.seq) : null;
+        if (target !== null) {
+            flash(target);
         }
-        const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        target.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'center' });
-        target.classList.remove('message-found');
-        void target.offsetWidth;
-        target.classList.add('message-found');
     }, [list, agentId, jump]);
+}
+/** The message of the feed with the `seq`, if it is shown. */
+function messageAt(feed: HTMLDivElement | null, seq: number): HTMLElement | null {
+    return feed?.querySelector<HTMLElement>(`[data-seq="${seq}"]`) ?? null;
+}
+/** Scrolls the message into view and flashes it. */
+function flash(target: HTMLElement): void {
+    const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'center' });
+    target.classList.remove('message-found');
+    void target.offsetWidth;
+    target.classList.add('message-found');
 }
 /** The agent's output, newest at the bottom, and what waits for it; follows new output unless the reader scrolled up. */
 function Feed({ items, queue, status, onAnswer, onAdminAnswer, jump, ...fleet }: FeedViewProps) {

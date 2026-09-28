@@ -149,6 +149,13 @@ type WebPushViewProps = {
     readonly onStart: () => void;
     readonly onStop: () => void;
 };
+/** Stop the notifications of this browser, or start them: not before it is known whether they are on. */
+function PushButton({ here, onStart, onStop }: Pick<WebPushViewProps, 'here' | 'onStart' | 'onStop'>) {
+    const t = useT();
+    return here === true
+        ? <button type="button" className="btn btn-sm" onClick={onStop}>{t.notifications.stopHere}</button>
+        : <button type="button" className="btn btn-sm" onClick={onStart} disabled={here === undefined}>{t.notifications.notifyHere}</button>;
+}
 function WebPushView({ supported, here, count, error, onStart, onStop }: WebPushViewProps) {
     const t = useT();
     return (
@@ -160,9 +167,7 @@ function WebPushView({ supported, here, count, error, onStart, onStop }: WebPush
                 ? <p className="note">{t.notifications.unsupported}</p>
                 : (
                     <div className="actions">
-                        {here === true
-                            ? <button type="button" className="btn btn-sm" onClick={onStop}>{t.notifications.stopHere}</button>
-                            : <button type="button" className="btn btn-sm" onClick={onStart} disabled={here === undefined}>{t.notifications.notifyHere}</button>}
+                        <PushButton here={here} onStart={onStart} onStop={onStop} />
                     </div>
                 )}
             {error === undefined ? null : <p className="error" role="alert">{error}</p>}
@@ -213,6 +218,11 @@ function BrowserNotifyCheck({ notify }: { readonly notify: BrowserNotify }) {
         </div>
     );
 }
+/** The settings being read, or why they could not be. */
+function Reading({ error }: { readonly error: string | undefined }) {
+    const t = useT();
+    return <p className={error === undefined ? 'muted' : 'error'} role={error === undefined ? undefined : 'alert'}>{error ?? t.notifications.reading}</p>;
+}
 /**
  * Notifications: of this browser, and outside it — Telegram, Web Push — for a
  * person who is not looking at the dashboard. Nothing is sent until a channel is set up.
@@ -231,7 +241,7 @@ function NotificationSettingsSection({ notify }: { readonly notify: BrowserNotif
             <h2>{t.notifications.title}</h2>
             <BrowserNotifyCheck notify={notify} />
             {view === undefined || draft === undefined
-                ? <p className={error === undefined ? 'muted' : 'error'} role={error === undefined ? undefined : 'alert'}>{error ?? t.notifications.reading}</p>
+                ? <Reading error={error} />
                 : <NotificationFields view={view} draft={draft} setDraft={setDraft} error={error} saved={saved} onPush={(next) => run(async () => next)} />}
         </form>
     );

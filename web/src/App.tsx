@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { JSX } from 'react';
 import type { Quote } from '../../src/agent-events.js';
 import { AgentPanel } from './components/AgentPanel.js';
 import type { Jump } from './components/Feed.js';
@@ -11,6 +12,7 @@ import { Sidebar } from './components/Sidebar.js';
 import { useFleet } from './connection.js';
 import { useT } from './i18n/I18n.js';
 import { conversations as conversationsOf, pairOf } from './conversations.js';
+import type { Conversation } from './conversations.js';
 import { quotedMessage } from './feed.js';
 import type { AgentFeed } from './feed.js';
 import { placeOf } from './fleet-feed.js';
@@ -122,11 +124,31 @@ function useConversations(state: ReturnType<typeof useFleet>[0], tab: string) {
     const all = useMemo(() => conversationsOf(ids, state.feeds), [ids.join('\n'), state.feeds]);
     const pair = pairOf(tab);
     const open = pair === undefined ? undefined : all.find((conversation) => conversation.id === tab);
-    const lanePair = open === undefined ? pair : [open.first, open.second] as const;
-    return { all, open, pair: lanePair !== undefined && lanePair.every((id) => ids.includes(id)) ? lanePair : undefined };
+    return { all, open, pair: knownPair(open === undefined ? pair : [open.first, open.second] as const, ids) };
+}
+/** The two agents of a conversation tab, while both are in the fleet. */
+function knownPair(pair: readonly [string, string] | undefined, ids: readonly string[]): readonly [string, string] | undefined {
+    return pair !== undefined && pair.every((id) => ids.includes(id)) ? pair : undefined;
 }
 function isPanelTab(tab: string, pair: unknown): boolean {
     return [BROADCAST, SETTINGS, ADD_AGENT, CONVERSATIONS, FEED].includes(tab) || pair !== undefined;
+}
+type FleetState = ReturnType<typeof useFleet>[0];
+type AgentSummary = FleetState['agents'][number];
+/** The agent whose tab is open: the one the tab names, else the first one, unless another panel is open. */
+function openAgent(state: FleetState, tab: string, pair: unknown): AgentSummary | undefined {
+    return state.agents.find((candidate) => candidate.id === tab) ?? (isPanelTab(tab, pair) ? undefined : state.agents[0]);
+}
+function feedOf(state: FleetState, agent: AgentSummary | undefined): AgentFeed | undefined {
+    return agent === undefined ? undefined : state.feeds[agent.id];
+}
+/** The open tab that marks what it has shown: an agent or a conversation. */
+function seenTab(agent: AgentSummary | undefined, open: Conversation | undefined): string | undefined {
+    return agent?.id ?? open?.id;
+}
+/** What the open tab has shown: the last event of the agent, or how many messages of the conversation. */
+function seenCount(feed: AgentFeed | undefined, open: Conversation | undefined): number | undefined {
+    return feed?.lastSeq ?? open?.messages.length;
 }
 function useAppModel() {
     const [state, dispatch] = useFleet();
@@ -134,9 +156,9 @@ function useAppModel() {
     const attention = useAttention(state, setTab, useT());
     const colors = useAgentColors(state.agents.map((summary) => summary.id));
     const conversations = useConversations(state, tab);
-    const agent = state.agents.find((candidate) => candidate.id === tab) ?? (isPanelTab(tab, conversations.pair) ? undefined : state.agents[0]);
-    const feed = agent === undefined ? undefined : state.feeds[agent.id];
-    const seenSeq = useSeen(agent?.id ?? conversations.open?.id, feed?.lastSeq ?? conversations.open?.messages.length);
+    const agent = openAgent(state, tab, conversations.pair);
+    const feed = feedOf(state, agent);
+    const seenSeq = useSeen(seenTab(agent, conversations.open), seenCount(feed, conversations.open));
     const live = state.agents.map((summary) => ({ ...summary, status: state.feeds[summary.id]?.status ?? summary.status }));
     const { quotes, jump, jumpTo } = useQuotes(state.feeds, tab, setTab);
     const feedOpen = useFeedOpen(tab, setTab, jumpTo);
@@ -155,42 +177,60 @@ function Topbar({ link, settingsOpen, onSettings }: { readonly link: Link; reado
         </header>
     );
 }
+/** The jump into the conversation, while its tab is the open one. */
+function openedJump(jump: LaneJump | undefined, tab: string): LaneJump | undefined {
+    return jump?.pairId === tab ? jump : undefined;
+}
 function ConversationMain({ model }: { readonly model: AppModel }) {
     const { state, tab, setTab, colors, conversations, quotes, feedOpen } = model;
     const fleet = { agents: state.agents, colors };
-    const opened = feedOpen.laneJump?.pairId === tab ? feedOpen.laneJump : undefined;
+    const opened = openedJump(feedOpen.laneJump, tab);
     return conversations.pair === undefined || tab === CONVERSATIONS
         ? <ConversationsPanel conversations={conversations.all} onOpen={setTab} {...fleet} />
         : <ConversationPanel key={tab} pair={conversations.pair} conversation={conversations.open} feeds={state.feeds} quotes={quotes} onOpen={setTab} conversationsId={CONVERSATIONS} opened={opened} {...fleet} />;
 }
+type Panel = (props: { readonly model: AppModel }) => JSX.Element;
+function SettingsMain({ model }: { readonly model: AppModel }) {
+    const { tab, attention, live } = model;
+    const notify = { permission: attention.permission, onAsk: attention.askPermission };
+    return <SettingsPanel key={tab} agents={live} notify={notify} atAgents={tab === ADD_AGENT} />;
+}
+function FeedMain({ model }: { readonly model: AppModel }) {
+    const { state, colors, feedOpen } = model;
+    return <FleetFeedPanel agents={state.agents} feeds={state.feeds} colors={colors} onOpen={feedOpen.onOpen} />;
+}
+function AgentMain({ model }: { readonly model: AppModel }) {
+    const { state, dispatch, setTab, colors, agent, feed, live, quotes, jump } = model;
+    return agent === undefined || feed === undefined
+        ? <BroadcastPanel agents={live} deliveries={state.deliveries} empty={state.agents.length === 0} onSettings={() => setTab(SETTINGS)} />
+        : <AgentPanel key={agent.id} agent={agent} feed={feed} agents={state.agents} colors={colors} dispatch={dispatch} quotes={quotes} jump={jump} />;
+}
+/** The panels a tab of their own opens. */
+const PANELS: ReadonlyMap<string, Panel> = new Map([
+    [ SETTINGS, SettingsMain ],
+    [ ADD_AGENT, SettingsMain ],
+    [ FEED, FeedMain ]
+]);
+/** Whether the open tab is the list of conversations or one of them, and not an agent. */
+function isConversationMain({ tab, agent, conversations }: AppModel): boolean {
+    return agent === undefined && (tab === CONVERSATIONS || conversations.pair !== undefined);
+}
 function Main({ model }: { readonly model: AppModel }) {
-    const { state, dispatch, tab, setTab, attention, colors, conversations, agent, feed, live, quotes, jump } = model;
-    if (tab === SETTINGS || tab === ADD_AGENT) {
-        const notify = { permission: attention.permission, onAsk: attention.askPermission };
-        return <main className="main"><SettingsPanel key={tab} agents={live} notify={notify} atAgents={tab === ADD_AGENT} /></main>;
-    }
-    if (tab === FEED) {
-        return <main className="main"><FleetFeedPanel agents={state.agents} feeds={state.feeds} colors={colors} onOpen={model.feedOpen.onOpen} /></main>;
-    }
-    if (agent === undefined && (tab === CONVERSATIONS || conversations.pair !== undefined)) {
-        return <main className="main"><ConversationMain model={model} /></main>;
-    }
-    return (
-        <main className="main">
-            {agent === undefined || feed === undefined
-                ? <BroadcastPanel agents={live} deliveries={state.deliveries} empty={state.agents.length === 0} onSettings={() => setTab(SETTINGS)} />
-                : <AgentPanel key={agent.id} agent={agent} feed={feed} agents={state.agents} colors={colors} dispatch={dispatch} quotes={quotes} jump={jump} />}
-        </main>
-    );
+    const Panel = PANELS.get(model.tab) ?? (isConversationMain(model) ? ConversationMain : AgentMain);
+    return <main className="main"><Panel model={model} /></main>;
 }
 /** The tab the sidebar marks: an agent, a conversation, or one of the others. */
 function selectedTab({ tab, agent, conversations }: AppModel): string {
     if (agent !== undefined) {
         return agent.id;
     }
-    if (conversations.pair !== undefined) {
-        return conversations.open?.id ?? tab;
-    }
+    return conversations.pair === undefined ? otherTab(tab) : conversationTab(conversations.open, tab);
+}
+function conversationTab(open: Conversation | undefined, tab: string): string {
+    return open?.id ?? tab;
+}
+/** One of the tabs that are neither an agent nor a conversation; the broadcast when the tab is none of them. */
+function otherTab(tab: string): string {
     return [SETTINGS, ADD_AGENT, CONVERSATIONS, FEED].includes(tab) ? tab : BROADCAST;
 }
 function App() {
