@@ -49,23 +49,6 @@ export default tseslint.config(
         },
     },
     {
-        // Not under the limit yet (#119): a file leaves this list once its functions are split.
-        files: [
-            'web/src/App.tsx',
-            'web/src/components/Feed.tsx',
-            'web/src/components/NotificationSettings.tsx',
-            'web/src/components/SettingsPanel.tsx',
-            'web/src/components/Sidebar.tsx',
-            'web/src/feed.ts',
-            'web/src/i18n/en.ts',
-            'web/src/i18n/ru.ts',
-            'web/src/markdown.ts'
-        ],
-        rules: {
-            complexity: 'off'
-        },
-    },
-    {
         // The words of the dashboard come from its languages, web/src/i18n (#86).
         files: [ 'web/src/**/*.ts', 'web/src/**/*.tsx' ],
         ignores: [ 'web/src/i18n/**' ],

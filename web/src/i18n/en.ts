@@ -23,20 +23,16 @@ function doing(action: AdminAction, target: string | undefined): string {
 }
 /** The line of an action of an administrator in its state; `target` is undefined when it acts on itself. */
 function adminAction(state: AdminActionState, admin: string, action: AdminAction, target: string | undefined, reason: string | undefined): string {
-    const what = doing(action, target);
-    switch (state) {
-        case 'pending':
-            return `${admin} asks to ${what}`;
-        case 'scheduled':
-            return `${admin} will ${what} once its turn is over`;
-        case 'done':
-            return `${admin} ${what.replace(/^restart/, 'restarted').replace(/^clear/, 'cleared')}`;
-        case 'refused':
-            return `${admin} may not ${what}: ${reason ?? 'refused'}`;
-        case 'failed':
-            return `${admin} could not ${what}: ${reason ?? 'no reason given'}`;
-    }
+    return ADMIN_LINES[state](admin, doing(action, target), reason);
 }
+/** The line of an action of an administrator, by its state: `what` is what it does, in words. */
+const ADMIN_LINES: { readonly [S in AdminActionState]: (admin: string, what: string, reason: string | undefined) => string } = {
+    pending: (admin, what) => `${admin} asks to ${what}`,
+    scheduled: (admin, what) => `${admin} will ${what} once its turn is over`,
+    done: (admin, what) => `${admin} ${what.replace(/^restart/, 'restarted').replace(/^clear/, 'cleared')}`,
+    refused: (admin, what, reason) => `${admin} may not ${what}: ${reason ?? 'refused'}`,
+    failed: (admin, what, reason) => `${admin} could not ${what}: ${reason ?? 'no reason given'}`
+};
 const status: Readonly<Record<AgentStatus, string>> = {
     starting: 'starting',
     idle: 'idle',

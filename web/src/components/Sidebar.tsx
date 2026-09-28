@@ -67,8 +67,15 @@ function TabStatus({ status, inLine }: { readonly status: AgentStatus; readonly 
         </span>
     );
 }
+/** The live status of the agent: its feed knows it first. */
+function statusOf(agent: AgentSummary, feed: AgentFeed | undefined): AgentStatus {
+    return feed?.status ?? agent.status;
+}
+function inLineOf(feed: AgentFeed | undefined): number {
+    return feed?.queue.length ?? 0;
+}
 function AgentTab({ agent, feed, color, unread, selected, onSelect }: AgentTabProps) {
-    const status = feed?.status ?? agent.status;
+    const status = statusOf(agent, feed);
     const t = useT();
     return (
         <button type="button" role="tab" className={`tab tab-${status}`} aria-selected={selected} data-agent={agent.id} onClick={() => onSelect(agent.id)}>
@@ -77,7 +84,7 @@ function AgentTab({ agent, feed, color, unread, selected, onSelect }: AgentTabPr
                 <span className="tab-label">{agent.name}</span>
                 {unread ? <span className="unread" aria-label={t.sidebar.newOutput} /> : null}
             </span>
-            <TabStatus status={status} inLine={feed?.queue.length ?? 0} /><PoorConnectionMark health={agent.health} />
+            <TabStatus status={status} inLine={inLineOf(feed)} /><PoorConnectionMark health={agent.health} />
         </button>
     );
 }
@@ -106,6 +113,20 @@ function PairTab({ conversation, agents, colors, unread, selected, onSelect }: P
         </button>
     );
 }
+/**
+ * Whether a tab not open has more than it showed when it was: the last event
+ * of an agent, or how many messages of a conversation.
+ */
+function hasUnread(id: string, selected: string, shown: number, seenSeq: SidebarProps['seenSeq']): boolean {
+    return id !== selected && shown > (seenSeq[id] ?? 0);
+}
+function lastSeqOf(feed: AgentFeed | undefined): number {
+    return feed?.lastSeq ?? 0;
+}
+/** The tab of all conversations: on a narrow screen only, when every one has a tab; marked when one of them is open. */
+function conversationsClass(rest: number, holdsOpen: boolean): string {
+    return `tab tab-conversations${rest > 0 ? '' : ' tab-narrow-only'}${holdsOpen ? ' tab-holds-open' : ''}`;
+}
 type ConversationTabsProps = Pick<SidebarProps, 'agents' | 'colors' | 'conversations' | 'seenSeq' | 'selected' | 'conversationsId' | 'onSelect'>;
 /**
  * The newest conversations by name, then the list of them all when there are
@@ -121,9 +142,9 @@ function ConversationTabs({ agents, colors, conversations, seenSeq, selected, co
             <div className="side-head" aria-hidden="true">{t.sidebar.conversations}</div>
             {shown.map((conversation) => (
                 <PairTab key={conversation.id} conversation={conversation} agents={agents} colors={colors} selected={conversation.id === selected}
-                    unread={conversation.id !== selected && conversation.messages.length > (seenSeq[conversation.id] ?? 0)} onSelect={onSelect} />
+                    unread={hasUnread(conversation.id, selected, conversation.messages.length, seenSeq)} onSelect={onSelect} />
             ))}
-            <SideTab className={`tab tab-conversations${rest > 0 ? '' : ' tab-narrow-only'}${holdsOpen ? ' tab-holds-open' : ''}`} selected={selected === conversationsId}
+            <SideTab className={conversationsClass(rest, holdsOpen)} selected={selected === conversationsId}
                 onClick={() => onSelect(conversationsId)} name={rest > 0 ? t.sidebar.allConversations : t.sidebar.conversations} hint={t.sidebar.pairs(conversations.length)} />
         </>
     );
@@ -151,7 +172,7 @@ function Sidebar({ agents, feeds, colors, conversations, seenSeq, selected, broa
             <FleetTabs selected={selected} broadcastId={broadcastId} feedId={feedId} onSelect={onSelect} />
             {agents.map((agent) => (
                 <AgentTab key={agent.id} agent={agent} feed={feeds[agent.id]} color={colors[agent.id]} selected={agent.id === selected} onSelect={onSelect}
-                    unread={agent.id !== selected && (feeds[agent.id]?.lastSeq ?? 0) > (seenSeq[agent.id] ?? 0)} />
+                    unread={hasUnread(agent.id, selected, lastSeqOf(feeds[agent.id]), seenSeq)} />
             ))}
             {conversations.length === 0
                 ? null
