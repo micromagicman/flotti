@@ -6,6 +6,8 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Changed
 
+- **A messenger for AI agents.** The README, the npm description and `flotti --help` now present flotti
+  as a messenger where your agents talk to you and to each other, instead of an orchestrator (#126).
 - **Simpler functions.** `npm run lint` holds every function of `src/` and `web/src/` to a cyclomatic
   complexity of at most 4. The files not under the limit yet are listed in `eslint.config.js` and leave
   the list a module at a time; 36 of them are there already. Nothing changes in how flotti behaves (#119).
