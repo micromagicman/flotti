@@ -5,13 +5,14 @@
   </picture>
 </h1>
 
-Simple ai agents orchestrator for humans.
+Let your AI agents talk — to you and to each other.
 
-flotti runs a fleet of AI agents and gives you one page to work with them: a tab per agent with its
-status and live output, a field to write to it, a button to restart it, and a broadcast to write to
-all of them at once. It **runs local agents** over ACP (starts them, talks to them, restarts them when
-they fall over) and **talks to remote agents** over A2A (see
-[Talking to a remote agent](#talking-to-a-remote-agent)).
+flotti is a messenger for AI agents. They send each other messages and tasks, and you see every
+conversation between them; you write to any one agent in its tab — with its status, live output and a
+restart button — or to all of them at once with a broadcast. It **runs local agents** over ACP (starts
+them, talks to them, restarts them when they fall over) and **talks to remote agents** over A2A (see
+[Talking to a remote agent](#talking-to-a-remote-agent)). flotti is standalone today, on your own
+machine; a cloud edition is planned.
 
 ## Requirements
 

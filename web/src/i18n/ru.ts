@@ -28,20 +28,22 @@ function done(action: AdminAction, target: string | undefined): string {
     return action === 'restart' ? `${target} перезапущен` : `контекст ${target} очищен`;
 }
 function adminAction(state: AdminActionState, admin: string, action: AdminAction, target: string | undefined, reason: string | undefined): string {
-    const what = doing(action, target);
-    switch (state) {
-        case 'pending':
-            return `${admin} просит ${what}`;
-        case 'scheduled':
-            return `${admin} собирается ${what}, когда закончит ход`;
-        case 'done':
-            return `${admin}: ${done(action, target)}`;
-        case 'refused':
-            return `${admin} не может ${what}: ${reason ?? 'отказано'}`;
-        case 'failed':
-            return `${admin}: не удалось ${what}: ${reason ?? 'причина не указана'}`;
-    }
+    return ADMIN_LINES[state]({ admin, action, target, reason });
 }
+type AdminLine = {
+    readonly admin: string;
+    readonly action: AdminAction;
+    readonly target: string | undefined;
+    readonly reason: string | undefined;
+};
+/** Строка действия администратора по его состоянию. */
+const ADMIN_LINES: { readonly [S in AdminActionState]: (line: AdminLine) => string } = {
+    pending: ({ admin, action, target }) => `${admin} просит ${doing(action, target)}`,
+    scheduled: ({ admin, action, target }) => `${admin} собирается ${doing(action, target)}, когда закончит ход`,
+    done: ({ admin, action, target }) => `${admin}: ${done(action, target)}`,
+    refused: ({ admin, action, target, reason }) => `${admin} не может ${doing(action, target)}: ${reason ?? 'отказано'}`,
+    failed: ({ admin, action, target, reason }) => `${admin}: не удалось ${doing(action, target)}: ${reason ?? 'причина не указана'}`
+};
 const status: Readonly<Record<AgentStatus, string>> = {
     starting: 'запускается',
     idle: 'свободен',
@@ -115,8 +117,7 @@ const ru: Messages = {
         gone: 'flotti остановлен'
     },
     topbar: {
-        notify: 'Уведомлять',
-        notifyHint: 'Уведомление, когда агент ждёт вас, а вкладка flotti не на виду'
+        settings: 'Настройки'
     },
     attention: {
         waitingTitle: (name) => `${name} ждёт вас`,
@@ -128,14 +129,18 @@ const ru: Messages = {
         label: 'Агенты',
         allAgents: 'Все агенты',
         broadcast: 'Рассылка',
-        settings: 'Настройки',
-        settingsHint: 'Флот и агенты',
+        addAgent: 'Добавить агента',
+        addAgentHint: 'Локального или удалённого',
         newOutput: 'новый вывод',
         newMessages: 'новые сообщения',
         conversations: 'Переписки',
         allConversations: 'Все переписки',
         pairs: (n) => `${count(n, 'пара', 'пары', 'пар')} агентов`,
-        conversationOf: (names, n) => `Переписка ${names}, ${count(n, 'сообщение', 'сообщения', 'сообщений')}`
+        conversationOf: (names, n) => `Переписка ${names}, ${count(n, 'сообщение', 'сообщения', 'сообщений')}`,
+        fleet: 'Флот',
+        agents: 'Агенты',
+        allMessages: 'Все сообщения',
+        allMessagesHint: (n) => `Последние ${f.number(n)} по флоту`
     },
     health: {
         label: 'SSH-соединение',
@@ -261,6 +266,25 @@ const ru: Messages = {
         delivery: 'Доставка',
         result: deliveryResult
     },
+    fleetFeed: {
+        title: 'Все сообщения',
+        label: 'Все сообщения флота',
+        log: 'Сообщения',
+        cap: (n) => `Последние ${count(n, 'сообщение', 'сообщения', 'сообщений')} флота · более ранние остаются во вкладках агентов`,
+        filter: 'Показать сообщения',
+        all: 'Все',
+        none: 'Во флоте пока нет сообщений.',
+        noneOf: (name) => `У ${name} пока нет сообщений.`,
+        unseen: (n) => `↓ ${count(n, 'новое', 'новых', 'новых')}`,
+        kind: { forwarded: 'пересылка', task: 'задача', result: 'итог задачи' },
+        openIn: (place) => `Открыть: ${place}`,
+        opens: (place) => `Откроется ${place}`,
+        tabOf: (name) => `вкладка ${name}`,
+        pairOf: (one, other) => `переписка ${one} ↔ ${other}`,
+        row: (from, to, when, place) => `${from} → ${to}, ${when}. Откроется ${place}`,
+        when: (time, today) => (today ? f.time(time) : f.weekdayTime(time)),
+        whenFull: (time) => f.dateTime(time)
+    },
     conversation: {
         of: (names) => `Переписка ${names}`,
         notYet: (names) => `${names} ещё не писали друг другу.`,
@@ -324,6 +348,10 @@ const ru: Messages = {
         noAgents: 'Агентов пока нет.',
         addLocal: 'Добавить локального агента',
         addRemote: 'Добавить удалённого агента',
+        notify: 'Уведомлять',
+        notifyHint: 'Уведомление, когда агент ждёт вас, а вкладка flotti не на виду',
+        notifyDenied: 'Браузеру запрещено показывать уведомления; разрешить можно в настройках сайта в браузере.',
+        notifyUnsupported: 'Этот браузер не умеет показывать уведомления.',
         adminSuffix: ' · админ',
         confirmDelete: (name) => `Остановить ${name} и переместить его каталог в .trash каталога флота?`,
         keep: 'Оставить',

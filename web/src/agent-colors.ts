@@ -11,13 +11,23 @@ function countKept(ids: readonly string[], colors: AgentColors, uses: number[]):
     const fresh: string[] = [];
     for (const id of ids) {
         const color = colors[id];
-        if (color !== undefined && Number.isInteger(color) && color >= 0 && color < PALETTE_SIZE) {
+        if (isColor(color)) {
             uses[color] = (uses[color] ?? 0) + 1;
         } else {
             fresh.push(id);
         }
     }
     return fresh;
+}
+/** A colour of the palette, not a broken pick. */
+function isColor(color: number | undefined): color is number {
+    return color !== undefined && Number.isInteger(color) && color >= 0 && color < PALETTE_SIZE;
+}
+/** A random colour out of those the fewest agents have. */
+function pickColor(uses: readonly number[], random: () => number): number {
+    const fewest = Math.min(...uses);
+    const free = uses.flatMap((count, color) => (count === fewest ? [color] : []));
+    return free[Math.min(free.length - 1, Math.floor(random() * free.length))] ?? 0;
 }
 /**
  * Gives every agent of `ids` a colour. An agent keeps the colour it had; a new
@@ -32,9 +42,7 @@ function assignColors(ids: readonly string[], kept: AgentColors, random: () => n
     const uses = new Array<number>(PALETTE_SIZE).fill(0);
     const fresh = countKept(ids, colors, uses);
     for (const id of fresh) {
-        const fewest = Math.min(...uses);
-        const free = uses.flatMap((count, color) => (count === fewest ? [color] : []));
-        const color = free[Math.min(free.length - 1, Math.floor(random() * free.length))] ?? 0;
+        const color = pickColor(uses, random);
         colors[id] = color;
         uses[color] = (uses[color] ?? 0) + 1;
     }

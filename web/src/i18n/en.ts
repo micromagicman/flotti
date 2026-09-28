@@ -23,20 +23,16 @@ function doing(action: AdminAction, target: string | undefined): string {
 }
 /** The line of an action of an administrator in its state; `target` is undefined when it acts on itself. */
 function adminAction(state: AdminActionState, admin: string, action: AdminAction, target: string | undefined, reason: string | undefined): string {
-    const what = doing(action, target);
-    switch (state) {
-        case 'pending':
-            return `${admin} asks to ${what}`;
-        case 'scheduled':
-            return `${admin} will ${what} once its turn is over`;
-        case 'done':
-            return `${admin} ${what.replace(/^restart/, 'restarted').replace(/^clear/, 'cleared')}`;
-        case 'refused':
-            return `${admin} may not ${what}: ${reason ?? 'refused'}`;
-        case 'failed':
-            return `${admin} could not ${what}: ${reason ?? 'no reason given'}`;
-    }
+    return ADMIN_LINES[state](admin, doing(action, target), reason);
 }
+/** The line of an action of an administrator, by its state: `what` is what it does, in words. */
+const ADMIN_LINES: { readonly [S in AdminActionState]: (admin: string, what: string, reason: string | undefined) => string } = {
+    pending: (admin, what) => `${admin} asks to ${what}`,
+    scheduled: (admin, what) => `${admin} will ${what} once its turn is over`,
+    done: (admin, what) => `${admin} ${what.replace(/^restart/, 'restarted').replace(/^clear/, 'cleared')}`,
+    refused: (admin, what, reason) => `${admin} may not ${what}: ${reason ?? 'refused'}`,
+    failed: (admin, what, reason) => `${admin} could not ${what}: ${reason ?? 'no reason given'}`
+};
 const status: Readonly<Record<AgentStatus, string>> = {
     starting: 'starting',
     idle: 'idle',
@@ -110,8 +106,7 @@ const en = {
         gone: 'flotti has stopped'
     },
     topbar: {
-        notify: 'Notify me',
-        notifyHint: 'A notification when an agent waits for you and flotti is out of sight'
+        settings: 'Settings'
     },
     attention: {
         waitingTitle: (name: string) => `${name} is waiting for you`,
@@ -123,14 +118,18 @@ const en = {
         label: 'Agents',
         allAgents: 'All agents',
         broadcast: 'Broadcast',
-        settings: 'Settings',
-        settingsHint: 'Fleet and agents',
+        addAgent: 'Add agent',
+        addAgentHint: 'Local or remote',
         newOutput: 'new output',
         newMessages: 'new messages',
         conversations: 'Conversations',
         allConversations: 'All conversations',
         pairs: (n: number) => `${f.number(n)} pair${s(n)} of agents`,
-        conversationOf: (names: string, n: number) => `Conversation of ${names}, ${f.number(n)} message${s(n)}`
+        conversationOf: (names: string, n: number) => `Conversation of ${names}, ${f.number(n)} message${s(n)}`,
+        fleet: 'Fleet',
+        agents: 'Agents',
+        allMessages: 'All messages',
+        allMessagesHint: (n: number) => `The latest ${f.number(n)} of the fleet`
     },
     health: {
         label: 'SSH connection',
@@ -256,6 +255,25 @@ const en = {
         delivery: 'Delivery',
         result: deliveryResult
     },
+    fleetFeed: {
+        title: 'All messages',
+        label: 'Every message of the fleet',
+        log: 'Messages',
+        cap: (n: number) => `The latest ${f.number(n)} messages of the fleet · older ones stay in the tabs of the agents`,
+        filter: 'Show messages of',
+        all: 'All',
+        none: 'No messages in the fleet yet.',
+        noneOf: (name: string) => `No messages of ${name} yet.`,
+        unseen: (n: number) => `↓ ${f.number(n)} new`,
+        kind: { forwarded: 'forwarded', task: 'task', result: 'task result' },
+        openIn: (place: string) => `Open in ${place}`,
+        opens: (place: string) => `Opens ${place}`,
+        tabOf: (name: string) => `the tab of ${name}`,
+        pairOf: (one: string, other: string) => `the conversation ${one} ↔ ${other}`,
+        row: (from: string, to: string, when: string, place: string) => `${from} to ${to}, ${when}. Opens ${place}`,
+        when: (time: Date, today: boolean) => (today ? f.time(time) : f.weekdayTime(time)),
+        whenFull: (time: Date) => f.dateTime(time)
+    },
     conversation: {
         of: (names: string) => `Conversation of ${names}`,
         notYet: (names: string) => `${names} have not written to each other yet.`,
@@ -319,6 +337,10 @@ const en = {
         noAgents: 'No agents yet.',
         addLocal: 'Add local agent',
         addRemote: 'Add remote agent',
+        notify: 'Notify me',
+        notifyHint: 'A notification when an agent waits for you and flotti is out of sight',
+        notifyDenied: 'The browser was told not to show notifications; that is undone in its site settings.',
+        notifyUnsupported: 'This browser cannot show notifications.',
         adminSuffix: ' · admin',
         confirmDelete: (name: string) => `Stop ${name} and move its directory to .trash in the fleet directory?`,
         keep: 'Keep',

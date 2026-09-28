@@ -139,6 +139,8 @@ test.afterAll(async () => {
 });
 const tab = (page: Page, name: string) => page.getByRole('tab', { name: new RegExp(`^${name}`) });
 const feed = (page: Page, name: string) => page.getByRole('log', { name: `Output of ${name}` });
+/** The settings: an icon in the header, right of the connection status (#116). */
+const settingsButton = (page: Page, name = 'Settings') => page.getByRole('banner').getByRole('button', { name, exact: true });
 async function say(page: Page, name: string, text: string): Promise<void> {
     await tab(page, name).click();
     const field = page.getByRole('textbox', { name: `Message to ${name}` });
@@ -147,7 +149,7 @@ async function say(page: Page, name: string, text: string): Promise<void> {
 }
 test('every agent has a tab with its status', async ({ page }) => {
     await page.goto(url);
-    await expect(page.getByRole('tab')).toHaveText([/All agents/, /claude/, /codex/, /relay/, /Settings/]);
+    await expect(page.getByRole('tab')).toHaveText([/All agents/, /All messages/, /claude/, /codex/, /relay/, /Add agent/]);
     for (const name of ['claude', 'codex', 'relay']) {
         await expect(tab(page, name).locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     }
@@ -206,6 +208,22 @@ test('writes to one agent, and the answer stays in its tab', async ({ page }) =>
     await tab(page, 'claude').click();
     await expect(feed(page, 'claude')).toContainText('you said: hello claude');
 });
+test('a turn that ended normally draws nothing under the answer; one that ended otherwise says why (#115)', async ({ page }) => {
+    await page.goto(url);
+    await say(page, 'claude', 'no line under me');
+    await expect(feed(page, 'claude')).toContainText('you said: no line under me');
+    await say(page, 'relay', 'no line under me');
+    await expect(feed(page, 'relay')).toContainText('echo: no line under me');
+    for (const name of ['claude', 'relay']) {
+        await tab(page, name).click();
+        await expect(feed(page, name).locator('hr, .turn-end')).toHaveCount(0);
+    }
+    await say(page, 'claude', 'wait');
+    await expect(tab(page, 'claude').locator('[data-status]')).toHaveAttribute('data-status', 'working');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(feed(page, 'claude').locator('.turn-end-note').last()).toHaveText('Turn ended: cancelled');
+    await expect(feed(page, 'claude').locator('hr, .turn-end')).toHaveCount(0);
+});
 test('what an agent says of its own shows in its tab, local and remote alike', async ({ page }) => {
     await page.goto(url);
     await say(page, 'claude', 'later');
@@ -244,6 +262,65 @@ test('the conversation of two agents has a tab of its own: one lane, read-only, 
     await expect(page.getByRole('textbox')).toHaveCount(0);
     await page.getByRole('button', { name: 'Write to claude' }).click();
     await expect(page.getByRole('textbox', { name: 'Message to claude' })).toBeVisible();
+});
+/** The feed of every message of the fleet (#114), and a message in it by who wrote to whom. */
+const fleetFeed = (page: Page) => page.getByRole('log', { name: 'Messages' });
+const fleetRow = (page: Page, from: string, to: string) => fleetFeed(page).getByRole('button', { name: new RegExp(`^${from} to ${to},`) });
+const feedFilter = (page: Page) => page.getByRole('group', { name: 'Show messages of' });
+test('every message of the fleet is in one feed, apart from the agents: who wrote to whom and when, and only messages (#114)', async ({ page }) => {
+    await page.goto(url);
+    await expect(page.locator('.sidebar .side-head')).toHaveText(['Fleet', 'Agents', 'Conversations']);
+    await tab(page, 'All messages').click();
+    await expect(page.getByRole('heading', { name: 'All messages' })).toBeVisible();
+    await expect(fleetFeed(page)).toContainText('The latest 200 messages of the fleet');
+    await expect(fleetRow(page, 'You', 'relay').filter({ hasText: 'write to claude' })).toHaveCount(1);
+    await expect(fleetRow(page, 'relay', 'claude').filter({ hasText: 'Please rerun the e2e job' })).toHaveCount(1);
+    await expect(fleetRow(page, 'claude', 'relay').filter({ hasText: 'you said: [from relay] Please rerun the e2e job' })).toHaveCount(1);
+    await expect(fleetRow(page, 'claude', 'You').filter({ hasText: 'you said: hello claude' })).toHaveCount(1);
+    await expect(fleetRow(page, 'relay', 'claude').first().locator('.fleet-when')).toHaveText(/^\d{1,2}:\d{2}/);
+    await expect(fleetFeed(page)).not.toContainText('Turn ended');
+});
+test('the feed of the fleet is filtered by one agent, whether it wrote or got the message, and All shows every one again (#114)', async ({ page }) => {
+    await page.goto(`${url}#/_feed`);
+    await feedFilter(page).getByRole('button', { name: 'claude', exact: true }).click();
+    await expect(feedFilter(page).getByRole('button', { name: 'claude', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(fleetRow(page, 'relay', 'claude')).not.toHaveCount(0);
+    await expect(fleetRow(page, 'claude', 'relay')).not.toHaveCount(0);
+    await expect(fleetRow(page, 'You', 'relay')).toHaveCount(0);
+    const names = await fleetFeed(page).getByRole('button').evaluateAll((rows) => rows.map((row) => row.getAttribute('aria-label') ?? ''));
+    expect(names.every((name) => /^(claude to|.* to claude,)/.test(name))).toBe(true);
+    await feedFilter(page).getByRole('button', { name: 'All', exact: true }).click();
+    await expect(fleetRow(page, 'You', 'relay')).not.toHaveCount(0);
+});
+test('a message of the feed of the fleet opens where it lives: between two agents their conversation, between a person and an agent its tab (#114)', async ({ page }) => {
+    await page.goto(url);
+    await tab(page, 'All messages').click();
+    await fleetRow(page, 'relay', 'claude').filter({ hasText: 'Please rerun the e2e job' }).click();
+    await expect(lane(page).locator('.lane-row.message-found')).toContainText('Please rerun the e2e job');
+    await tab(page, 'All messages').click();
+    const toRelay = fleetRow(page, 'You', 'relay').filter({ hasText: 'write to claude' });
+    await toRelay.focus();
+    await toRelay.press('Enter');
+    await expect(feed(page, 'relay').locator('.message-found')).toContainText('write to claude');
+});
+test('the feed of the fleet shows a new message as it comes, without a reload (#114)', async ({ page, context }) => {
+    await page.goto(`${url}#/_feed`);
+    await expect(fleetFeed(page)).toBeVisible();
+    const other = await context.newPage();
+    await other.goto(url);
+    await say(other, 'codex', 'live in the feed');
+    await expect(fleetRow(page, 'You', 'codex').filter({ hasText: 'live in the feed' })).toHaveCount(1);
+    await expect(fleetRow(page, 'codex', 'You').filter({ hasText: 'you said: live in the feed' })).toHaveCount(1);
+    await other.close();
+});
+test('on a narrow screen both tabs of the whole fleet lead the row, and the feed fits the screen (#114)', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(url);
+    await expect(tab(page, 'All agents')).toBeInViewport();
+    await expect(tab(page, 'All messages')).toBeInViewport();
+    await tab(page, 'All messages').click();
+    await expect(fleetRow(page, 'relay', 'claude').first()).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 /** The channels of a colour, 0–255: `#rrggbb`, `rgb()`, or the `color(srgb …)` a `color-mix()` computes to. */
 function channels(color: string): number[] {
@@ -717,11 +794,58 @@ test('a waiting agent stands out, counts in the title and notifies while the pag
     await expect(page).toHaveTitle('flotti');
     await expect.poll(() => notifications(page)).toEqual([expect.objectContaining({ closed: true })]);
 });
-test('asks for permission to notify only when the person clicks for it', async ({ page }) => {
+test('asks for permission to notify only when the person ticks Notify me in the settings', async ({ page }) => {
     await page.addInitScript(pretendNotifications, 'default');
     await page.goto(url);
-    await page.getByRole('button', { name: 'Notify me' }).click();
     await expect(page.getByRole('button', { name: 'Notify me' })).toHaveCount(0);
+    await settingsButton(page).click();
+    const notify = page.getByRole('checkbox', { name: 'Notify me' });
+    await expect(notify).not.toBeChecked();
+    await expect(page.getByRole('form', { name: 'Notifications' })).toContainText('A notification when an agent waits for you and flotti is out of sight');
+    await notify.check();
+    await expect(notify).toBeChecked();
+    await expect(notify).toBeDisabled();
+});
+test('Notify me stays unticked and locked when the browser was told no', async ({ page }) => {
+    await page.addInitScript(pretendNotifications, 'denied');
+    await page.goto(`${url}#/_settings`);
+    const notify = page.getByRole('checkbox', { name: 'Notify me' });
+    await expect(notify).not.toBeChecked();
+    await expect(notify).toBeDisabled();
+});
+test('the settings are an icon right of the connection status, and open the settings', async ({ page }) => {
+    await page.goto(url);
+    const settings = settingsButton(page);
+    await expect(settings).toBeVisible();
+    await expect(settings).toHaveText('');
+    await expect(settings).toHaveAttribute('title', 'Settings');
+    await expect(settings.locator('svg')).toBeVisible();
+    const status = await page.getByRole('banner').getByRole('status').boundingBox();
+    const icon = await settings.boundingBox();
+    expect(icon?.x ?? 0).toBeGreaterThanOrEqual((status?.x ?? 0) + (status?.width ?? 0));
+    await expect(page.getByRole('tab', { name: /^Settings/ })).toHaveCount(0);
+    await settings.click();
+    await expect(page.getByRole('heading', { name: 'Fleet settings' })).toBeVisible();
+    await expect(settings).toHaveAttribute('aria-current', 'page');
+});
+test('Add agent stands where the settings were, and leads to adding a local or a remote agent', async ({ page }) => {
+    await page.goto(url);
+    await expect(page.getByRole('tab').last()).toHaveText(/^Add agent/);
+    await tab(page, 'Add agent').click();
+    await expect(tab(page, 'Add agent')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('button', { name: 'Add local agent' })).toBeFocused();
+    await expect(page.getByRole('button', { name: 'Add local agent' })).toBeInViewport();
+    await expect(page.getByRole('button', { name: 'Add remote agent' })).toBeInViewport();
+});
+test('on a narrow screen the settings icon and Add agent are in sight, and the header fits', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(url);
+    await expect(settingsButton(page)).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    await tab(page, 'Add agent').click();
+    await expect(page.getByRole('button', { name: 'Add local agent' })).toBeInViewport();
+    await settingsButton(page).click();
+    await expect(page.getByRole('heading', { name: 'Fleet settings' })).toBeVisible();
 });
 test('the restart button restarts a local agent and starts over with a remote one', async ({ page }) => {
     await page.goto(url);
@@ -754,7 +878,8 @@ test('the language is picked in the settings: the page speaks it at once, and af
     await expect(page.getByRole('log', { name: 'Вывод claude' })).toContainText('you said: hello claude');
     await expect(page.getByRole('textbox', { name: 'Сообщение для claude' })).toBeVisible();
     await expect(page.getByRole('group', { name: 'Вид' }).getByRole('button', { name: 'Память' })).toBeVisible();
-    await page.getByRole('tab', { name: /^Настройки/ }).click();
+    await expect(tab(page, 'Добавить агента')).toBeVisible();
+    await settingsButton(page, 'Настройки').click();
     await page.getByRole('combobox', { name: 'Язык дашборда' }).selectOption('en');
     await expect(page.getByRole('heading', { name: 'Fleet settings' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.lang)).toBe('en');
@@ -835,7 +960,7 @@ test('makes an agent an administrator in the settings; its action waits for a pe
 });
 test('adds a local agent in the settings, with no file edited by hand, and it answers in its tab', async ({ page }) => {
     await page.goto(url);
-    await tab(page, 'Settings').click();
+    await settingsButton(page).click();
     await page.getByRole('button', { name: 'Add local agent' }).click();
     const form = page.getByRole('form', { name: 'New local agent' });
     await field(page, 'Id').fill('helper');
@@ -940,7 +1065,7 @@ test('switches the fleet directory, and saves it for the next run', async ({ pag
     await page.goto(`${url}#/_settings`);
     await field(page, 'Fleet directory path').fill(next);
     await page.getByRole('button', { name: 'Switch' }).click();
-    await expect(page.getByRole('tab')).toHaveText([/All agents/, /newcomer/, /Settings/]);
+    await expect(page.getByRole('tab')).toHaveText([/All agents/, /All messages/, /newcomer/, /Add agent/]);
     await expect(settingsRow(page, 'newcomer').locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     await expect(page.getByRole('form', { name: 'Fleet directory' })).toContainText(`${next} — saved in`);
     const saved = JSON.parse(readFileSync(join(workspace, '.flotti', 'settings.json'), 'utf8')) as { fleet: string };

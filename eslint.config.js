@@ -37,6 +37,18 @@ export default tseslint.config(
         },
     },
     {
+        // A function of the product code has at most four paths through it (#119).
+        files: [ 'src/**/*.ts', 'web/src/**/*.{ts,tsx}' ],
+        rules: {
+            complexity: [
+                'error',
+                {
+                    max: 4
+                }
+            ],
+        },
+    },
+    {
         // The words of the dashboard come from its languages, web/src/i18n (#86).
         files: [ 'web/src/**/*.ts', 'web/src/**/*.tsx' ],
         ignores: [ 'web/src/i18n/**' ],

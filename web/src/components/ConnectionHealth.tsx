@@ -30,19 +30,28 @@ function ConnectionHealthView({ health, layout = 'row' }: { readonly health: Con
     const now = useNow();
     const t = useT();
     const poor = poorText(health, t);
-    const classes = ['health', layout === 'column' ? 'health-column' : '', poor === undefined ? '' : 'health-poor'].filter(Boolean).join(' ');
     return (
-        <div className={classes} role="group" aria-label={t.health.label} data-poor={poor !== undefined} data-down={isDown(health)}>
+        <div className={healthClasses(layout, poor)} role="group" aria-label={t.health.label} data-poor={poor !== undefined} data-down={isDown(health)}>
             {layout === 'row' ? <span className="health-title">SSH</span> : null}
-            {poor !== undefined && layout === 'column' ? <span className="health-warning"><WarnIcon />{poor}</span> : null}
+            <HealthWarning poor={poor} shown={layout === 'column'} icon={true} />
             {healthFacts(health, now, t).map((fact) => (
                 <span key={fact.key} className="health-fact" data-fact={fact.key}>
                     <span className="health-label">{fact.label}</span> <span className="health-value">{fact.value}</span>
                 </span>
             ))}
-            {poor !== undefined && layout === 'row' ? <span className="health-warning">{poor}</span> : null}
+            <HealthWarning poor={poor} shown={layout === 'row'} icon={false} />
         </div>
     );
+}
+function healthClasses(layout: 'row' | 'column', poor: string | undefined): string {
+    return ['health', layout === 'column' ? 'health-column' : '', poor === undefined ? '' : 'health-poor'].filter(Boolean).join(' ');
+}
+/** Why the connection is poor, where the layout puts it: before the facts in a column, after them in a row. */
+function HealthWarning({ poor, shown, icon }: { readonly poor: string | undefined; readonly shown: boolean; readonly icon: boolean }) {
+    if (!shown || poor === undefined) {
+        return null;
+    }
+    return <span className="health-warning">{icon ? <WarnIcon /> : null}{poor}</span>;
 }
 /**
  * A lost or poor connection, the whole width under the header of the tab:

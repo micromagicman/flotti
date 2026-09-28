@@ -9,11 +9,13 @@ import type {
     AgentEvent,
     AgentStatus,
     Delegation,
+    DelegationMark,
     Forwarded,
     PermissionOption,
     Quote,
     ToolCallStatus
 } from '../../src/agent-events.js';
+import { present } from '../../src/present.js';
 import type { Messages } from './i18n/en.js';
 type FeedItem =
     | {
@@ -34,6 +36,8 @@ type FeedItem =
         readonly replyTo?: Quote;
         /** A message sent on as it was; `text` is then what was written above it. */
         readonly forwarded?: Forwarded;
+        /** The task the message gives, or — with a `state` — the outcome of one. */
+        readonly delegation?: DelegationMark;
     }
     | { readonly kind: 'thought'; readonly key: string; readonly text: string }
     | { readonly kind: 'progress'; readonly key: string; readonly text: string }
@@ -109,9 +113,14 @@ type AgentFeed = {
 function emptyFeed(status: AgentStatus): AgentFeed {
     return { items: [], queue: [], lastSeq: 0, status, reason: undefined };
 }
-/** Statuses worth a line in the feed; `working` and `idle` come and go with every message. */
+/** Statuses always worth a line in the feed; `working` and `idle` come and go with every message. */
+const NOTEWORTHY: ReadonlySet<AgentStatus> = new Set([ 'starting', 'error', 'stopped' ]);
+/** Statuses worth a line in the feed: an `idle` one only when it says why, beyond being ready. */
 function isNoteworthy(status: AgentStatus, reason: string | undefined): boolean {
-    return status === 'starting' || status === 'error' || status === 'stopped' || (status === 'idle' && reason !== undefined && reason !== 'ready');
+    return NOTEWORTHY.has(status) || (status === 'idle' && saysWhy(reason));
+}
+function saysWhy(reason: string | undefined): boolean {
+    return reason !== undefined && reason !== 'ready';
 }
 function lastIndex(items: readonly FeedItem[], test: (item: FeedItem) => boolean): number {
     for (let index = items.length - 1; index >= 0; index--) {
@@ -143,10 +152,11 @@ function newMessage(event: AgentEvent & { type: 'message' }): FeedItem {
         role: event.role,
         messageId: event.messageId,
         text: event.text,
-        ...(event.from === undefined ? {} : { from: event.from }),
-        ...(event.to === undefined ? {} : { to: event.to }),
-        ...(event.replyTo === undefined ? {} : { replyTo: event.replyTo }),
-        ...(event.forwarded === undefined ? {} : { forwarded: event.forwarded })
+        ...present('from', event.from),
+        ...present('to', event.to),
+        ...present('replyTo', event.replyTo),
+        ...present('forwarded', event.forwarded),
+        ...present('delegation', event.delegation)
     };
 }
 /**
@@ -155,13 +165,18 @@ function newMessage(event: AgentEvent & { type: 'message' }): FeedItem {
  * each time.
  */
 function withMessage(items: readonly FeedItem[], event: AgentEvent & { type: 'message' }): readonly FeedItem[] {
-    const turnStart = lastIndex(items, (item) => item.kind === 'turn-end');
-    const index = lastIndex(items, (item) => item.kind === 'message' && item.messageId === event.messageId);
-    const found = index > turnStart ? items[index] : undefined;
+    const index = messageInTurn(items, event.messageId);
+    const found = items[index];
     if (found?.kind !== 'message') {
         return [...items, newMessage(event)];
     }
     return replaced(items, index, { ...found, text: event.append ? found.text + event.text : event.text });
+}
+/** Where the message with the id is in the feed, within the last turn; -1 when it is not there. */
+function messageInTurn(items: readonly FeedItem[], messageId: string): number {
+    const turnStart = lastIndex(items, (item) => item.kind === 'turn-end');
+    const index = lastIndex(items, (item) => item.kind === 'message' && item.messageId === messageId);
+    return index > turnStart ? index : -1;
 }
 function withThought(items: readonly FeedItem[], event: AgentEvent & { type: 'thought' }): readonly FeedItem[] {
     const last = items.at(-1);
@@ -173,11 +188,14 @@ function withThought(items: readonly FeedItem[], event: AgentEvent & { type: 'th
 function withToolCall(items: readonly FeedItem[], event: AgentEvent & { type: 'tool-call' }): readonly FeedItem[] {
     const index = lastIndex(items, (item) => item.kind === 'tool' && item.toolCallId === event.toolCallId);
     const found = items[index];
-    if (found?.kind !== 'tool') {
-        const title = event.title ?? event.toolCallId;
-        return [...items, { kind: 'tool', key: `c${event.seq}`, toolCallId: event.toolCallId, title, status: event.status }];
-    }
-    return replaced(items, index, { ...found, title: event.title ?? found.title, status: event.status ?? found.status });
+    return found?.kind === 'tool' ? replaced(items, index, updatedTool(found, event)) : [...items, newTool(event)];
+}
+function newTool(event: AgentEvent & { type: 'tool-call' }): FeedItem {
+    return { kind: 'tool', key: `c${event.seq}`, toolCallId: event.toolCallId, title: event.title ?? event.toolCallId, status: event.status };
+}
+/** An update of a tool call changes what it says and keeps the rest. */
+function updatedTool(found: FeedItem & { kind: 'tool' }, event: AgentEvent & { type: 'tool-call' }): FeedItem {
+    return { ...found, title: event.title ?? found.title, status: event.status ?? found.status };
 }
 /** A task shows once, where it was given; what becomes of it changes that one card. */
 function withDelegation(items: readonly FeedItem[], event: AgentEvent & { type: 'delegation' }): readonly FeedItem[] {
@@ -188,8 +206,8 @@ function withDelegation(items: readonly FeedItem[], event: AgentEvent & { type: 
         to,
         text,
         state,
-        ...(deadline === undefined ? {} : { deadline }),
-        ...(result === undefined ? {} : { result })
+        ...present('deadline', deadline),
+        ...present('result', result)
     };
     const index = lastIndex(items, (item) => item.kind === 'delegation' && item.delegationId === event.delegationId);
     const found = items[index];
@@ -215,50 +233,40 @@ function withAdminAction(items: readonly FeedItem[], event: AgentEvent & { type:
     }
     return replaced(items, index, { ...found, ...changed });
 }
+type EventOf<T extends AgentEvent['type']> = AgentEvent & { type: T };
+type Step<T extends AgentEvent['type']> = (items: readonly FeedItem[], event: EventOf<T>) => readonly FeedItem[];
+/** Leaves the feed as it was. */
+function unchanged(items: readonly FeedItem[]): readonly FeedItem[] {
+    return items;
+}
 /**
- * The events that each add one item of their own, and those that add none: the
- * line of messages is kept apart from the feed (see withLine), and the card of
- * a task shows what came of it.
+ * What each event does to the feed. The line of messages is kept apart from
+ * the feed (see withLine), and the card of a task shows what came of it: those
+ * events add no item of their own.
  */
-function withItem(
-    items: readonly FeedItem[],
-    event: AgentEvent & { type: 'progress' | 'permission' | 'log' | 'raw' | 'queued' | 'unqueued' | 'cancel-delegation' }
-): readonly FeedItem[] {
-    const key = `e${event.seq}`;
-    switch (event.type) {
-        case 'queued':
-        case 'unqueued':
-        case 'cancel-delegation':
-            return items;
-        case 'progress':
-            return [...items, { kind: 'progress', key, text: event.text }];
-        case 'permission':
-            return [...items, { kind: 'permission', key, requestId: event.requestId, title: event.title, options: event.options, settled: false }];
-        case 'log':
-            return [...items, { kind: 'log', key, source: event.source, text: event.text }];
-        case 'raw':
-            return [...items, { kind: 'raw', key, protocol: event.protocol, payload: event.payload }];
-    }
+const STEPS: { readonly [T in AgentEvent['type']]: Step<T> } = {
+    message: withMessage,
+    thought: withThought,
+    'tool-call': withToolCall,
+    'turn-end': (items, event) => [...settlePermissions(items), { kind: 'turn-end', key: `e${event.seq}`, reason: event.reason }],
+    status: withStatus,
+    delegation: withDelegation,
+    'admin-action': withAdminAction,
+    queued: unchanged,
+    unqueued: unchanged,
+    'cancel-delegation': unchanged,
+    progress: (items, event) => [...items, { kind: 'progress', key: `e${event.seq}`, text: event.text }],
+    permission: (items, event) => [...items, permissionItem(event)],
+    log: (items, event) => [...items, { kind: 'log', key: `e${event.seq}`, source: event.source, text: event.text }],
+    raw: (items, event) => [...items, { kind: 'raw', key: `e${event.seq}`, protocol: event.protocol, payload: event.payload }]
+};
+function permissionItem(event: EventOf<'permission'>): FeedItem {
+    return { kind: 'permission', key: `e${event.seq}`, requestId: event.requestId, title: event.title, options: event.options, settled: false };
 }
 function withEvent(items: readonly FeedItem[], event: AgentEvent): readonly FeedItem[] {
-    switch (event.type) {
-        case 'message':
-            return withMessage(items, event);
-        case 'thought':
-            return withThought(items, event);
-        case 'tool-call':
-            return withToolCall(items, event);
-        case 'turn-end':
-            return [...settlePermissions(items), { kind: 'turn-end', key: `e${event.seq}`, reason: event.reason }];
-        case 'status':
-            return withStatus(items, event);
-        case 'delegation':
-            return withDelegation(items, event);
-        case 'admin-action':
-            return withAdminAction(items, event);
-        default:
-            return withItem(items, event);
-    }
+    // The step is the one of the event's own type: TypeScript cannot tie the two together by itself.
+    const step = STEPS[event.type] as Step<AgentEvent['type']>;
+    return step(items, event);
 }
 type InLine = Pick<AgentFeed, 'items' | 'queue'>;
 /** The message said to be sent again is not waiting for that any more. */
@@ -298,20 +306,22 @@ function withLine(line: InLine, event: AgentEvent): InLine {
             return withQueued(line, event);
         case 'unqueued':
             return withUnqueued(line, event);
-        case 'message': {
-            const items = withEvent(line.items, event);
-            if (event.role !== 'user') {
-                return { items, queue: line.queue };
-            }
-            // Taken: it leaves the line and goes on as a message of the feed.
-            const queue = line.queue.some((queued) => queued.messageId === event.messageId)
-                ? line.queue.filter((queued) => queued.messageId !== event.messageId)
-                : line.queue;
-            return { items: markResent(items, event.retryOf), queue };
-        }
+        case 'message':
+            return withTaken(line, event);
         default:
             return { items: withEvent(line.items, event), queue: line.queue };
     }
+}
+/** A message of a person taken by the agent: it leaves the line and goes on as a message of the feed. */
+function withTaken(line: InLine, event: EventOf<'message'>): InLine {
+    const items = withEvent(line.items, event);
+    if (event.role !== 'user') {
+        return { items, queue: line.queue };
+    }
+    return { items: markResent(items, event.retryOf), queue: withoutQueued(line.queue, event.messageId) };
+}
+function withoutQueued(queue: readonly QueuedMessage[], messageId: string): readonly QueuedMessage[] {
+    return queue.some((queued) => queued.messageId === messageId) ? queue.filter((queued) => queued.messageId !== messageId) : queue;
 }
 /**
  * Takes one event in. An event the feed has already seen — a reconnect may
@@ -341,9 +351,13 @@ function settleAdminAction(feed: AgentFeed, actionId: string): AgentFeed {
         (item.kind === 'admin-action' && item.actionId === actionId ? { ...item, settled: true } : item));
     return { ...feed, items };
 }
+/** The items of the feed; none for a tab not heard from yet. */
+function itemsOf(feed: AgentFeed | undefined): readonly FeedItem[] {
+    return feed?.items ?? [];
+}
 /** Whether the feed has an action of the administrator `agentId` waiting for a person. */
 function awaitsAllowance(feed: AgentFeed | undefined, agentId: string): boolean {
-    return (feed?.items ?? []).some((item) => item.kind === 'admin-action' && item.admin === agentId && item.state === 'pending' && !item.settled);
+    return itemsOf(feed).some((item) => item.kind === 'admin-action' && item.admin === agentId && item.state === 'pending' && !item.settled);
 }
 type AdminActionItem = FeedItem & { kind: 'admin-action' };
 /** The line a tab shows for an action of an administrator, in its latest state, in the words of the page. */
@@ -378,7 +392,7 @@ function quoteOf(item: MessageItem, agentId: string): Quote {
  * one, else the last one with its id. None once it is gone: history is bounded.
  */
 function quotedMessage(feed: AgentFeed | undefined, quote: Pick<Quote, 'messageId' | 'seq'>): MessageItem | undefined {
-    const items = feed?.items ?? [];
+    const items = itemsOf(feed);
     const found = items[lastIndex(items, (item) => item.kind === 'message'
         && (quote.seq === undefined ? item.messageId === quote.messageId : item.seq === quote.seq))];
     return found?.kind === 'message' ? found : undefined;

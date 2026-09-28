@@ -11,7 +11,7 @@ import {
 } from './manifest.js';
 import type { Environment, ManifestContext } from './manifest.js';
 import { readSettings } from './settings.js';
-import type { Agent, Fleet, FleetLocation, LocalAgent } from './types.js';
+import type { Agent, Fleet, FleetLocation, FleetSource, LocalAgent } from './types.js';
 /** Command line argument that points flotti at a fleet directory. */
 const FLEET_PATH_ARGUMENT = '--fleet';
 /** Environment variable that points flotti at a fleet directory. */
@@ -24,6 +24,8 @@ const LOCAL_DIRECTORY = 'local';
 const REMOTE_DIRECTORY = 'remote';
 /** What an agent directory may be called: it is the agent id, and ids end up in addresses. */
 const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** Error codes that mean nothing is at the path. */
+const MISSING_CODES: ReadonlySet<string | undefined> = new Set([ 'ENOENT', 'ENOTDIR' ]);
 type ResolveFleetOptions = {
     /** Command line arguments without the node binary and the script; defaults to the real ones. */
     readonly argv?: readonly string[];
@@ -45,21 +47,34 @@ type LoadFleetOptions = ResolveFleetOptions & {
  */
 function resolveFleetLocation(options: ResolveFleetOptions = {}): FleetLocation {
     const argv = options.argv ?? process.argv.slice(2);
-    const env = options.env ?? process.env;
-    const cwd = options.cwd ?? process.cwd();
-    const fromArgument = fleetPathArgument(argv);
-    if (fromArgument !== undefined) {
-        return { path: absolutePath(fromArgument, env, cwd), source: 'argument' };
+    const { env, cwd } = placeOptions(options);
+    const found = fleetPath(argv, env);
+    return { path: absolutePath(found.path, env, cwd), source: found.source };
+}
+/** Where the fleet path was looked up, in the order of precedence; each place is read only when the ones before it gave nothing. */
+const FLEET_PATH_PLACES: readonly (readonly [FleetSource, (argv: readonly string[], env: Environment) => string | undefined])[] = [
+    [ 'argument', (argv: readonly string[]) => fleetPathArgument(argv) ],
+    [ 'environment', (_argv: readonly string[], env: Environment) => nonEmpty(env[FLEET_PATH_VARIABLE]) ],
+    [ 'settings', (_argv: readonly string[], env: Environment) => readSettings(env).fleet ]
+];
+/** The fleet path as given, not yet expanded, and the place it came from. */
+function fleetPath(argv: readonly string[], env: Environment): { path: string; source: FleetSource } {
+    for (const [ source, read ] of FLEET_PATH_PLACES) {
+        const path = read(argv, env);
+        if (path !== undefined) {
+            return { path, source };
+        }
     }
-    const fromEnvironment = env[FLEET_PATH_VARIABLE]?.trim();
-    if (fromEnvironment !== undefined && fromEnvironment !== '') {
-        return { path: absolutePath(fromEnvironment, env, cwd), source: 'environment' };
-    }
-    const saved = readSettings(env).fleet;
-    if (saved !== undefined) {
-        return { path: absolutePath(saved, env, cwd), source: 'settings' };
-    }
-    return { path: absolutePath(DEFAULT_FLEET_PATH, env, cwd), source: 'default' };
+    return { path: DEFAULT_FLEET_PATH, source: 'default' };
+}
+/** The environment and the working directory of the options, with their defaults. */
+function placeOptions(options: ResolveFleetOptions): { env: Environment; cwd: string } {
+    return { env: options.env ?? process.env, cwd: options.cwd ?? process.cwd() };
+}
+/** The value trimmed; `undefined` when it is missing or blank. */
+function nonEmpty(value: string | undefined): string | undefined {
+    const trimmed = value?.trim();
+    return trimmed === '' ? undefined : trimmed;
 }
 /**
  * Reads and checks every agent of the fleet. Starting agents, heartbeats and
@@ -70,7 +85,7 @@ function resolveFleetLocation(options: ResolveFleetOptions = {}): FleetLocation 
  */
 function loadFleet(options: LoadFleetOptions = {}): Fleet {
     const location = resolveFleetLocation(options);
-    const env = options.env ?? process.env;
+    const { env } = placeOptions(options);
     const readFile = options.readFile ?? readFileFromDisk;
     const root = inspect(location.path);
     if (root === undefined) {
@@ -216,18 +231,21 @@ function requireUniqueIds(local: readonly LocalAgent[], remote: readonly Agent[]
 function fleetPathArgument(argv: readonly string[]): string | undefined {
     let path: string | undefined;
     for (let index = 0; index < argv.length; index += 1) {
-        const argument = argv[index] ?? '';
-        if (argument.startsWith(`${FLEET_PATH_ARGUMENT}=`)) {
-            path = argument.slice(FLEET_PATH_ARGUMENT.length + 1);
-        } else if (argument === FLEET_PATH_ARGUMENT) {
-            path = argv[index + 1];
-            index += 1;
-        } else {
-            continue;
+        const found = fleetPathAt(argv, index);
+        if (found !== undefined) {
+            path = fleetPathValue(found.value);
+            index += found.skip;
         }
-        path = fleetPathValue(path);
     }
     return path;
+}
+/** The `--fleet` value at the argument, and how many following arguments it took; `undefined` for other arguments. */
+function fleetPathAt(argv: readonly string[], index: number): { value: string | undefined; skip: number } | undefined {
+    const argument = argv[index] ?? '';
+    if (argument.startsWith(`${FLEET_PATH_ARGUMENT}=`)) {
+        return { value: argument.slice(FLEET_PATH_ARGUMENT.length + 1), skip: 0 };
+    }
+    return argument === FLEET_PATH_ARGUMENT ? { value: argv[index + 1], skip: 1 } : undefined;
 }
 /** The path given to `--fleet`, trimmed. */
 function fleetPathValue(path: string | undefined): string {
@@ -243,26 +261,32 @@ function absolutePath(path: string, env: Environment, cwd: string): string {
     return resolve(cwd, expandHome(path, env));
 }
 function expandHome(path: string, env: Environment): string {
-    if (path !== '~' && !path.startsWith('~/') && !path.startsWith('~\\')) {
+    if (!startsAtHome(path)) {
         return path;
     }
-    const home = env['HOME']?.trim() || env['USERPROFILE']?.trim();
-    if (home === undefined || home === '') {
+    const home = homeDirectory(path, env);
+    return path === '~' ? home : join(home, path.slice(2));
+}
+function startsAtHome(path: string): boolean {
+    return path === '~' || path.startsWith('~/') || path.startsWith('~\\');
+}
+function homeDirectory(path: string, env: Environment): string {
+    const home = nonEmpty(env['HOME']) ?? nonEmpty(env['USERPROFILE']);
+    if (home === undefined) {
         throw new ConfigurationError(
             'unresolved-home',
             `Cannot expand "~" in ${path}: neither HOME nor USERPROFILE is set in the environment`,
             { hint: `Pass an absolute path with ${FLEET_PATH_ARGUMENT} <path> or ${FLEET_PATH_VARIABLE}=<path>.` }
         );
     }
-    return path === '~' ? home : join(home, path.slice(2));
+    return home;
 }
 /** What is at the path, following links; `undefined` when nothing is. */
 function inspect(path: string): Stats | undefined {
     try {
         return statSync(path);
     } catch (error) {
-        const code = errorCode(error);
-        if (code === 'ENOENT' || code === 'ENOTDIR') {
+        if (MISSING_CODES.has(errorCode(error))) {
             return undefined;
         }
         throw readFailure(error, path, 'Path');
@@ -287,19 +311,22 @@ function readManifest(path: string, readFile: (path: string) => string): string 
     try {
         return readFile(path);
     } catch (error) {
-        const code = errorCode(error);
-        if (code === 'ENOENT' || code === 'ENOTDIR') {
-            throw new ConfigurationError('missing-manifest', `Agent manifest not found: ${path}`, {
-                path,
-                cause: error,
-                hint: `Every agent directory needs ${MANIFEST_FILE}. One to start from:\n${SAMPLE_LOCAL_MANIFEST}`
-            });
-        }
-        if (code === 'EISDIR') {
-            throw new ConfigurationError('not-a-directory', `${path}: the manifest must be a file`, { path });
-        }
-        throw readFailure(error, path, 'Agent manifest');
+        throw manifestReadFailure(error, path);
     }
+}
+function manifestReadFailure(error: unknown, path: string): ConfigurationError {
+    const code = errorCode(error);
+    if (MISSING_CODES.has(code)) {
+        return new ConfigurationError('missing-manifest', `Agent manifest not found: ${path}`, {
+            path,
+            cause: error,
+            hint: `Every agent directory needs ${MANIFEST_FILE}. One to start from:\n${SAMPLE_LOCAL_MANIFEST}`
+        });
+    }
+    if (code === 'EISDIR') {
+        return new ConfigurationError('not-a-directory', `${path}: the manifest must be a file`, { path });
+    }
+    return readFailure(error, path, 'Agent manifest');
 }
 function readFailure(error: unknown, path: string, what: string): ConfigurationError {
     const code = errorCode(error);
@@ -316,13 +343,11 @@ function readFailure(error: unknown, path: string, what: string): ConfigurationE
     );
 }
 function errorCode(error: unknown): string | undefined {
-    if (typeof error === 'object' && error !== null && 'code' in error) {
-        const code = (error as { code: unknown }).code;
-        if (typeof code === 'string') {
-            return code;
-        }
-    }
-    return undefined;
+    const code = hasCode(error) ? error.code : undefined;
+    return typeof code === 'string' ? code : undefined;
+}
+function hasCode(error: unknown): error is { code: unknown } {
+    return typeof error === 'object' && error !== null && 'code' in error;
 }
 function parseManifest(contents: string, path: string): unknown {
     try {

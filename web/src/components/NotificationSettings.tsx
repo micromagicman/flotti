@@ -7,6 +7,13 @@ import { Field } from './AgentForm.js';
 import { useT } from '../i18n/I18n.js';
 import { errorText } from '../i18n/errors.js';
 import type { Messages } from '../i18n/en.js';
+import type { Permission } from '../use-attention.js';
+/** Notifications of this browser, the ones shown while flotti is out of sight: allowed or not, and the request. */
+type BrowserNotify = {
+    readonly permission: Permission;
+    /** Asks the browser; only from a click. */
+    readonly onAsk: () => void;
+};
 /** The form as it is typed: numbers and a new token are text until saved. */
 type Draft = {
     readonly events: NotificationEvents;
@@ -142,6 +149,13 @@ type WebPushViewProps = {
     readonly onStart: () => void;
     readonly onStop: () => void;
 };
+/** Stop the notifications of this browser, or start them: not before it is known whether they are on. */
+function PushButton({ here, onStart, onStop }: Pick<WebPushViewProps, 'here' | 'onStart' | 'onStop'>) {
+    const t = useT();
+    return here === true
+        ? <button type="button" className="btn btn-sm" onClick={onStop}>{t.notifications.stopHere}</button>
+        : <button type="button" className="btn btn-sm" onClick={onStart} disabled={here === undefined}>{t.notifications.notifyHere}</button>;
+}
 function WebPushView({ supported, here, count, error, onStart, onStop }: WebPushViewProps) {
     const t = useT();
     return (
@@ -153,9 +167,7 @@ function WebPushView({ supported, here, count, error, onStart, onStop }: WebPush
                 ? <p className="note">{t.notifications.unsupported}</p>
                 : (
                     <div className="actions">
-                        {here === true
-                            ? <button type="button" className="btn btn-sm" onClick={onStop}>{t.notifications.stopHere}</button>
-                            : <button type="button" className="btn btn-sm" onClick={onStart} disabled={here === undefined}>{t.notifications.notifyHere}</button>}
+                        <PushButton here={here} onStart={onStart} onStop={onStop} />
                     </div>
                 )}
             {error === undefined ? null : <p className="error" role="alert">{error}</p>}
@@ -181,11 +193,41 @@ function TestButton() {
         </>
     );
 }
+function browserNotifyNote(permission: Permission, t: Messages): string | undefined {
+    if (permission === 'denied') {
+        return t.settings.notifyDenied;
+    }
+    return permission === 'unsupported' ? t.settings.notifyUnsupported : undefined;
+}
 /**
- * Notifications outside the browser — Telegram, Web Push — for a person who
- * is not looking at the dashboard. Nothing is sent until a channel is set up.
+ * Notify me (#116), once a button in the header: ticked when the browser has
+ * said yes. Only a question not yet asked can be ticked — the browser has no
+ * way to take a yes back from the page, and a no is the person's to undo in it.
  */
-function NotificationSettingsSection() {
+function BrowserNotifyCheck({ notify }: { readonly notify: BrowserNotify }) {
+    const t = useT();
+    const note = browserNotifyNote(notify.permission, t);
+    return (
+        <div className="checks">
+            <label className="check">
+                <input type="checkbox" checked={notify.permission === 'granted'} disabled={notify.permission !== 'default'} onChange={notify.onAsk} />
+                {t.settings.notify}
+            </label>
+            <p className="field-hint">{t.settings.notifyHint}</p>
+            {note === undefined ? null : <p className="note">{note}</p>}
+        </div>
+    );
+}
+/** The settings being read, or why they could not be. */
+function Reading({ error }: { readonly error: string | undefined }) {
+    const t = useT();
+    return <p className={error === undefined ? 'muted' : 'error'} role={error === undefined ? undefined : 'alert'}>{error ?? t.notifications.reading}</p>;
+}
+/**
+ * Notifications: of this browser, and outside it — Telegram, Web Push — for a
+ * person who is not looking at the dashboard. Nothing is sent until a channel is set up.
+ */
+function NotificationSettingsSection({ notify }: { readonly notify: BrowserNotify }) {
     const { view, draft, setDraft, error, saved, run } = useNotificationSettings();
     const t = useT();
     const submit = (event: FormEvent): void => {
@@ -197,8 +239,9 @@ function NotificationSettingsSection() {
     return (
         <form className="settings-section" aria-label={t.notifications.title} onSubmit={submit}>
             <h2>{t.notifications.title}</h2>
+            <BrowserNotifyCheck notify={notify} />
             {view === undefined || draft === undefined
-                ? <p className={error === undefined ? 'muted' : 'error'} role={error === undefined ? undefined : 'alert'}>{error ?? t.notifications.reading}</p>
+                ? <Reading error={error} />
                 : <NotificationFields view={view} draft={draft} setDraft={setDraft} error={error} saved={saved} onPush={(next) => run(async () => next)} />}
         </form>
     );
@@ -228,3 +271,4 @@ function NotificationFields({ view, draft, setDraft, error, saved, onPush }: Not
     );
 }
 export { NotificationSettingsSection };
+export type { BrowserNotify };

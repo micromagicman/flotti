@@ -25,6 +25,8 @@ type ConversationPanelProps = Fleet & {
     readonly quotes: QuoteActions;
     readonly onOpen: (tab: string) => void;
     readonly conversationsId: string;
+    /** A message to bring into view as the lane opens: one picked in the feed of the fleet (#114). */
+    readonly opened?: Found | undefined;
 };
 /** A message to bring into view in the lane; `n` tells one ask from the next. */
 type Found = { readonly key: string; readonly n: number };
@@ -34,30 +36,43 @@ function useLaneQuotes(conversation: Conversation | undefined, feeds: Conversati
     const actions: QuoteActions = {
         hasQuoted: quotes.hasQuoted,
         onOpenQuote: (quote: Quote) => {
-            const target = quotedMessage(feeds[quote.agentId], quote);
-            const key = target === undefined ? undefined : `${quote.agentId}:${target.seq}`;
-            if (key !== undefined && conversation?.messages.some((message) => message.key === key) === true) {
-                setFound((last) => ({ key, n: (last?.n ?? 0) + 1 }));
-            } else {
+            const key = laneKey(conversation, feeds, quote);
+            if (key === undefined) {
                 quotes.onOpenQuote(quote);
+            } else {
+                setFound((last) => ({ key, n: (last?.n ?? 0) + 1 }));
             }
         }
     };
     return { actions, found };
 }
+/** The key of the quoted message in the lane; nothing when the lane does not have it. */
+function laneKey(conversation: Conversation | undefined, feeds: ConversationPanelProps['feeds'], quote: Quote): string | undefined {
+    const target = quotedMessage(feeds[quote.agentId], quote);
+    if (target === undefined) {
+        return undefined;
+    }
+    const key = `${quote.agentId}:${target.seq}`;
+    return conversation?.messages.some((message) => message.key === key) === true ? key : undefined;
+}
 /** Brings the quoted message into view and flashes it, as a quote does in the tab of an agent. */
 function useFound(list: RefObject<HTMLDivElement | null>, found: Found | undefined) {
     useEffect(() => {
-        const target = found === undefined ? null : list.current?.querySelector<HTMLElement>(`[data-key="${CSS.escape(found.key)}"]`) ?? null;
-        if (target === null) {
-            return;
+        const target = foundElement(list.current, found);
+        if (target !== null) {
+            flash(target);
         }
-        const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        target.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'center' });
-        target.classList.remove('message-found');
-        void target.offsetWidth;
-        target.classList.add('message-found');
     }, [list, found]);
+}
+function foundElement(list: HTMLDivElement | null, found: Found | undefined): HTMLElement | null {
+    return found === undefined ? null : list?.querySelector<HTMLElement>(`[data-key="${CSS.escape(found.key)}"]`) ?? null;
+}
+function flash(target: HTMLElement): void {
+    const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'center' });
+    target.classList.remove('message-found');
+    void target.offsetWidth;
+    target.classList.add('message-found');
 }
 type LaneRowProps = Fleet & { readonly message: LaneMessage; readonly side: 'first' | 'second'; readonly actions: QuoteActions };
 /** One message of the lane: the envelope of #23, on the side of whoever wrote it. */
@@ -77,10 +92,12 @@ function LaneRow({ message, side, actions, agents, colors }: LaneRowProps) {
         </div>
     );
 }
-function Lane({ pair, conversation, actions, found, ...fleet }: Fleet & Pick<ConversationPanelProps, 'pair' | 'conversation'> & { readonly actions: QuoteActions; readonly found: Found | undefined }) {
+type LaneProps = Fleet & Pick<ConversationPanelProps, 'pair' | 'conversation' | 'opened'> & { readonly actions: QuoteActions; readonly found: Found | undefined };
+function Lane({ pair, conversation, actions, found, opened, ...fleet }: LaneProps) {
     const messages = conversation?.messages ?? [];
     const { list, onScroll } = usePinnedScroll(messages);
     useFound(list, found);
+    useFound(list, opened);
     const [first, second] = pair;
     const t = useT();
     const names = t.common.and(nameOf(fleet.agents, first), nameOf(fleet.agents, second));
@@ -123,14 +140,14 @@ function LaneFoot({ pair, agents, colors, onOpen }: Fleet & Pick<ConversationPan
 }
 /** The conversation of two agents in one lane, read-only: every message either sent the other, oldest first (#50). */
 function ConversationPanel(props: ConversationPanelProps) {
-    const { pair, conversation, feeds, quotes, agents, colors, onOpen } = props;
+    const { pair, conversation, feeds, quotes, agents, colors, onOpen, opened } = props;
     const { actions, found } = useLaneQuotes(conversation, feeds, quotes);
     const t = useT();
     const names = t.common.and(nameOf(agents, pair[0]), nameOf(agents, pair[1]));
     return (
         <section className="agent-panel conversation-panel" aria-label={t.conversation.of(names)}>
             <LaneHeader {...props} />
-            <Lane pair={pair} conversation={conversation} actions={actions} found={found} agents={agents} colors={colors} />
+            <Lane pair={pair} conversation={conversation} actions={actions} found={found} opened={opened} agents={agents} colors={colors} />
             <LaneFoot pair={pair} agents={agents} colors={colors} onOpen={onOpen} />
         </section>
     );

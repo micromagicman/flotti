@@ -24,15 +24,26 @@ function Harness({ agent }: { readonly agent: AgentSummary }) {
 function Memory({ memory }: { readonly memory: NonNullable<AgentSummary['memory']> }) {
     const t = useT();
     if (memory.state === 'on') {
-        const skill = memory.skill === 'user' ? t.agent.memorySkillUser : memory.skill === 'missing' ? t.agent.memorySkillMissing : '';
-        return (
-            <span className="memory-badge" data-memory="on" data-skill={memory.skill} title={`${t.agent.memoryOnHint}${skill === '' ? '' : ` ${skill}`}`}>
-                {t.agent.memoryOn(memory.policy)}
-            </span>
-        );
+        return <MemoryOn memory={memory} />;
     }
     const label = memory.state === 'unsupported' ? t.agent.memoryUnsupported : t.agent.memoryUnavailable;
     return <span className="memory-badge memory-badge-off" data-memory={memory.state} title={memory.reason}>{label}</span>;
+}
+function MemoryOn({ memory }: { readonly memory: Extract<NonNullable<AgentSummary['memory']>, { state: 'on' }> }) {
+    const t = useT();
+    const skill = memory.skill === 'user' ? t.agent.memorySkillUser : memory.skill === 'missing' ? t.agent.memorySkillMissing : '';
+    return (
+        <span className="memory-badge" data-memory="on" data-skill={memory.skill} title={`${t.agent.memoryOnHint}${skill === '' ? '' : ` ${skill}`}`}>
+            {t.agent.memoryOn(memory.policy)}
+        </span>
+    );
+}
+/** An administrator of the fleet says so. */
+function RoleFact({ admin }: { readonly admin: boolean | undefined }) {
+    const t = useT();
+    return admin === true
+        ? <><dt>{t.agent.role}</dt><dd><span className="admin-badge" title={t.agent.adminHint}>{t.agent.admin}</span></dd></>
+        : null;
 }
 /** The agent itself: what it is for, its type, its harness, its memory, its role. */
 function AboutAgent({ agent }: { readonly agent: AgentSummary }) {
@@ -47,9 +58,7 @@ function AboutAgent({ agent }: { readonly agent: AgentSummary }) {
                 <dt>{t.agent.harness}</dt>
                 <dd><Harness agent={agent} /></dd>
                 {agent.memory === undefined ? null : <><dt>{t.agent.memory}</dt><dd><Memory memory={agent.memory} /></dd></>}
-                {agent.admin === true
-                    ? <><dt>{t.agent.role}</dt><dd><span className="admin-badge" title={t.agent.adminHint}>{t.agent.admin}</span></dd></>
-                    : null}
+                <RoleFact admin={agent.admin} />
             </dl>
         </section>
     );

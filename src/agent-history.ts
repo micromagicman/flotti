@@ -7,11 +7,13 @@ function describeError(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 function isEvent(value: unknown): value is AgentEvent {
-    if (typeof value !== 'object' || value === null) {
-        return false;
-    }
-    const { seq, type, time } = value as Record<string, unknown>;
-    return typeof seq === 'number' && Number.isInteger(seq) && seq > 0 && typeof type === 'string' && typeof time === 'string';
+    return typeof value === 'object' && value !== null && hasEventFields(value as Record<string, unknown>);
+}
+function hasEventFields({ seq, type, time }: Record<string, unknown>): boolean {
+    return isEventNumber(seq) && typeof type === 'string' && typeof time === 'string';
+}
+function isEventNumber(seq: unknown): boolean {
+    return typeof seq === 'number' && Number.isInteger(seq) && seq > 0;
 }
 /**
  * The events of one agent on disk, so its tab shows the same conversation
@@ -47,16 +49,23 @@ class HistoryFile {
         if (contents === undefined) {
             return [];
         }
-        const events: AgentEvent[] = [];
         const lines = contents.split('\n');
-        for (const line of lines) {
-            const event = this.parse(line);
-            if (event !== undefined && event.seq > (events.at(-1)?.seq ?? 0)) {
-                events.push(event);
-            }
-        }
+        const events = this.growing(lines);
         this.lines = lines.filter((line) => line.trim() !== '').length;
         return events.slice(-this.limit);
+    }
+    /** The events of the lines, each numbered above the one before it. */
+    private growing(lines: readonly string[]): AgentEvent[] {
+        const events: AgentEvent[] = [];
+        let last = 0;
+        for (const line of lines) {
+            const event = this.parse(line);
+            if (event !== undefined && event.seq > last) {
+                events.push(event);
+                last = event.seq;
+            }
+        }
+        return events;
     }
     /** The whole file; nothing when there is none yet or it cannot be read. */
     private read(): string | undefined {

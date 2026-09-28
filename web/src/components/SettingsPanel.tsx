@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { AgentConfig, AgentSummary, FleetInfo } from '../../../src/dashboard-protocol.js';
 import { fromConfig, newDraft } from '../agent-draft.js';
@@ -7,6 +7,7 @@ import { api } from '../api.js';
 import { AgentForm } from './AgentForm.js';
 import { ConnectionHealthView } from './ConnectionHealth.js';
 import { NotificationSettingsSection } from './NotificationSettings.js';
+import type { BrowserNotify } from './NotificationSettings.js';
 import { LanguageSection } from './LanguageSection.js';
 import { StatusBadge } from './StatusBadge.js';
 import { useT } from '../i18n/I18n.js';
@@ -15,22 +16,24 @@ import type { Messages } from '../i18n/en.js';
 type SettingsPanelProps = {
     /** The fleet as the socket says it, with live statuses. */
     readonly agents: readonly AgentSummary[];
+    /** Notifications of this browser: whether it may show them, and the request for it. */
+    readonly notify: BrowserNotify;
+    /** Opened by Add agent (#116): at the agents, the first way to add one in focus. */
+    readonly atAgents?: boolean;
 };
 /** What is being edited: nothing, a new agent of a kind, or an agent of the fleet. */
 type Editing =
     | { readonly mode: 'new'; readonly kind: 'local' | 'remote' }
     | { readonly mode: 'edit'; readonly id: string };
+/** Where the path of the fleet came from, by its origin, in the words of the page. */
+const SOURCE_TEXTS: { readonly [S in FleetInfo['source']]: (info: FleetInfo, t: Messages) => string } = {
+    argument: (_info, t) => t.settings.sourceArgument,
+    environment: (_info, t) => t.settings.sourceEnvironment,
+    settings: (info, t) => (info.settingsFile === undefined ? t.settings.sourceSettings : t.settings.sourceSettingsFile(info.settingsFile)),
+    default: (_info, t) => t.settings.sourceDefault
+};
 function sourceText(info: FleetInfo, t: Messages): string {
-    switch (info.source) {
-        case 'argument':
-            return t.settings.sourceArgument;
-        case 'environment':
-            return t.settings.sourceEnvironment;
-        case 'settings':
-            return info.settingsFile === undefined ? t.settings.sourceSettings : t.settings.sourceSettingsFile(info.settingsFile);
-        case 'default':
-            return t.settings.sourceDefault;
-    }
+    return SOURCE_TEXTS[info.source](info, t);
 }
 /** Shows the fleet `found`: its path, and the path field with it. */
 function showFleet(setInfo: (info: FleetInfo) => void, setPath: (path: string) => void): (found: FleetInfo) => void {
@@ -65,6 +68,10 @@ function FleetHint({ info }: { readonly info: FleetInfo | undefined }) {
         </p>
     );
 }
+/** Nothing to switch to: busy switching, no path, or the path of the fleet already open. */
+function cannotSwitch(busy: boolean, path: string, info: FleetInfo | undefined): boolean {
+    return busy || path.trim() === '' || path.trim() === info?.path;
+}
 /** Where the fleet lives: shown, and changed — the agents of the old one stop, those of the new one start. */
 function FleetDirectory() {
     const { info, path, setPath, busy, error, submit } = useFleetDirectory();
@@ -77,7 +84,7 @@ function FleetDirectory() {
                 : <p className="muted">{info.path} — {sourceText(info, t)}.</p>}
             <div className="field-inline">
                 <input className="input" aria-label={t.settings.fleetPath} value={path} onChange={(event) => setPath(event.target.value)} />
-                <button type="submit" className="btn" disabled={busy || path.trim() === '' || path.trim() === info?.path}>{t.settings.switch}</button>
+                <button type="submit" className="btn" disabled={cannotSwitch(busy, path, info)}>{t.settings.switch}</button>
             </div>
             <FleetHint info={info} />
             {error === undefined ? null : <p className="error" role="alert">{error}</p>}
@@ -103,21 +110,21 @@ function useSshConnect() {
             setAdded(addedText(answer, t));
         }, (reason: unknown) => setError(errorText(reason, t))).finally(() => setBusy(false));
     };
-    return { target, setTarget, busy, error, added, submit };
+    return { target, setTarget, busy, blocked: busy || target.trim() === '', error, added, submit };
 }
 /**
  * A remote agent in one step: its user@host, and nothing else. flotti asks the
  * host over SSH what it publishes, adds the agents and keeps a tunnel to them.
  */
 function SshConnect() {
-    const { target, setTarget, busy, error, added, submit } = useSshConnect();
+    const { target, setTarget, busy, blocked, error, added, submit } = useSshConnect();
     const t = useT();
     return (
         <form className="settings-section" aria-label={t.settings.sshTitle} onSubmit={submit}>
             <h2>{t.settings.sshTitle}</h2>
             <div className="field-inline">
                 <input className="input" aria-label={t.settings.sshAddress} placeholder="user@host" value={target} onChange={(event) => setTarget(event.target.value)} />
-                <button type="submit" className="btn btn-primary" aria-busy={busy} disabled={busy || target.trim() === ''}>{busy ? t.settings.connecting : t.settings.connect}</button>
+                <button type="submit" className="btn btn-primary" aria-busy={busy} disabled={blocked}>{busy ? t.settings.connecting : t.settings.connect}</button>
             </div>
             <p className="field-hint">{t.settings.sshHint}</p>
             {added === undefined ? null : <p className="note" role="status">{added}</p>}
@@ -254,8 +261,25 @@ function AgentEditor({ editing, onDone }: { readonly editing: Editing; readonly 
     }
     return <AgentForm initial={draft} isNew={editing.mode === 'new'} onSave={save} onCancel={onDone} />;
 }
-function AgentList({ agents, onEditing }: { readonly agents: readonly AgentSummary[]; readonly onEditing: (editing: Editing) => void }) {
+type AgentListProps = {
+    readonly agents: readonly AgentSummary[];
+    readonly onEditing: (editing: Editing) => void;
+    readonly atAgents: boolean;
+};
+/** The first way to add an agent, in sight and in focus when Add agent opened the settings. */
+function useAddInFocus(atAgents: boolean) {
+    const addFirst = useRef<HTMLButtonElement>(null);
+    useEffect(() => {
+        if (atAgents) {
+            addFirst.current?.scrollIntoView({ block: 'center' });
+            addFirst.current?.focus({ preventScroll: true });
+        }
+    }, [atAgents]);
+    return addFirst;
+}
+function AgentList({ agents, onEditing, atAgents }: AgentListProps) {
     const t = useT();
+    const addFirst = useAddInFocus(atAgents);
     return (
         <div className="settings-section">
             <h2>{t.settings.agentsTitle}</h2>
@@ -266,20 +290,20 @@ function AgentList({ agents, onEditing }: { readonly agents: readonly AgentSumma
                 ))}
             </ul>
             <div className="actions">
-                <button type="button" className="btn" onClick={() => onEditing({ mode: 'new', kind: 'local' })}>{t.settings.addLocal}</button>
+                <button type="button" className="btn" ref={addFirst} onClick={() => onEditing({ mode: 'new', kind: 'local' })}>{t.settings.addLocal}</button>
                 <button type="button" className="btn" onClick={() => onEditing({ mode: 'new', kind: 'remote' })}>{t.settings.addRemote}</button>
             </div>
         </div>
     );
 }
 /** Every section of the settings, the language of the page last. */
-function SettingsSections({ agents, onEditing }: { readonly agents: readonly AgentSummary[]; readonly onEditing: (editing: Editing) => void }) {
+function SettingsSections({ agents, onEditing, notify, atAgents }: AgentListProps & { readonly notify: BrowserNotify }) {
     return (
         <>
             <SshConnect />
             <FleetDirectory />
-            <AgentList agents={agents} onEditing={onEditing} />
-            <NotificationSettingsSection />
+            <AgentList agents={agents} onEditing={onEditing} atAgents={atAgents} />
+            <NotificationSettingsSection notify={notify} />
             <AdminConfirm />
             <LanguageSection />
         </>
@@ -290,14 +314,14 @@ function SettingsSections({ agents, onEditing }: { readonly agents: readonly Age
  * removed, started and stopped. Everything is written to the agent
  * directories, so the files stay the truth and can still be edited by hand.
  */
-function SettingsPanel({ agents }: SettingsPanelProps) {
+function SettingsPanel({ agents, notify, atAgents = false }: SettingsPanelProps) {
     const [editing, setEditing] = useState<Editing>();
     const { settings } = useT();
     return (
         <section className="settings" aria-label={settings.label}>
             <h1>{settings.title}</h1>
             {editing === undefined
-                ? <SettingsSections agents={agents} onEditing={setEditing} />
+                ? <SettingsSections agents={agents} onEditing={setEditing} notify={notify} atAgents={atAgents} />
                 : <AgentEditor editing={editing} onDone={() => setEditing(undefined)} />}
         </section>
     );

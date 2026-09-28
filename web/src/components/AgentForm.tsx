@@ -253,14 +253,18 @@ function FormFooter({ isNew, error, saving, onCancel }: { readonly isNew: boolea
         </>
     );
 }
+function FormHeading({ initial, isNew, kind }: { readonly initial: Draft; readonly isNew: boolean; readonly kind: Draft['kind'] }) {
+    const t = useT();
+    const title = isNew ? t.form.newAgent(kind) : `${initial.name === '' ? initial.id : initial.name}`;
+    return <h2>{title} <span className="kind">{kind === 'local' ? t.common.localKind : t.common.remoteKind}</span></h2>;
+}
 /** Every field of the manifest a person sets by hand; the server checks it before a file is written. */
 function AgentForm({ initial, isNew, onSave, onCancel }: AgentFormProps) {
     const { draft, setDraft, saving, error, update, submit } = useAgentForm(initial, onSave);
     const t = useT();
-    const title = isNew ? t.form.newAgent(draft.kind) : `${initial.name === '' ? initial.id : initial.name}`;
     return (
         <form className="agent-form" aria-label={isNew ? t.form.newAgent(draft.kind) : t.form.agentLabel(initial.id)} onSubmit={submit}>
-            <h2>{title} <span className="kind">{draft.kind === 'local' ? t.common.localKind : t.common.remoteKind}</span></h2>
+            <FormHeading initial={initial} isNew={isNew} kind={draft.kind} />
             <IdentityFields draft={draft} update={update} isNew={isNew} />
             {draft.kind === 'local'
                 ? <LocalFields draft={draft} update={update} setDraft={setDraft} />

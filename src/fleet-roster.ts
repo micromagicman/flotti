@@ -21,12 +21,24 @@ function rosterEntries(agents: readonly AgentSummary[], self: string): RosterEnt
         id: agent.id,
         name: agent.name,
         kind: agent.kind,
-        ...(agent.description === undefined ? {} : { description: agent.description }),
-        ...(agent.harness === undefined ? {} : { harness: agent.harness }),
+        ...described(agent),
         status: agent.status,
+        ...marks(agent, self)
+    }));
+}
+/** The description and the harness of an agent, those it has. */
+function described(agent: AgentSummary): Pick<RosterEntry, 'description' | 'harness'> {
+    return {
+        ...(agent.description === undefined ? {} : { description: agent.description }),
+        ...(agent.harness === undefined ? {} : { harness: agent.harness })
+    };
+}
+/** The marks of an entry: an administrator, the agent the roster is for. */
+function marks(agent: AgentSummary, self: string): Pick<RosterEntry, 'admin' | 'you'> {
+    return {
         ...(agent.admin === true ? { admin: true as const } : {}),
         ...(agent.id === self ? { you: true as const } : {})
-    }));
+    };
 }
 /** The roster with its version, and the text an adapter can hand to its model as it is. */
 function roster(version: number, agents: readonly RosterEntry[]): Roster {

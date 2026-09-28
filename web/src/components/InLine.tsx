@@ -125,11 +125,15 @@ function DroppedLine({ item, onSendAgain }: { readonly item: FeedItem & { kind: 
         <>
             <div className="dropped-line">
                 <span>{t.line.notDelivered(item.reason)}{item.resent ? ` · ${t.line.sentAgain}` : ''}</span>
-                {again ? <button type="button" className="btn btn-xs" disabled={pending} aria-busy={pending} onClick={() => run(() => onSendAgain(item))}>{pending ? t.line.sending : t.line.sendAgain}</button> : null}
+                {again ? <SendAgain pending={pending} onClick={() => run(() => onSendAgain(item))} /> : null}
             </div>
             <ErrorNote error={error} />
         </>
     );
+}
+function SendAgain({ pending, onClick }: { readonly pending: boolean; readonly onClick: () => void }) {
+    const t = useT();
+    return <button type="button" className="btn btn-xs" disabled={pending} aria-busy={pending} onClick={onClick}>{pending ? t.line.sending : t.line.sendAgain}</button>;
 }
 /** A message dropped from the line: its words stay, with why it did not go. */
 function Undelivered({ item, onSendAgain, ...shared }: Shared & {

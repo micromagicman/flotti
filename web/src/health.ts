@@ -31,11 +31,14 @@ function healthFacts(health: ConnectionHealth, now: number, t: Messages): Health
  * numbers do not tell.
  */
 function poorReasons(health: ConnectionHealth, t: Messages): readonly string[] {
-    const reasons = [
-        ...(health.reconnectsLastHour >= POOR_RECONNECTS_PER_HOUR ? [t.health.poorReconnects(health.reconnectsLastHour)] : []),
-        ...(health.latencyMs !== undefined && health.latencyMs >= POOR_LATENCY_MS ? [t.health.poorLatency(health.latencyMs)] : [])
-    ];
+    const reasons = [...reconnectReasons(health, t), ...latencyReasons(health, t)];
     return reasons.length === 0 ? health.poor : reasons;
+}
+function reconnectReasons(health: ConnectionHealth, t: Messages): string[] {
+    return health.reconnectsLastHour >= POOR_RECONNECTS_PER_HOUR ? [t.health.poorReconnects(health.reconnectsLastHour)] : [];
+}
+function latencyReasons(health: ConnectionHealth, t: Messages): string[] {
+    return health.latencyMs !== undefined && health.latencyMs >= POOR_LATENCY_MS ? [t.health.poorLatency(health.latencyMs)] : [];
 }
 /** A connection that was up and dropped: the server says so first among the reasons. */
 function isDown(health: ConnectionHealth): boolean {
@@ -47,8 +50,7 @@ function poorText(health: ConnectionHealth, t: Messages): string | undefined {
         return undefined;
     }
     if (isDown(health)) {
-        const others = health.reconnectsLastHour >= POOR_RECONNECTS_PER_HOUR ? [t.health.poorReconnects(health.reconnectsLastHour)] : [];
-        return t.health.lost([t.health.tunnelDown, ...others].join(', '));
+        return t.health.lost([t.health.tunnelDown, ...reconnectReasons(health, t)].join(', '));
     }
     return t.health.poor(poorReasons(health, t).join(', '));
 }

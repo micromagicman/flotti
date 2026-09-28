@@ -16,16 +16,20 @@ import type {
 } from '../../src/dashboard-protocol.js';
 import { StatusError } from './i18n/errors.js';
 async function call<T>(method: string, path: string, body?: object): Promise<T> {
-    const response = await fetch(path, {
-        method,
-        ...(method === 'GET' ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) })
-    });
+    const response = await fetch(path, requestInit(method, body));
     const answer = (await response.json().catch(() => ({}))) as T | ErrorResponse;
     if (!response.ok) {
         const message = (answer as Partial<ErrorResponse>).error;
         throw message === undefined ? new StatusError(response.status) : new Error(message);
     }
     return answer as T;
+}
+/** A request with `method`: anything but GET carries `body` as JSON. */
+function requestInit(method: string, body?: object): RequestInit {
+    return {
+        method,
+        ...(method === 'GET' ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) })
+    };
 }
 const post = <T>(path: string, body: object = {}): Promise<T> => call<T>('POST', path, body);
 function agentPath(agentId: string, action?: string): string {

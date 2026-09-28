@@ -27,17 +27,22 @@ function Results({ sent, late, agents }: { readonly sent: readonly Delivery[]; r
     const t = useT();
     return (
         <ul className="deliveries" aria-label={t.broadcast.delivery}>
-            {sent.map((first) => {
-                const delivery = first.result === 'queued' ? late.findLast((next) => next.agentId === first.agentId) ?? first : first;
-                const name = agents.find((agent) => agent.id === delivery.agentId)?.name ?? delivery.agentId;
-                return (
-                    <li key={delivery.agentId} className={`delivery delivery-${delivery.result}`} data-agent={delivery.agentId}>
-                        <span className="delivery-name">{name}</span>
-                        <span className="delivery-result">{t.broadcast.result[delivery.result]}{delivery.error === undefined ? '' : `: ${delivery.error}`}</span>
-                    </li>
-                );
-            })}
+            {sent.map((first) => <DeliveryLine key={first.agentId} delivery={latest(first, late)} agents={agents} />)}
         </ul>
+    );
+}
+/** How a delivery ended: one that went into line ends with what became of it later. */
+function latest(first: Delivery, late: readonly Delivery[]): Delivery {
+    return first.result === 'queued' ? late.findLast((next) => next.agentId === first.agentId) ?? first : first;
+}
+function DeliveryLine({ delivery, agents }: { readonly delivery: Delivery; readonly agents: readonly AgentSummary[] }) {
+    const t = useT();
+    const name = agents.find((agent) => agent.id === delivery.agentId)?.name ?? delivery.agentId;
+    return (
+        <li className={`delivery delivery-${delivery.result}`} data-agent={delivery.agentId}>
+            <span className="delivery-name">{name}</span>
+            <span className="delivery-result">{t.broadcast.result[delivery.result]}{delivery.error === undefined ? '' : `: ${delivery.error}`}</span>
+        </li>
     );
 }
 type Sent = { readonly deliveries: readonly Delivery[]; readonly after: number };

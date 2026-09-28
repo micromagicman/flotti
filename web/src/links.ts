@@ -32,23 +32,33 @@ function trimAddress(address: string): string {
 }
 /** The address as a link target when it is a well-formed http(s) URL; anything else stays text. */
 function hrefOf(address: string): string | undefined {
+    const url = parsedUrl(address);
+    return url !== undefined && isWebUrl(url) ? url.href : undefined;
+}
+function parsedUrl(address: string): URL | undefined {
     try {
-        const url = new URL(address);
-        return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname !== '' ? url.href : undefined;
+        return new URL(address);
     } catch {
         return undefined;
     }
 }
+function isWebUrl(url: URL): boolean {
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname !== '';
+}
+type LinkMatch = { readonly piece: LinkPiece; readonly length: number };
 /** The link a match stands for, and how much of the match it takes; undefined when it is not one. */
-function linkOf(match: RegExpMatchArray): { readonly piece: LinkPiece; readonly length: number } | undefined {
+function linkOf(match: RegExpMatchArray): LinkMatch | undefined {
     const [whole, label, target] = match;
-    const address = label === undefined ? trimAddress(whole) : target;
-    const href = hrefOf(address);
-    if (href === undefined || address === '') {
-        return undefined;
+    if (label !== undefined) {
+        return linkTo(target, label, whole.length);
     }
-    const piece: LinkPiece = { kind: 'link', text: label ?? address, href };
-    return { piece, length: label === undefined ? address.length : whole.length };
+    const address = trimAddress(whole);
+    return linkTo(address, address, address.length);
+}
+/** A link to `address` that shows `text` and takes `length` of the match; undefined when the address leads nowhere. */
+function linkTo(address: string, text: string, length: number): LinkMatch | undefined {
+    const href = hrefOf(address);
+    return href === undefined || address === '' ? undefined : { piece: { kind: 'link', text, href }, length };
 }
 /** Adds plain text to the pieces, joined to the text before it. */
 function pushText(pieces: Piece[], text: string): void {

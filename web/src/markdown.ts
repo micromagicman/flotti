@@ -46,17 +46,25 @@ function textPieces(text: string): Inline[] {
 }
 /** The inline piece one match of {@link INLINE} stands for. */
 function inlineOf(match: RegExpMatchArray): Inline {
-    const [, code, target, label, strong, strongToo, em, emToo] = match;
+    const [, code, target, label] = match;
     if (code !== undefined) {
         return { kind: 'code', text: code };
     }
-    if (target !== undefined) {
-        return { kind: 'wikilink', target: linkTarget(target), text: (label ?? target).trim() };
-    }
+    return target === undefined ? emphasisOf(match) : wikilinkOf(target, label);
+}
+function wikilinkOf(target: string, label: string | undefined): Inline {
+    return { kind: 'wikilink', target: linkTarget(target), text: (label ?? target).trim() };
+}
+/** `**strong**` or `__strong__`, else `*emphasis*` or `_emphasis_`. */
+function emphasisOf(match: RegExpMatchArray): Inline {
+    const [, , , , strong, strongToo, em, emToo] = match;
     const inner = strong ?? strongToo;
     return inner === undefined
-        ? { kind: 'em', children: parseInline(em ?? emToo ?? '') }
+        ? { kind: 'em', children: parseInline(emphasisText(em, emToo)) }
         : { kind: 'strong', children: parseInline(inner) };
+}
+function emphasisText(em: string | undefined, emToo: string | undefined): string {
+    return em ?? emToo ?? '';
 }
 /** The pieces of a line or a paragraph: text, links, code, emphasis and wikilinks. */
 function parseInline(text: string): Inline[] {
@@ -73,6 +81,21 @@ const RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const ITEM = /^([ \t]*)([-*+]|\d+[.)])[ \t]+(?:\[([ xX])\][ \t]+)?(.*)$/;
 const QUOTE = /^ {0,3}>[ \t]?(.*)$/;
+/** A line that begins a block of its own, and so ends a paragraph. */
+function startsBlock(line: string): boolean {
+    return [ HEADING, RULE, FENCE, ITEM, QUOTE ].some((pattern) => pattern.test(line));
+}
+/** The block a line is all by itself — a heading or a rule; none when it is not one of those. */
+function lineBlock(line: string): Block | undefined {
+    const heading = HEADING.exec(line);
+    if (heading !== null) {
+        return headingOf(heading);
+    }
+    return RULE.test(line) ? { kind: 'rule' } : undefined;
+}
+function headingOf(heading: RegExpExecArray): Block {
+    return { kind: 'heading', level: heading[1]?.length ?? 1, content: parseInline(heading[2] ?? '') };
+}
 /** Reads blocks off the lines of a note, one kind at a time. */
 class BlockReader {
     readonly blocks: Block[] = [];
@@ -94,23 +117,20 @@ class BlockReader {
         }
     }
     private block(line: string): void {
-        const heading = HEADING.exec(line);
-        if (line.trim() === '') {
-            this.at++;
-        } else if (heading !== null) {
-            this.blocks.push({ kind: 'heading', level: heading[1]?.length ?? 1, content: parseInline(heading[2] ?? '') });
-            this.at++;
-        } else if (RULE.test(line)) {
-            this.blocks.push({ kind: 'rule' });
-            this.at++;
-        } else {
+        const single = line.trim() === '' ? null : lineBlock(line);
+        if (single === undefined) {
             this.multiline(line);
+            return;
         }
+        if (single !== null) {
+            this.blocks.push(single);
+        }
+        this.at++;
     }
     private multiline(line: string): void {
         const fence = FENCE.exec(line);
         if (fence !== null) {
-            this.code(fence[1] ?? '```');
+            this.code(fence[1]);
         } else if (ITEM.test(line)) {
             this.list();
         } else if (QUOTE.test(line)) {
@@ -132,7 +152,8 @@ class BlockReader {
         }
         return taken;
     }
-    private code(fence: string): void {
+    private code(marker: string | undefined): void {
+        const fence = marker ?? '```';
         this.at++;
         const text = this.takeWhile((line) => (line.trimStart().startsWith(fence) ? undefined : line));
         this.at++;
@@ -148,16 +169,19 @@ class BlockReader {
         this.blocks.push({ kind: 'quote', content: parseInline(text.join('\n')) });
     }
     private paragraph(): void {
-        const starts = (line: string): boolean => HEADING.test(line) || RULE.test(line) || FENCE.test(line) || ITEM.test(line) || QUOTE.test(line);
         const first = this.lines[this.at++] ?? '';
-        const rest = this.takeWhile((line) => (line.trim() === '' || starts(line) ? undefined : line));
+        const rest = this.takeWhile((line) => (line.trim() === '' || startsBlock(line) ? undefined : line));
         this.blocks.push({ kind: 'paragraph', content: parseInline([first, ...rest].join('\n')) });
     }
 }
 function listItem(line: string): ListItem {
     const [, indent = '', , task, text = ''] = ITEM.exec(line) ?? [];
     const depth = Math.min(Math.floor(indent.replace(/\t/g, '  ').length / 2), 4);
-    return { depth, ...(task === undefined ? {} : { checked: task !== ' ' }), content: parseInline(text) };
+    return { depth, ...taskMark(task), content: parseInline(text) };
+}
+/** Whether a task is done, `- [x]`; nothing for a plain item. */
+function taskMark(task: string | undefined): Pick<ListItem, 'checked'> {
+    return task === undefined ? {} : { checked: task !== ' ' };
 }
 /** The blocks of a note. */
 function parseMarkdown(text: string): Block[] {

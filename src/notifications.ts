@@ -12,10 +12,12 @@ import type {
     NotificationSettingsChange,
     NotificationTestResponse
 } from './dashboard-protocol.js';
+import { describeError } from './describe-error.js';
 import { ConfigurationError } from './errors.js';
 import type { Environment } from './manifest.js';
 import { Notifier } from './notifier.js';
 import type { NoticeSource, NotificationChannel, NotifierConfig } from './notifier.js';
+import { present } from './present.js';
 import { readSettingsField, writeSettings } from './settings.js';
 import { TELEGRAM_API_VARIABLE, TelegramChannel, hide } from './telegram.js';
 import { WebPushChannel, subscriptionOf, vapidKeys } from './web-push.js';
@@ -79,29 +81,37 @@ function storedVapid(value: unknown): VapidKeys | undefined {
 /** The notifications out of what the settings file holds; what is not there, or not right, is the default. */
 function parseStored(value: unknown): Stored {
     const all = fields(value);
-    const telegram = fields(all['telegram']);
-    const webPush = fields(all['webPush']);
-    const repeat = all['repeatMinutes'];
-    const dashboardUrl = text(all['dashboardUrl']);
-    const chatId = text(telegram['chatId']);
-    const botToken = text(telegram['botToken']);
-    const vapid = storedVapid(webPush['vapid']);
     return {
         events: eventsOf(all['events'], DEFAULTS.events),
-        repeatMinutes: Number.isInteger(repeat) && Number(repeat) >= 0 ? Math.min(Number(repeat), MAX_REPEAT_MINUTES) : 0,
-        ...(dashboardUrl === undefined ? {} : { dashboardUrl }),
-        telegram: { enabled: telegram['enabled'] === true, ...(chatId === undefined ? {} : { chatId }), ...(botToken === undefined ? {} : { botToken }) },
-        webPush: { enabled: webPush['enabled'] === true, ...(vapid === undefined ? {} : { vapid }), subscriptions: storedSubscriptions(webPush['subscriptions']) }
+        repeatMinutes: storedRepeat(all['repeatMinutes']),
+        ...present('dashboardUrl', text(all['dashboardUrl'])),
+        telegram: storedTelegram(all['telegram']),
+        webPush: storedWebPush(all['webPush'])
     };
+}
+/** The stored pause between reminders: whole minutes, at most a day; anything else is none. */
+function storedRepeat(repeat: unknown): number {
+    return Number.isInteger(repeat) && Number(repeat) >= 0 ? Math.min(Number(repeat), MAX_REPEAT_MINUTES) : 0;
+}
+function storedTelegram(value: unknown): Stored['telegram'] {
+    const telegram = fields(value);
+    return { enabled: telegram['enabled'] === true, ...present('chatId', text(telegram['chatId'])), ...present('botToken', text(telegram['botToken'])) };
+}
+function storedWebPush(value: unknown): Stored['webPush'] {
+    const webPush = fields(value);
+    return { enabled: webPush['enabled'] === true, ...present('vapid', storedVapid(webPush['vapid'])), subscriptions: storedSubscriptions(webPush['subscriptions']) };
 }
 function checkRepeat(value: unknown, current: number): number {
     if (value === undefined) {
         return current;
     }
-    if (!Number.isInteger(value) || Number(value) < 0 || Number(value) > MAX_REPEAT_MINUTES) {
+    if (!isRepeat(value)) {
         throw invalid(`repeatMinutes must be a whole number of minutes from 0 to ${MAX_REPEAT_MINUTES}.`);
     }
     return Number(value);
+}
+function isRepeat(value: unknown): boolean {
+    return Number.isInteger(value) && Number(value) >= 0 && Number(value) <= MAX_REPEAT_MINUTES;
 }
 /** The link address: absent to keep, empty to go back to this dashboard, else an http(s) address. */
 function checkDashboardUrl(value: unknown, current: string | undefined): string | undefined {
@@ -111,13 +121,17 @@ function checkDashboardUrl(value: unknown, current: string | undefined): string 
     if (typeof value !== 'string') {
         throw invalid('dashboardUrl must be a string.');
     }
-    if (value.trim() === '') {
+    return linkAddress(value.trim());
+}
+/** A link address as given, trimmed: empty is none, anything else has to be http(s). */
+function linkAddress(url: string): string | undefined {
+    if (url === '') {
         return undefined;
     }
-    if (!/^https?:\/\/[^\s]+$/.test(value.trim())) {
+    if (!/^https?:\/\/[^\s]+$/.test(url)) {
         throw invalid('dashboardUrl must be an http:// or https:// address.');
     }
-    return value.trim();
+    return url;
 }
 function checkString(value: unknown, name: string, current: string | undefined): string | undefined {
     if (value === undefined) {
@@ -142,7 +156,7 @@ function changedTelegram(value: unknown, current: Stored['telegram']): Stored['t
     if (enabled && (chatId === undefined || botToken === undefined)) {
         throw invalid('Telegram needs a bot token and a chat id before it can be switched on.');
     }
-    return { enabled, ...(chatId === undefined ? {} : { chatId }), ...(botToken === undefined ? {} : { botToken }) };
+    return { enabled, ...present('chatId', chatId), ...present('botToken', botToken) };
 }
 /** The stored notifications with a change of the settings page applied; throws when the change is not right. */
 function applyChange(current: Stored, body: unknown): Stored {
@@ -151,10 +165,14 @@ function applyChange(current: Stored, body: unknown): Stored {
     return {
         events: eventsOf(change.events, current.events),
         repeatMinutes: checkRepeat(change.repeatMinutes, current.repeatMinutes),
-        ...(dashboardUrl === undefined ? {} : { dashboardUrl }),
+        ...present('dashboardUrl', dashboardUrl),
         telegram: changedTelegram(change.telegram, current.telegram),
         webPush: { ...current.webPush, enabled: checkBoolean(fields(change.webPush)['enabled'], 'webPush.enabled', current.webPush.enabled) }
     };
+}
+/** Where warnings go: the one given, or standard error. */
+function orStandardError(warn: ((text: string) => void) | undefined): (text: string) => void {
+    return warn ?? ((line) => console.error(line));
 }
 /**
  * The notifications of a running flotti: settings read at the start, changed
@@ -170,7 +188,7 @@ class NotificationService {
     private readonly notifier: Notifier;
     constructor(source: NoticeSource, options: NotificationServiceOptions = {}) {
         this.env = options.env ?? process.env;
-        this.warn = options.warn ?? ((line) => console.error(line));
+        this.warn = orStandardError(options.warn);
         this.dashboardUrl = options.dashboardUrl ?? 'http://127.0.0.1/';
         this.stored = this.load();
         this.rebuild();
@@ -185,8 +203,8 @@ class NotificationService {
         return {
             events,
             repeatMinutes,
-            ...(dashboardUrl === undefined ? {} : { dashboardUrl }),
-            telegram: { enabled: telegram.enabled, ...(telegram.chatId === undefined ? {} : { chatId: telegram.chatId }), botTokenSet: telegram.botToken !== undefined },
+            ...present('dashboardUrl', dashboardUrl),
+            telegram: { enabled: telegram.enabled, ...present('chatId', telegram.chatId), botTokenSet: telegram.botToken !== undefined },
             webPush: { enabled: webPush.enabled, publicKey: this.vapid().publicKey, subscriptions: webPush.subscriptions.length }
         };
     }
@@ -217,7 +235,7 @@ class NotificationService {
         const notice = { key: `test-${Date.now()}`, kind: 'test' as const, agentId: '', title: 'flotti', body: 'Notifications reach you here.', url: this.linkBase() };
         const results = await Promise.all(this.channels.map((channel) => channel.notify(notice).then(
             () => ({ channel: channel.name, ok: true }),
-            (error: unknown) => ({ channel: channel.name, ok: false, error: this.hideSecrets(error instanceof Error ? error.message : String(error)) })
+            (error: unknown) => ({ channel: channel.name, ok: false, error: this.hideSecrets(describeError(error)) })
         )));
         return { results };
     }
@@ -228,7 +246,7 @@ class NotificationService {
         try {
             return subscriptionOf(body);
         } catch (error) {
-            throw invalid(error instanceof Error ? error.message : String(error));
+            throw invalid(describeError(error));
         }
     }
     private forget(endpoint: string): void {
@@ -259,7 +277,7 @@ class NotificationService {
         try {
             return parseStored(readSettingsField(this.env, FIELD));
         } catch (error) {
-            this.warn(`flotti: notifications are off, the settings could not be read: ${error instanceof Error ? error.message : String(error)}`);
+            this.warn(`flotti: notifications are off, the settings could not be read: ${describeError(error)}`);
             return DEFAULTS;
         }
     }
@@ -271,20 +289,28 @@ class NotificationService {
     }
     /** The channels of the settings as they are now. */
     private rebuild(): void {
-        const { telegram, webPush } = this.stored;
-        const channels: NotificationChannel[] = [];
-        if (telegram.enabled && telegram.botToken !== undefined && telegram.chatId !== undefined) {
-            const apiUrl = text(this.env[TELEGRAM_API_VARIABLE]);
-            channels.push(new TelegramChannel({ botToken: telegram.botToken, chatId: telegram.chatId, ...(apiUrl === undefined ? {} : { apiUrl }) }));
+        this.channels = [...this.telegramChannel(), ...this.webPushChannel()];
+    }
+    /** The Telegram channel, when it is switched on and set up. */
+    private telegramChannel(): NotificationChannel[] {
+        const { telegram } = this.stored;
+        if (!telegram.enabled || telegram.botToken === undefined || telegram.chatId === undefined) {
+            return [];
         }
-        if (webPush.enabled && webPush.vapid !== undefined) {
-            channels.push(new WebPushChannel({
-                keys: webPush.vapid,
-                subscriptions: () => this.stored.webPush.subscriptions,
-                onGone: (endpoint) => this.forget(endpoint)
-            }));
+        const apiUrl = text(this.env[TELEGRAM_API_VARIABLE]);
+        return [new TelegramChannel({ botToken: telegram.botToken, chatId: telegram.chatId, ...present('apiUrl', apiUrl) })];
+    }
+    /** The Web Push channel, when it is switched on and has its keys. */
+    private webPushChannel(): NotificationChannel[] {
+        const { webPush } = this.stored;
+        if (!webPush.enabled || webPush.vapid === undefined) {
+            return [];
         }
-        this.channels = channels;
+        return [new WebPushChannel({
+            keys: webPush.vapid,
+            subscriptions: () => this.stored.webPush.subscriptions,
+            onGone: (endpoint) => this.forget(endpoint)
+        })];
     }
     /** The text with every secret of the settings cut out: nothing secret goes to a log or to the page. */
     private hideSecrets(line: string): string {

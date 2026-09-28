@@ -139,7 +139,7 @@ test('reconnects count live, and frequent ones stand out as a poor connection', 
     await alarm(page).getByRole('button', { name: 'Details' }).click();
     await expect(health(page)).toHaveAttribute('data-poor', 'true');
     await expect(tab(page).locator('.tab-poor')).toHaveText('poor connection');
-    await page.getByRole('tab', { name: /^Settings/ }).click();
+    await page.getByRole('banner').getByRole('button', { name: 'Settings', exact: true }).click();
     const row = page.getByRole('listitem', { name: 'relay' });
     await expect(row.getByRole('group', { name: 'SSH connection' })).toHaveAttribute('data-poor', 'true');
 });

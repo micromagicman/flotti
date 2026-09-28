@@ -38,14 +38,17 @@ function memoryTree(notes: readonly MemoryNoteSummary[]): MemoryFolder {
 /** How long ago a note was changed, in words: `just now`, `5 min ago`, `3 h ago`, `yesterday`, `4 days ago`, or the date. */
 function changedAgo(at: number, now: number, t: Messages): string {
     const minutes = Math.floor((now - at) / 60_000);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
     if (minutes < 1) {
         return t.memory.justNow;
     }
     if (minutes < 60) {
         return t.memory.minutesAgo(minutes);
     }
+    return hoursAgo(at, Math.floor(minutes / 60), t);
+}
+/** A change an hour or more ago, in words. */
+function hoursAgo(at: number, hours: number, t: Messages): string {
+    const days = Math.floor(hours / 24);
     if (hours < 24) {
         return t.memory.hoursAgo(hours);
     }

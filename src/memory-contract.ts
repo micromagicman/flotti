@@ -14,6 +14,7 @@
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { describeError } from './describe-error.js';
 import type { MemoryIndex } from './memory-store.js';
 /** Raised whenever the policy or the skill says something new; the dashboard shows it. */
 const MEMORY_POLICY_VERSION = 1;
@@ -170,7 +171,7 @@ function bankProblem(memoryDirectory: string): string | undefined {
         accessSync(memoryDirectory, constants.R_OK | constants.W_OK);
         return undefined;
     } catch (error) {
-        return `the memory bank cannot be read and written: ${error instanceof Error ? error.message : String(error)}`;
+        return `the memory bank cannot be read and written: ${describeError(error)}`;
     }
 }
 /** A title or a description as a line of the index: nothing in it can close the block. */
@@ -181,14 +182,18 @@ function indexLine(value: string): string {
 function indexBlock(index: MemoryIndex): string {
     const lines = index.notes.map((note) =>
         `- ${indexLine(note.id)} | ${indexLine(note.title)}${note.description === '' ? '' : ` | ${indexLine(note.description)}`}`);
-    const rest = index.total - index.notes.length;
     return [
         `<${INDEX_TAG} snapshot="${index.at}" notes="${index.total}" shown="${index.notes.length}" truncated="${index.truncated ? 'yes' : 'no'}">`,
         index.total === 0 ? '(the memory bank is empty)' : 'id | title | description, newest first:',
         ...lines,
-        ...(index.truncated ? [`[truncated: ${rest} more note${rest === 1 ? '' : 's'} not listed — memory_search finds them]`] : []),
+        ...truncationLines(index),
         `</${INDEX_TAG}>`
     ].join('\n');
+}
+/** The line that says how many notes the index leaves out, when it leaves any. */
+function truncationLines(index: MemoryIndex): string[] {
+    const rest = index.total - index.notes.length;
+    return index.truncated ? [`[truncated: ${rest} more note${rest === 1 ? '' : 's'} not listed — memory_search finds them]`] : [];
 }
 /** What goes before the first message of an activation: the rule, and the index as data. */
 function firstPromptBlocks(index: MemoryIndex): string[] {

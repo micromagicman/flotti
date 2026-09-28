@@ -45,28 +45,36 @@ function deliver(text: string, onSend: ComposerProps['onSend'], { setText, setSe
 /** Enter sends; Shift+Enter and a key that finishes an IME composition do not. Escape calls `onEscape`. */
 function sendOnEnter(submit: () => void, onEscape: (() => void) | undefined) {
     return (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-        if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-            submit();
-            event.preventDefault();
-        } else if (event.key === 'Escape' && onEscape !== undefined) {
-            onEscape();
+        const act = keyAction(event, submit, onEscape);
+        if (act !== undefined) {
+            act();
             event.preventDefault();
         }
     };
+}
+/** What a key does in the field: send, give up, or nothing of the composer's own. */
+function keyAction(event: KeyboardEvent<HTMLTextAreaElement>, submit: () => void, onEscape: (() => void) | undefined): (() => void) | undefined {
+    if (isSendKey(event)) {
+        return submit;
+    }
+    return event.key === 'Escape' ? onEscape : undefined;
+}
+function isSendKey(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
+    return event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing;
 }
 function useComposer(onSend: ComposerProps['onSend'], disabled: boolean, onEscape: ComposerProps['onEscape']) {
     const [text, setText] = useState('');
     const [sending, setSending] = useState(false);
     const [note, setNote] = useState<Note>();
     const t = useT();
+    const canSend = text.trim() !== '' && !sending && !disabled;
     const submit = (event?: FormEvent): void => {
         event?.preventDefault();
-        if (text.trim() === '' || sending || disabled) {
-            return;
+        if (canSend) {
+            deliver(text, onSend, { setText, setSending, setNote, t });
         }
-        deliver(text, onSend, { setText, setSending, setNote, t });
     };
-    return { text, setText, sending, note, submit, onKeyDown: sendOnEnter(submit, onEscape) };
+    return { text, setText, canSend, note, submit, onKeyDown: sendOnEnter(submit, onEscape) };
 }
 /** Puts the caret in the field whenever something new shows above it. */
 function useFocusOn(field: RefObject<HTMLTextAreaElement | null>, key: string | undefined) {
@@ -140,13 +148,20 @@ function ComposerField({ field, hint, label, placeholder, text, setText, onKeyDo
         />
     );
 }
+/** How the last send went, when there is something to say. */
+function ComposerNote({ note }: { readonly note: Note | undefined }) {
+    if (note === undefined) {
+        return null;
+    }
+    return <p className={`composer-note ${note.error ? 'error' : 'note'}`} role={note.error ? 'alert' : 'status'}>{note.text}</p>;
+}
 /**
  * A card with a bar at its foot (#77): the reply above the field, the field
  * growing with the text, then the state of the agent, the keys and Send.
  * Enter sends; Shift+Enter makes a new line.
  */
 function Composer({ label, placeholder, submitLabel, disabled = false, onSend, above, onEscape, state }: ComposerProps) {
-    const { text, setText, sending, note, submit, onKeyDown } = useComposer(onSend, disabled, onEscape);
+    const { text, setText, canSend, note, submit, onKeyDown } = useComposer(onSend, disabled, onEscape);
     const field = useRef<HTMLTextAreaElement>(null);
     const hint = useId();
     useFocusOn(field, above?.key);
@@ -155,8 +170,8 @@ function Composer({ label, placeholder, submitLabel, disabled = false, onSend, a
             <div className="composer-card">
                 {above?.node}
                 <ComposerField field={field} hint={hint} label={label} placeholder={placeholder} text={text} setText={setText} onKeyDown={onKeyDown} />
-                {note === undefined ? null : <p className={`composer-note ${note.error ? 'error' : 'note'}`} role={note.error ? 'alert' : 'status'}>{note.text}</p>}
-                <ComposerBar state={state} hint={hint} submitLabel={submitLabel} disabled={sending || disabled || text.trim() === ''} />
+                <ComposerNote note={note} />
+                <ComposerBar state={state} hint={hint} submitLabel={submitLabel} disabled={!canSend} />
             </div>
         </form>
     );

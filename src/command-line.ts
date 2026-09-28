@@ -34,19 +34,21 @@ const SCRIPT = /\.(?:cmd|bat)$/i;
 /** Characters `cmd.exe` treats specially outside quotes; escaped with `^`. */
 const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
 function commandToSpawn(command: string, args: readonly string[], lookup: Lookup): Spawnable {
-    if ((lookup.platform ?? process.platform) !== 'win32') {
-        return { command, arguments: [...args] };
-    }
-    const found = findCommand(command, lookup);
+    const found = windowsCommand(command, lookup);
     if (found === undefined) {
         return { command, arguments: [...args] };
     }
-    if (!SCRIPT.test(found)) {
-        return { command: found, arguments: [...args] };
-    }
+    return SCRIPT.test(found) ? scriptToSpawn(found, args, lookup.env) : { command: found, arguments: [...args] };
+}
+/** The file of `command` on Windows; nothing anywhere else, or when there is none. */
+function windowsCommand(command: string, lookup: Lookup): string | undefined {
+    return (lookup.platform ?? process.platform) === 'win32' ? findCommand(command, lookup) : undefined;
+}
+/** A script `found` is started through `cmd.exe`. */
+function scriptToSpawn(found: string, args: readonly string[], env: NodeJS.ProcessEnv): Spawnable {
     const line = [`"${found}"`, ...args.map(quoteForCmd)].join(' ');
     return {
-        command: variable(lookup.env, 'ComSpec') ?? 'cmd.exe',
+        command: variable(env, 'ComSpec') ?? 'cmd.exe',
         arguments: ['/d', '/s', '/c', `"${line}"`],
         windowsVerbatimArguments: true
     };
@@ -59,21 +61,26 @@ function commandToSpawn(command: string, args: readonly string[], lookup: Lookup
  */
 function findCommand(command: string, lookup: Lookup): string | undefined {
     const isFile = lookup.isFile ?? isRegularFile;
-    const cwd = lookup.cwd ?? process.cwd();
-    const extensions = (variable(lookup.env, 'PATHEXT') ?? DEFAULT_PATHEXT).split(';').filter(Boolean);
-    const names = win32.extname(command) === ''
-        ? extensions.map((extension) => command + extension.toLowerCase())
-        : [command, ...extensions.map((extension) => command + extension.toLowerCase())];
-    const directories = /[\\/]/.test(command) ? [cwd] : [cwd, ...pathDirectories(lookup.env)];
-    for (const directory of directories) {
-        for (const name of names) {
-            const candidate = win32.resolve(directory, name);
-            if (isFile(candidate)) {
-                return candidate;
-            }
+    for (const candidate of candidates(command, lookup)) {
+        if (isFile(candidate)) {
+            return candidate;
         }
     }
     return undefined;
+}
+/** Every file `command` may be, in the order `cmd.exe` tries them. */
+function candidates(command: string, lookup: Lookup): string[] {
+    const names = commandNames(command, lookup.env);
+    return commandDirectories(command, lookup).flatMap((directory) => names.map((name) => win32.resolve(directory, name)));
+}
+function commandNames(command: string, env: NodeJS.ProcessEnv): string[] {
+    const extensions = (variable(env, 'PATHEXT') ?? DEFAULT_PATHEXT).split(';').filter(Boolean);
+    const named = extensions.map((extension) => command + extension.toLowerCase());
+    return win32.extname(command) === '' ? named : [command, ...named];
+}
+function commandDirectories(command: string, lookup: Lookup): string[] {
+    const cwd = lookup.cwd ?? process.cwd();
+    return /[\\/]/.test(command) ? [cwd] : [cwd, ...pathDirectories(lookup.env)];
 }
 function pathDirectories(env: NodeJS.ProcessEnv): string[] {
     return (variable(env, 'PATH') ?? '').split(';')
