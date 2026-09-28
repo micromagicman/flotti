@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { connect, createServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
+import { present } from './present.js';
 import type { RemoteSsh } from './types.js';
 /**
  * Reaching a remote agent through SSH, with nothing but the user's key: flotti
@@ -21,6 +22,8 @@ const TARGET = /^(?:([A-Za-z0-9_][A-Za-z0-9._-]*)@)?([A-Za-z0-9][A-Za-z0-9.-]*)(
 const PUBLISHED_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** Separates the published files in what the host prints: ASCII record separator, never raw in JSON. */
 const RECORD_SEPARATOR = '\u001e';
+/** Schemes an agent may listen on. */
+const HTTP_PROTOCOLS: ReadonlySet<string | undefined> = new Set([ 'http:', 'https:' ]);
 /** How flotti runs `ssh`; tests put a pretend one in. */
 type SshOptions = {
     /** Executable; `ssh` by default. */
@@ -62,12 +65,27 @@ class SshError extends Error {
  */
 function parseTarget(target: string): SshTarget {
     const match = TARGET.exec(target.trim());
-    const port = match?.[3] === undefined ? undefined : Number(match[3]);
-    if (match === null || (port !== undefined && (port < 1 || port > 65535))) {
+    const port = targetPort(match);
+    if (match === null || port === null) {
         throw new SshError(`"${target}" is not an SSH address: write it as user@host, or user@host:port`);
     }
     const [, user, host] = match as unknown as [string, string | undefined, string];
-    return { destination: user === undefined ? host : `${user}@${host}`, host, ...(port === undefined ? {} : { port }) };
+    return { destination: user === undefined ? host : `${user}@${host}`, host, ...present('port', port) };
+}
+/** The port written in the address; `undefined` when none is, `null` when it is out of range. */
+function targetPort(match: RegExpExecArray | null): number | null | undefined {
+    const written = match?.[3];
+    if (written === undefined) {
+        return undefined;
+    }
+    return validPort(Number(written));
+}
+function validPort(port: number): number | null {
+    return port >= 1 && port <= 65535 ? port : null;
+}
+/** The executable and the whole argument list of an `ssh` call. */
+function sshCall(options: SshOptions, args: readonly string[]): [ string, string[] ] {
+    return [ options.command ?? 'ssh', [ ...(options.prefix ?? []), ...args ] ];
 }
 /** Options every call shares: never ask anything, give up on a silent host. */
 function commonArguments(target: SshTarget, options: SshOptions): string[] {
@@ -93,49 +111,55 @@ const LIST_COMMAND = `sh -c 'for f in "$HOME"/${PUBLISH_DIRECTORY}/*.json; do [ 
  */
 async function discover(target: SshTarget, options: SshOptions = {}, signal?: AbortSignal): Promise<PublishedAgent[]> {
     const args = [...commonArguments(target, options), '--', target.destination, LIST_COMMAND];
-    const { code, stdout, stderr } = await run(options.command ?? 'ssh', [...(options.prefix ?? []), ...args], signal);
+    const { code, stdout, stderr } = await run(...sshCall(options, args), signal);
     if (code !== 0) {
         throw new SshError(describeFailure(target, code, stderr));
     }
     return parsePublished(target, stdout);
 }
 function parsePublished(target: SshTarget, output: string): PublishedAgent[] {
-    const agents: PublishedAgent[] = [];
-    for (const record of output.split(RECORD_SEPARATOR).slice(1)) {
-        const newline = record.indexOf('\n');
-        const file = newline === -1 ? record : record.slice(0, newline);
-        const where = `~/${PUBLISH_DIRECTORY}/${file} on ${target.destination}`;
-        const id = file.replace(/\.json$/, '');
-        if (!PUBLISHED_ID.test(id)) {
-            throw new SshError(`${where}: the file name cannot be an agent id — use letters, digits, ".", "_" and "-"`);
-        }
-        let value: unknown;
-        try {
-            value = JSON.parse(newline === -1 ? '' : record.slice(newline + 1));
-        } catch {
-            throw new SshError(`${where} is not JSON`);
-        }
-        agents.push(publishedAgent(id, value, where));
+    return output.split(RECORD_SEPARATOR).slice(1).map((record: string) => parseRecord(target, record));
+}
+/** One published file: its name on the first line, its contents after it. */
+function parseRecord(target: SshTarget, record: string): PublishedAgent {
+    const [ file, contents ] = splitRecord(record);
+    const where = `~/${PUBLISH_DIRECTORY}/${file} on ${target.destination}`;
+    const id = file.replace(/\.json$/, '');
+    if (!PUBLISHED_ID.test(id)) {
+        throw new SshError(`${where}: the file name cannot be an agent id — use letters, digits, ".", "_" and "-"`);
     }
-    return agents;
+    return publishedAgent(id, parsePublishedJson(contents, where), where);
+}
+function splitRecord(record: string): [ string, string ] {
+    const newline = record.indexOf('\n');
+    return newline === -1 ? [ record, '' ] : [ record.slice(0, newline), record.slice(newline + 1) ];
+}
+function parsePublishedJson(contents: string, where: string): unknown {
+    try {
+        return JSON.parse(contents);
+    } catch {
+        throw new SshError(`${where} is not JSON`);
+    }
+}
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 function publishedAgent(id: string, value: unknown, where: string): PublishedAgent {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    if (!isRecord(value)) {
         throw new SshError(`${where} must be a JSON object`);
     }
-    const fields = value as Record<string, unknown>;
-    const url = publishedUrl(fields, where);
-    const name = publishedText(fields, 'name', where);
-    const description = publishedText(fields, 'description', where);
-    const token = publishedText(fields, 'token', where);
-    const harness = publishedText(fields, 'harness', where);
+    const url = publishedUrl(value, where);
+    const name = publishedText(value, 'name', where);
+    const description = publishedText(value, 'description', where);
+    const token = publishedText(value, 'token', where);
+    const harness = publishedText(value, 'harness', where);
     return {
         id,
         url,
-        ...(name === undefined ? {} : { name }),
-        ...(description === undefined ? {} : { description }),
-        ...(token === undefined ? {} : { token }),
-        ...(harness === undefined ? {} : { harness })
+        ...present('name', name),
+        ...present('description', description),
+        ...present('token', token),
+        ...present('harness', harness)
     };
 }
 /** A text field of a published file; `undefined` when it is absent. */
@@ -155,16 +179,18 @@ function publishedUrl(fields: Record<string, unknown>, where: string): string {
     if (url === undefined) {
         throw new SshError(`${where}: url is missing — the address the agent listens on, e.g. http://127.0.0.1:18741/`);
     }
-    let parsed: URL;
-    try {
-        parsed = new URL(url);
-    } catch {
-        throw new SshError(`${where}: url must be an http: address, got "${url}"`);
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    if (!HTTP_PROTOCOLS.has(protocolOf(url))) {
         throw new SshError(`${where}: url must be an http: address, got "${url}"`);
     }
     return url;
+}
+/** The scheme of the address; `undefined` when it is not an address. */
+function protocolOf(url: string): string | undefined {
+    try {
+        return new URL(url).protocol;
+    } catch {
+        return undefined;
+    }
 }
 /**
  * Picks the agent the manifest means: the named one, or the only one there is.
@@ -172,24 +198,29 @@ function publishedUrl(fields: Record<string, unknown>, where: string): string {
  * @throws SshError when there is no such agent, or several and none is named.
  */
 function pickPublished(target: SshTarget, published: readonly PublishedAgent[], wanted?: string): PublishedAgent {
-    const names = published.map((agent) => agent.id).join(', ');
     if (published.length === 0) {
         throw new SshError(
             `${target.destination} publishes no agent: ~/${PUBLISH_DIRECTORY}/ has no .json file. `
             + 'The A2A adapter of the agent writes one there when it starts (docs/a2a-ssh.md)'
         );
     }
-    if (wanted !== undefined) {
-        const found = published.find((agent) => agent.id === wanted);
-        if (found === undefined) {
-            throw new SshError(`${target.destination} does not publish "${wanted}"; it publishes ${names}`);
-        }
-        return found;
+    return wanted === undefined ? onlyPublished(target, published) : namedPublished(target, published, wanted);
+}
+function namedPublished(target: SshTarget, published: readonly PublishedAgent[], wanted: string): PublishedAgent {
+    const found = published.find((agent) => agent.id === wanted);
+    if (found === undefined) {
+        throw new SshError(`${target.destination} does not publish "${wanted}"; it publishes ${publishedIds(published)}`);
     }
+    return found;
+}
+function onlyPublished(target: SshTarget, published: readonly PublishedAgent[]): PublishedAgent {
     if (published.length > 1) {
-        throw new SshError(`${target.destination} publishes several agents (${names}); name one in ssh.agent`);
+        throw new SshError(`${target.destination} publishes several agents (${publishedIds(published)}); name one in ssh.agent`);
     }
     return published[0] as PublishedAgent;
+}
+function publishedIds(published: readonly PublishedAgent[]): string {
+    return published.map((agent) => agent.id).join(', ');
 }
 /** What `ssh` printed on failure, said so a person knows what to do. */
 function describeFailure(target: SshTarget, code: number | null, stderr: string): string {
@@ -341,7 +372,8 @@ class SshTunnel {
     /** Starts `ssh -N -L` and keeps the tail of what it says. */
     private spawnSsh(target: SshTarget, remote: URL, options: SshOptions): ChildProcess {
         const args = tunnelArguments(target, remote, this.localPort, options);
-        const child = spawn(options.command ?? 'ssh', [...(options.prefix ?? []), ...args], {
+        const [ command, callArgs ] = sshCall(options, args);
+        const child = spawn(command, callArgs, {
             stdio: ['ignore', 'ignore', 'pipe'],
             windowsHide: true
         });
@@ -377,24 +409,25 @@ class SshTunnel {
     }
     /** Resolves once the local port answers; throws when ssh failed, went or took too long. */
     private async waitReady(target: SshTarget, deadline: number, state: TunnelState): Promise<void> {
-        for (;;) {
-            if (state.failed !== undefined) {
-                await this.close();
-                throw state.failed;
-            }
-            if (state.exited !== undefined) {
-                this.closing = true;
-                throw new SshError(state.exited);
-            }
-            if (await accepts(this.localPort)) {
-                return;
-            }
+        while (!(await this.ready(state))) {
             if (Date.now() >= deadline) {
                 await this.close();
                 throw new SshError(`The SSH tunnel to ${target.host} did not come up in time`);
             }
             await new Promise((resolve) => setTimeout(resolve, 100));
         }
+    }
+    /** Whether the local port answers; throws when ssh failed or went. */
+    private async ready(state: TunnelState): Promise<boolean> {
+        if (state.failed !== undefined) {
+            await this.close();
+            throw state.failed;
+        }
+        if (state.exited !== undefined) {
+            this.closing = true;
+            throw new SshError(state.exited);
+        }
+        return accepts(this.localPort);
     }
 }
 /** What a process started over SSH is: the command and how it is run on the host. */
@@ -465,10 +498,14 @@ class RemoteStartReader {
     constructor(private readonly wantsPort: boolean) {}
     /** Everything is known. */
     get place(): RemotePlace | undefined {
-        if (this.cwd === undefined || (this.wantsPort && this.port === undefined)) {
+        if (this.cwd === undefined || this.waitsForPort) {
             return undefined;
         }
-        return { cwd: this.cwd, ...(this.port === undefined ? {} : { reversePort: this.port }) };
+        return { cwd: this.cwd, ...present('reversePort', this.port) };
+    }
+    /** The reverse tunnel is wanted and has no port yet. */
+    private get waitsForPort(): boolean {
+        return this.wantsPort && this.port === undefined;
     }
     /** Takes a piece of standard error; returns the whole lines that are not about the start. */
     read(chunk: string): string[] {
@@ -513,6 +550,13 @@ interface RemoteConnection {
     onDrop(listener: (reason: string) => void): () => void;
     close(): Promise<void>;
 }
+/** The request goes to the address the agent listens on, as the host sees it. */
+function sameAddress(url: URL, remote: URL): boolean {
+    return sameHost(url, remote) && url.port === remote.port && url.protocol === remote.protocol;
+}
+function sameHost(url: URL, remote: URL): boolean {
+    return url.hostname === remote.hostname || (isLoopback(url.hostname) && isLoopback(remote.hostname));
+}
 function isLoopback(hostname: string): boolean {
     return hostname === 'localhost' || hostname === '[::1]' || /^127(\.\d{1,3}){3}$/.test(hostname);
 }
@@ -527,8 +571,7 @@ function tunnelEndpoint(published: PublishedAgent, remote: URL, localPort: numbe
         ...(published.token === undefined ? {} : { headers: { Authorization: `Bearer ${published.token}` } }),
         ...(published.harness === undefined ? {} : { harness: published.harness }),
         rewrite: (url: URL) => {
-            const sameHost = url.hostname === remote.hostname || (isLoopback(url.hostname) && isLoopback(remote.hostname));
-            if (!sameHost || url.port !== remote.port || url.protocol !== remote.protocol) {
+            if (!sameAddress(url, remote)) {
                 return undefined;
             }
             const moved = new URL(url.href);
@@ -552,8 +595,9 @@ class SshConnection implements RemoteConnection {
         this.target = parseTarget(access.target);
     }
     async open(signal: AbortSignal): Promise<RemoteEndpoint> {
-        if (this.tunnel?.open === true && this.endpoint !== undefined) {
-            return this.endpoint;
+        const current = this.openEndpoint;
+        if (current !== undefined) {
+            return current;
         }
         await this.close();
         const published = pickPublished(this.target, await discover(this.target, this.options, signal), this.access.agent);
@@ -568,6 +612,10 @@ class SshConnection implements RemoteConnection {
         this.tunnel = tunnel;
         this.endpoint = endpoint;
         return endpoint;
+    }
+    /** The endpoint of the tunnel that is still up; `undefined` when there is none. */
+    private get openEndpoint(): RemoteEndpoint | undefined {
+        return this.tunnel?.open === true ? this.endpoint : undefined;
     }
     /** Tells the listeners when the tunnel, while it is still this connection's, drops by itself. */
     private watch(tunnel: SshTunnel): void {

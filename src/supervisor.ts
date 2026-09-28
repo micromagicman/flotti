@@ -13,7 +13,15 @@ import { FleetAdmin } from './fleet-admin.js';
 import type { AdminFleet, AdminOutcome } from './fleet-admin.js';
 import type { DeliveredMessage, FleetToolsAccess } from './fleet-mcp.js';
 import { LocalAgentProcess } from './local-agent.js';
-import type { Agent, Fleet } from './types.js';
+import { present } from './present.js';
+import type { Agent, Fleet, LocalAgent, LocalAgentAdapter } from './types.js';
+/** The harness each ACP adapter runs. */
+const ADAPTER_HARNESS: Readonly<Record<LocalAgentAdapter, Harness>> = {
+    'claude-code': 'claude',
+    codex: 'codex'
+};
+/** Statuses after which no turn of the agent will end. */
+const STOPPED_STATUSES: ReadonlySet<string> = new Set([ 'stopped', 'error' ]);
 /**
  * The harness of an agent: the adapter of a local one, as its manifest tells,
  * and what a remote one says of itself once connected to. A plain ACP agent
@@ -21,17 +29,10 @@ import type { Agent, Fleet } from './types.js';
  * field out rather than guess.
  */
 function harnessOf(agent: Agent, running: FleetAgent): { readonly harness?: Harness } {
-    if (agent.kind !== 'local') {
-        return running.harness === undefined ? {} : { harness: running.harness };
-    }
-    switch (agent.adapter) {
-        case 'claude-code':
-            return { harness: 'claude' };
-        case 'codex':
-            return { harness: 'codex' };
-        case undefined:
-            return {};
-    }
+    return present('harness', agent.kind === 'local' ? adapterHarness(agent.adapter) : running.harness);
+}
+function adapterHarness(adapter: LocalAgentAdapter | undefined): Harness | undefined {
+    return adapter === undefined ? undefined : ADAPTER_HARNESS[adapter];
 }
 /**
  * The memory of an agent as the dashboard shows it: what the running agent
@@ -45,6 +46,12 @@ function memoryOf(agent: Agent, running: FleetAgent): MemoryStatus | undefined {
         ? { state: 'unsupported', reason: 'a remote agent keeps its own memory: flotti gives it none yet' }
         : undefined;
 }
+/** The memory a running agent delivered, as a value to compare. */
+function memoryKey(running: FleetAgent): string {
+    return JSON.stringify(running.memory ?? null);
+}
+/** The history of an agent that joins: where its numbers go on from, and its file. */
+type RestoredHistory = { offset: number; historyFile: HistoryFile | undefined; restoredAny: boolean };
 /** What the supervisor says besides the agents' own events. */
 type SupervisorNotice =
     | { readonly type: 'event'; readonly event: AgentEvent }
@@ -137,7 +144,46 @@ function fleetOrder(left: Agent, right: Agent): number {
     if (left.kind !== right.kind) {
         return left.kind === 'local' ? -1 : 1;
     }
-    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+    return compareIds(left.id, right.id);
+}
+function compareIds(left: string, right: string): number {
+    return left < right ? -1 : left > right ? 1 : 0;
+}
+/** A local agent on this machine with an adapter: the memory tools have a bank for it (#101). */
+function hasMemoryBank(agent: Agent): agent is LocalAgent {
+    return agent.kind === 'local' && agent.ssh === undefined && agent.adapter !== undefined;
+}
+/** How much history is kept, and whether it outlives flotti. */
+function historyTuning(options: SupervisorOptions): { readonly limit: number; readonly persist: boolean } {
+    return { limit: options.historyLimit ?? 5000, persist: options.persistHistory ?? false };
+}
+/** How long a delivery waits before it says queued, and where warnings go. */
+function deliveryTuning(options: SupervisorOptions): { readonly queuedAfterMs: number; readonly warn: (text: string) => void } {
+    return { queuedAfterMs: options.queuedAfterMs ?? 500, warn: options.warn ?? ((text) => console.error(text)) };
+}
+function deliveredOf(fleetTools: SupervisorOptions['fleetTools']): ((message: DeliveredMessage) => void) | undefined {
+    return fleetTools?.delivered?.bind(fleetTools);
+}
+function adminOptions(confirm: SupervisorOptions['confirmAdminActions']): ConstructorParameters<typeof FleetAdmin>[1] {
+    return present('confirm', confirm);
+}
+/** The events of the file that go into an empty history: newer than anything numbered since flotti started. */
+function restorable(restored: AgentEvent[], history: readonly AgentEvent[], offset: number): AgentEvent[] {
+    return history.length === 0 && restored.length > 0 && lastSeqOf(restored) > offset ? restored : [];
+}
+function lastSeqOf(events: readonly AgentEvent[]): number {
+    return events.at(-1)?.seq ?? 0;
+}
+/** A message of an agent meant for another agent. */
+function isAgentMessage(event: AgentEvent): event is AgentEvent & { type: 'message'; to: string } {
+    return event.type === 'message' && event.role === 'agent' && event.to !== undefined;
+}
+/** After this event, no turn of the agent is going on. */
+function endsTurn(event: AgentEvent): boolean {
+    return event.type === 'turn-end' || (event.type === 'status' && STOPPED_STATUSES.has(event.status));
+}
+function turnAnswerMark(turnAnswer: boolean): { turnAnswer?: true } {
+    return turnAnswer ? { turnAnswer: true } : {};
 }
 /**
  * The fleet at work: every agent started, its events numbered and kept, so a
@@ -166,12 +212,14 @@ class Supervisor {
     constructor(fleet: Fleet, options: SupervisorOptions = {}) {
         this.createAgent = options.createAgent
             ?? defaultAgent(options.fleetTools, (agentId, request) => void this.adminRequest(agentId, request), () => this.agents());
-        this.admin = new FleetAdmin(this.adminFleet(), options.confirmAdminActions === undefined ? {} : { confirm: options.confirmAdminActions });
-        this.historyLimit = options.historyLimit ?? 5000;
-        this.queuedAfterMs = options.queuedAfterMs ?? 500;
-        this.persistHistory = options.persistHistory ?? false;
-        this.warn = options.warn ?? ((text) => console.error(text));
-        this.delivered = options.fleetTools?.delivered?.bind(options.fleetTools);
+        this.admin = new FleetAdmin(this.adminFleet(), adminOptions(options.confirmAdminActions));
+        const history = historyTuning(options);
+        this.historyLimit = history.limit;
+        this.persistHistory = history.persist;
+        const delivery = deliveryTuning(options);
+        this.queuedAfterMs = delivery.queuedAfterMs;
+        this.warn = delivery.warn;
+        this.delivered = deliveredOf(options.fleetTools);
         this.delegations = new Delegations(this.delegationFleet(), this.queuedAfterMs);
         for (const agent of fleet.agents) {
             this.join(agent, []);
@@ -187,12 +235,12 @@ class Supervisor {
                     id: agent.id,
                     name: agent.name,
                     kind: agent.kind,
-                    ...(agent.description === undefined ? {} : { description: agent.description }),
+                    ...present('description', agent.description),
                     ...harnessOf(agent, running),
                     status: running.status,
-                    ...(running.health === undefined ? {} : { health: running.health }),
+                    ...present('health', running.health),
                     ...(agent.admin === true ? { admin: true as const } : {}),
-                    ...(memory === undefined ? {} : { memory })
+                    ...present('memory', memory)
                 };
             });
     }
@@ -202,9 +250,7 @@ class Supervisor {
      */
     memoryBank(agentId: string): string | undefined {
         const agent = this.members.get(agentId)?.agent;
-        return agent?.kind === 'local' && agent.ssh === undefined && agent.adapter !== undefined
-            ? agent.memoryDirectory
-            : undefined;
+        return agent !== undefined && hasMemoryBank(agent) ? agent.memoryDirectory : undefined;
     }
     /** The agent as its manifest describes it. */
     agent(agentId: string): Agent {
@@ -506,21 +552,28 @@ class Supervisor {
     }
     /** What the agent says to another one goes there: a message, a task, taking a task back. */
     private pass(member: Member, event: AgentEvent): void {
-        const from = member.agent.id;
         if (event.type === 'cancel-delegation') {
-            try {
-                this.delegations.cancel(from, event.delegationId);
-            } catch (error) {
-                this.say(member, `could not take back task ${event.delegationId}: ${describeError(error)}`);
-            }
-        } else if (event.type === 'message' && event.role === 'agent' && event.to !== undefined) {
-            if (event.delegation === undefined) {
-                this.forward(member, event.to, event.text);
-            } else {
-                const { id, deadline } = event.delegation;
-                void this.delegations.delegate(from, event.to, event.text, { id, tellFailure: true, ...(deadline === undefined ? {} : { deadline }) });
-            }
+            this.takeBack(member, event.delegationId);
+        } else if (isAgentMessage(event)) {
+            this.sendOn(member, event);
         }
+    }
+    /** The agent takes back a task it gave. */
+    private takeBack(member: Member, delegationId: string): void {
+        try {
+            this.delegations.cancel(member.agent.id, delegationId);
+        } catch (error) {
+            this.say(member, `could not take back task ${delegationId}: ${describeError(error)}`);
+        }
+    }
+    /** A message of the agent to another one: passed on, or given as a task. */
+    private sendOn(member: Member, event: AgentEvent & { type: 'message'; to: string }): void {
+        if (event.delegation === undefined) {
+            this.forward(member, event.to, event.text);
+            return;
+        }
+        const { id, deadline } = event.delegation;
+        void this.delegations.delegate(member.agent.id, event.to, event.text, { id, tellFailure: true, ...present('deadline', deadline) });
     }
     /**
      * Keeps track of whether the agent is in a turn; when the turn is over — or
@@ -531,8 +584,7 @@ class Supervisor {
             member.inTurn = true;
             return;
         }
-        const over = event.type === 'turn-end' || (event.type === 'status' && (event.status === 'stopped' || event.status === 'error'));
-        if (over) {
+        if (endsTurn(event)) {
             member.inTurn = false;
             // After the turn-end is kept: what waits restarts or clears the agent, and that comes after it in the tab.
             setImmediate(() => member.turnOver.splice(0).forEach((resolve) => resolve()));
@@ -546,21 +598,19 @@ class Supervisor {
         agent: Agent,
         history: AgentEvent[],
         file: HistoryFile | undefined
-    ): { offset: number; historyFile: HistoryFile | undefined; restoredAny: boolean } {
-        let offset = this.lastSeq.get(agent.id) ?? 0;
-        let historyFile = file;
-        let restoredAny = false;
-        if (historyFile === undefined && this.persistHistory) {
-            historyFile = new HistoryFile(agent.id, agent.directory, this.historyLimit, this.warn);
-            const restored = historyFile.load();
-            const last = restored.at(-1)?.seq ?? 0;
-            if (history.length === 0 && restored.length > 0 && last > offset) {
-                history.push(...restored);
-                offset = last;
-                restoredAny = true;
-            }
+    ): RestoredHistory {
+        const offset = this.lastSeq.get(agent.id) ?? 0;
+        if (file !== undefined || !this.persistHistory) {
+            return { offset, historyFile: file, restoredAny: false };
         }
-        return { offset, historyFile, restoredAny };
+        return this.openHistory(agent, history, offset);
+    }
+    /** Opens the history file of the agent and puts what it kept into an empty history. */
+    private openHistory(agent: Agent, history: AgentEvent[], offset: number): RestoredHistory {
+        const historyFile = new HistoryFile(agent.id, agent.directory, this.historyLimit, this.warn);
+        const restored = restorable(historyFile.load(), history, offset);
+        history.push(...restored);
+        return { offset: restored.length === 0 ? offset : lastSeqOf(restored), historyFile, restoredAny: restored.length > 0 };
     }
     /**
      * The line that says where the restored history ends. The line of messages
@@ -586,7 +636,7 @@ class Supervisor {
      */
     private noticeHarness(member: Member): void {
         const harness = member.running.harness;
-        const memory = JSON.stringify(member.running.memory ?? null);
+        const memory = memoryKey(member.running);
         if (harness === member.harness && memory === member.memory) {
             return;
         }
@@ -683,8 +733,8 @@ class Supervisor {
         const delivery = await this.hand(receiver, text, {
             from,
             messageId,
-            ...(replyTo === undefined ? {} : { replyTo }),
-            ...(turnAnswer ? { turnAnswer: true as const } : {})
+            ...present('replyTo', replyTo),
+            ...turnAnswerMark(turnAnswer)
         });
         if (delivery.result === 'failed') {
             return delivery.error ?? 'the agent did not take it';
