@@ -47,9 +47,29 @@ test.afterAll(async () => {
     await exited;
     rmSync(workspace, { recursive: true, force: true });
 });
-/** Registers the worker of the dashboard and returns the way to push to it. */
-async function worker(page: Page, context: BrowserContext): Promise<(data: object) => Promise<unknown>> {
+/**
+ * Registers the worker of the dashboard and returns the way to push to it, and
+ * how many notifications the worker has finished showing.
+ *
+ * The count is what the test waits for before it reads the notifications: a
+ * push over DevTools resolves once it is delivered, not once the worker is
+ * done, and Chromium's getNotifications() squares its store with what is on
+ * screen — a read that falls between a notification being stored and being
+ * on screen drops it for good (issue #132).
+ */
+async function worker(page: Page, context: BrowserContext): Promise<{ push: (data: object) => Promise<unknown>; showed: () => Promise<number> }> {
     await page.evaluate(() => navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready));
+    const script = new URL('/sw.js', url).href;
+    const sw = context.serviceWorkers().find((one) => one.url() === script)
+        ?? await context.waitForEvent('serviceworker', (one) => one.url() === script);
+    await sw.evaluate(() => {
+        const scope = self as unknown as { registration: ServiceWorkerRegistration; showed: number };
+        const show = scope.registration.showNotification.bind(scope.registration);
+        scope.showed = 0;
+        scope.registration.showNotification = (title, options) => show(title, options).then(() => {
+            scope.showed += 1;
+        });
+    });
     const cdp = await context.newCDPSession(page);
     const registered = new Promise<string>((resolve) => cdp.on('ServiceWorker.workerRegistrationUpdated', ({ registrations }) => {
         const ours = registrations.find((one) => one.scopeURL === new URL('/', url).href && !one.isDeleted);
@@ -59,7 +79,10 @@ async function worker(page: Page, context: BrowserContext): Promise<(data: objec
     }));
     await cdp.send('ServiceWorker.enable');
     const registrationId = await registered;
-    return (data) => cdp.send('ServiceWorker.deliverPushMessage', { origin: new URL(url).origin, registrationId, data: JSON.stringify(data) });
+    return {
+        push: (data) => cdp.send('ServiceWorker.deliverPushMessage', { origin: new URL(url).origin, registrationId, data: JSON.stringify(data) }),
+        showed: () => sw.evaluate(() => (self as unknown as { showed: number }).showed)
+    };
 }
 const shown = (page: Page) => page.evaluate(() => navigator.serviceWorker.ready
     .then((ready) => ready.getNotifications())
@@ -67,14 +90,16 @@ const shown = (page: Page) => page.evaluate(() => navigator.serviceWorker.ready
 test('a push shows a notification while the dashboard is out of sight, and a withdrawal takes it back', async ({ page, context }) => {
     await context.grantPermissions(['notifications'], { origin: new URL(url).origin });
     await page.goto(url);
-    const push = await worker(page, context);
+    const { push, showed } = await worker(page, context);
     const notice = { type: 'show', tag: 'flotti-waiting-reviewer', title: 'reviewer is waiting for you', body: 'Asks for permission: Run npm test', url: `${url}#/reviewer` };
     await push(notice);
     await page.waitForTimeout(300);
+    expect(await showed()).toBe(0);
     expect(await shown(page)).toEqual([]);
     await (await context.newPage()).bringToFront();
     await push(notice);
-    await expect.poll(() => shown(page)).toEqual([['flotti-waiting-reviewer', 'reviewer is waiting for you', 'Asks for permission: Run npm test']]);
+    await expect.poll(showed).toBe(1);
+    expect(await shown(page)).toEqual([['flotti-waiting-reviewer', 'reviewer is waiting for you', 'Asks for permission: Run npm test']]);
     await push({ type: 'withdraw', tag: 'flotti-waiting-reviewer' });
     await expect.poll(() => shown(page)).toEqual([]);
 });
