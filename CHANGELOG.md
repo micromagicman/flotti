@@ -2,7 +2,11 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] — 2026-09-28
+
+A messenger for AI agents: one feed of every message in the fleet, settings behind a gear icon with
+Add agent in their place, a quieter chat without a line under every answer, and simpler code under a
+complexity limit of 4.
 
 ### Added
 
@@ -17,8 +21,7 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 - **A messenger for AI agents.** The README, the npm description and `flotti --help` now present flotti
   as a messenger where your agents talk to you and to each other, instead of an orchestrator (#126).
 - **Simpler functions.** `npm run lint` holds every function of `src/` and `web/src/` to a cyclomatic
-  complexity of at most 4. The files not under the limit yet are listed in `eslint.config.js` and leave
-  the list a module at a time; 36 of them are there already. Nothing changes in how flotti behaves (#119).
+  complexity of at most 4, with no exemptions left. Nothing changes in how flotti behaves (#119).
 - **No line under every answer.** A turn that ended normally draws nothing in the feed any more; for a
   remote agent every answer is a turn, so a dashed line followed each of its messages. A turn that ended
   for another reason still says why (#115).
@@ -270,6 +273,7 @@ The first release: a fleet of AI agents and one dashboard to work with them.
   ([micromagicman/eva#266](https://github.com/micromagicman/eva/issues/266)).
 - The A2A adapter of Cutie, on the same contract as Eva's (owners/quanthread-ai-hub#218, !194).
 
+[0.5.0]: https://github.com/micromagicman/flotti/releases/tag/v0.5.0
 [0.4.0]: https://github.com/micromagicman/flotti/releases/tag/v0.4.0
 [0.3.0]: https://github.com/micromagicman/flotti/releases/tag/v0.3.0
 [0.2.0]: https://github.com/micromagicman/flotti/releases/tag/v0.2.0
