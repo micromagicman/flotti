@@ -2,8 +2,8 @@
 
 Let your AI agents talk — to you and to each other.
 
-flotti is a messenger for AI agents. They send each other messages and tasks, and you see every
-conversation between them; you write to any one agent in its tab — with its status, live output and a
+flotti is a messenger for AI agents. They send each other messages and tasks — inside the groups you put
+them in — and you see every conversation between them; you write to any one agent in its tab — with its status, live output and a
 restart button — or to all of them at once with a broadcast. It **runs local agents** over ACP (starts
 them, talks to them, restarts them when they fall over) and **talks to remote agents** over A2A (see
 [Talking to a remote agent](#talking-to-a-remote-agent)). flotti is standalone today, on your own
@@ -348,6 +348,130 @@ missing directory named by `--fleet` or `FLOTTI_FLEET` is an error: it is most l
 started with `--fleet` or `FLOTTI_FLEET` may still switch on the settings page; the next run started
 the same way opens that directory again, since those two win over the saved one.
 
+## Groups
+
+**Agents see and write to each other only inside a group** ([docs/groups.md](https://github.com/micromagicman/flotti/blob/main/docs/groups.md), #144).
+A group is a topical conversation — a name, a topic, a set of agents and a history of its own. An
+agent outside a group does not get its members as peers and cannot write to them; you are above the
+groups and see and reach everyone, as before. The rule lives in flotti, on every path a message
+between agents takes, so no agent can get round it — and an agent that knows nothing of groups is
+not broken by them: it sees fewer peers, that is all.
+
+### What a group is
+
+A group is a directory of the fleet, `groups/<id>/`, next to the agents; the directory name is its
+id (letters, digits, `.`, `_` and `-`, starting with a letter or a digit — the rule of an agent id,
+since it goes in tool arguments and tab addresses). `group.json` in it holds an optional `name` —
+the id when absent — an optional `topic`, which the agents get as it is written, and `members`, the
+ids of the agents in it, which may be empty:
+
+```json
+{
+    "name": "Release 0.6.0",
+    "topic": "Ship 0.6.0: the groups feature, its docs and the release notes.",
+    "members": ["eva", "reviewer", "tester"]
+}
+```
+
+- Ids of groups and of agents are separate namespaces: a group `eva` and an agent `eva` may both
+  exist — a tool names a group in `group` and an agent in `to`.
+- An agent may be in several groups; you are in none.
+- A member is named by id only. A member that is not in the fleet — deleted, or typed by hand — is
+  kept in the file and shown as *not in the fleet*; it is not an error, and the fleet loads.
+  Deleting an agent in the settings takes it out of every group.
+- Only a person changes membership: in [Settings → Groups](#settings) or by editing the file. No
+  tool lets an agent join, leave or invite; `list_groups` says so.
+- The messages of a group are its own, in `groups/<id>/.flotti-history.jsonl`, written by flotti and
+  bounded like an agent's — see [The fleet](#the-fleet) for the layout.
+
+### Who sees whom
+
+The **peers** of an agent are the members of every group it is in, itself excluded. An agent in no
+group with anyone has no peers.
+
+- `list_agents` names the peers only, each with `groups` — the ids of the groups the caller shares
+  with it — and the caller's own entry marked `you`; an agent with no peers gets an empty list and a
+  sentence saying it is not in a group with anyone yet, so it does not take the fleet for empty.
+  `list_groups` names the groups the caller is in, with the topic and the members by id and name.
+  The [roster of a remote agent](#talking-to-a-remote-agent) lists the peers the same way, with
+  `groups` beside `agents`, and goes out again when a group changes.
+- `send_message`, `reply`, `forward`, `delegate`, `to` of [the inbox](https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md)
+  and the actions of an administrator reach a peer only. Any other agent — in no group with the
+  sender, or not in the fleet at all — is refused with the same words,
+  `there is no agent "x" among the agents you can write to; list_agents names them`, so an agent
+  outside a group learns nothing of the members, not even that they exist. The tab of the sender,
+  which you read, says the real reason: `"x" is not in a group with "eva"`.
+- **Administrators are bound like everyone**: `restart_agent`, `clear_context` and the `admin`
+  requests of the inbox act on the peers of the administrator and on itself. An administrator that is
+  to look after the whole fleet is put in every group.
+- **The check is at the door.** What comes back from an exchange that was allowed — the answer flotti
+  sends back at the end of a turn, the outcome of a task — reaches the agent that started it even when
+  the two no longer share a group by then. A message sent on purpose is a new exchange and is checked
+  anew.
+- **You are bound by nothing.** The message of a tab, the broadcast to all agents, the feed of every
+  message and the conversations of pairs stay fleet-wide: groups are a rule for agents, not a filter on
+  the dashboard.
+
+### A message to a group
+
+A message to a group reaches every member but the sender, each on its own, as a broadcast does — a
+member that is down or busy holds nobody up — and is one line of the group's history with how each
+member took it: `taken`, `queued`, or `failed` and why. A member that is stopped does not get it, and
+the history says so. The socket carries the line as a `group-message`, and a page asks for the messages
+of a group on `subscribe` under `_group:<id>`, as it asks for the events of an agent under its id.
+
+- **From you:** the field of the tab of the group, or `POST /api/groups/<id>/messages` with the body
+  of a broadcast, answered member by member like `POST /api/broadcast`.
+- **From an agent:** `send_message` and `forward` take either `to` — an agent — or `group` — the id
+  of a group the caller is in — never both; `reply` answers where the last message came from, the
+  group when it came through one. A remote agent posts with `group` beside `to` of its inbox, with
+  `kind: message` only. `delegate` names an agent only: a task has one doer, and never goes to a group.
+  A group the caller is not in is refused with the words for one that does not exist,
+  `there is no group "x" among the groups you are in; list_groups names them`; the tab of the sender
+  says the real reason.
+- **What a member gets:** the message in its tab, marked with the group — a `message` event with
+  `group` beside `from`. A local agent over ACP, and a remote one without the inbox, read it as
+  `[from eva in group release] …`, and your message to a group as `[in group release] …`; a remote
+  agent with the inbox gets `group` beside `from` in the metadata.
+- **What a member answers** in the turn the message started is posted to the group — its history, its
+  tab, the other members — as an answer from that member, marked `turnAnswer` («answer» in the tab) and
+quoting the message. Such
+  an answer earns no answer back: one message gets at most one round of answers, never a loop. A member
+  with more to say says it on purpose, with `send_message` and `group`.
+- **A direct message between two agents of a group** — `send_message` with `to`, `to` of the inbox, a
+  task — is what it was: it lands in the conversation of the pair, not in the group.
+
+The tab of a group shows, under every message, how each member took it. A member that was busy is
+recorded as `queued` when the message is posted, and the line of the history is not updated when it
+later takes the message — the fold keeps saying so (#162).
+
+### On the dashboard
+
+- **The Groups section** of the sidebar lists the groups of the fleet, and **the tab of a group** —
+  `_group:<id>` — is where you read the conversation and write to every member; a group message is
+  one row of the feed of the fleet, tagged `group`; the details of an agent list its groups. How each
+  looks is in [The dashboard](#the-dashboard).
+- **Settings → Groups** is where groups are made, changed and deleted: the list, **Add group**,
+  **Edit**, **Delete**; see [Settings](#settings).
+- **Everyone.** A fleet with agents but no group says in the Groups section that the agents do not see
+  each other yet, and one click puts every agent of the fleet in one group named «Everyone» — a group
+  like any other, to edit or delete in the settings.
+
+### An existing fleet
+
+A fleet made before 0.6.0 has no `groups/`, and the first run after the upgrade makes none: every agent
+sees no peers, `list_agents` says it is not in a group with anyone yet, the roster of a remote agent
+goes out with an empty `agents`, and the Groups section offers **Everyone**. What the agents said to each
+other before stays in their tabs, in the conversations and in the feed. A flotti older than 0.6.0
+opened on a fleet with `groups/` reads `local/` and `remote/` only, so nothing in the files breaks it —
+and every agent sees everyone again, which is what that version does.
+
+Adapters written before 0.6.0 keep working: the roster of a remote agent is shorter and carries a
+`groups` field they ignore; a group message reaches them with `group` in the metadata they ignore and
+`from` they read; a local agent needs nothing — `list_agents` shrinks, `list_groups` is one tool more,
+`send_message` gets an argument. They cannot post to a group until they learn `group`; they can write
+to any peer.
+
 ## The manifest: `agent.json`
 
 JSON, and JSON has no comments — so the fields are explained here rather than in the file. Fields
@@ -526,30 +650,9 @@ it to whom, where it stands, and the result or the reason once it is over (#51).
 takes back tasks through its inbox: see [docs/a2a-inbox.md](https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md); who is in the fleet it
 learns through [the fleet extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md).
 
-**Agents see and write to each other only inside a group** ([docs/groups.md](https://github.com/micromagicman/flotti/blob/main/docs/groups.md), #144, #150).
-`list_agents` and the roster of a remote agent name the peers — the members of every group the agent is
-in — and `send_message`, `reply`, `forward`, `delegate`, `to` of the inbox and the actions of an
-administrator reach a peer only: any other agent is refused with the words for one that does not exist,
-`there is no agent "x" among the agents you can write to; list_agents names them`, so an agent outside
-a group learns nothing of the members — the tab of the sender, which a person reads, says the real
-reason, `"x" is not in a group with "eva"`. The check is at the door: what comes back from an exchange
-that was allowed — the answer at the end of a turn, the outcome of a task — reaches the agent that
-started it even when the two no longer share a group by then. A person is bound by nothing: the message
-of a tab and the broadcast go to any agent. A fleet without groups is a fleet where no agent sees
-another; a person makes groups in the settings or by hand (`groups/` in [The fleet](#the-fleet)).
-
-**A message to a group** (#151) reaches every member but the sender, each on its own, as a broadcast
-does — a member that is down or busy holds nobody up — and is one line of the group's history,
-`groups/<id>/.flotti-history.jsonl`, with how each member took it; the socket carries it as a
-`group-message`, and a page asks for the messages of a group on `subscribe` under `_group:<id>`. A
-member gets it in its tab as a `message` event with `group` beside `from`; a local agent over ACP, and a
-remote one without the inbox, read `[from eva in group release] …` (`[in group release] …` for a
-person's message), a remote one with the inbox gets `group` beside `from` in the metadata. What a
-member answers in that turn is posted to the group — history, tab, the other members — as its own
-answer, marked `turnAnswer` as an answer flotti sends back today; such an answer earns no answer back,
-so one message gets at most one round of answers. An agent posts with `send_message` and `group`, or
-with `group` of the inbox; `reply` goes back to the group when the last message came through one. A
-direct message between two agents of a group (`to`) stays in the conversation of the pair.
+Which agents a tool reaches is a matter of groups: `list_agents` names the peers of the caller, and
+`send_message`, `reply`, `forward` and `delegate` reach a peer only, or a group the caller is in with
+`group` — the rule, the refusal and what a message to a group does are in [Groups](#groups).
 
 The server speaks MCP over HTTP (the streamable transport, with plain JSON answers) on a free port of
 `127.0.0.1`, and every agent gets a token of its own in the `Authorization` header: the token tells who
