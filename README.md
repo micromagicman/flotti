@@ -794,3 +794,9 @@ Bump `version` in `package.json`, merge, then push a tag `v<version>` — the `p
 checks the tag against `package.json`, builds, runs the tests and publishes to npm with the
 `NPM_TOKEN` repository secret. A tag pushed earlier is released by running `publish` by hand
 (Actions → publish → Run workflow) with that tag.
+
+## License
+
+flotti is licensed for noncommercial use only, under the
+[PolyForm Noncommercial License 1.0.0](LICENSE) (SPDX `PolyForm-Noncommercial-1.0.0`) — from 0.6.0
+on. Versions up to and including 0.5.0 were released under ISC and stay under it.
