@@ -14,7 +14,8 @@ import { expect, test } from '@playwright/test';
 import type { Locator, Page } from '@playwright/test';
 import { TaskState } from '@a2a-js/sdk';
 // The compiled helpers of the unit tests: `npm run test:e2e` builds them first.
-import { FakeAgent, agentMessage, said, statusUpdate, task } from '../build-test/test/a2a-fake-server.js';
+import { FakeAgent, agentMessage, artifact, said, statusUpdate, task } from '../build-test/test/a2a-fake-server.js';
+import type { Script } from '../build-test/test/a2a-fake-server.js';
 import { INBOX_EXTENSION } from '../build-test/src/a2a-agent.js';
 import { FakeTelegram } from '../build-test/test/fake-telegram.js';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -39,6 +40,25 @@ function localAgent(fleet: string, id: string, adapter?: string, fake: Record<st
         env: { FAKE_ACP: JSON.stringify({ record, ...fake }) }
     }));
 }
+/** Resolves once the file is there: how a test lets a pretend agent go on with its answer. */
+async function gateOpen(path: string): Promise<void> {
+    while (!existsSync(path)) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+}
+/**
+ * Asked to `stream`, the remote agent answers one artifact in two pieces (#157):
+ * `one ` at once — and `streamed` in its directory says so — then `two` once
+ * `gate` in its directory is there.
+ */
+async function streamed(directory: string, ...[context, bus]: Parameters<Script>): Promise<void> {
+    bus.publish(artifact(context, 'a1', 'one ', false));
+    writeFileSync(join(directory, 'streamed'), '');
+    await gateOpen(join(directory, 'gate'));
+    bus.publish(artifact(context, 'a1', 'two', true));
+    bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_COMPLETED));
+    bus.finished();
+}
 /**
  * What the remote agent says of its own when asked to `write later`: a line of
  * progress and then a message, through the inbox — after the turn is over.
@@ -46,6 +66,7 @@ function localAgent(fleet: string, id: string, adapter?: string, fake: Record<st
  * asked to `give claude a task`, it gives that agent a task.
  */
 async function remoteAgent(fleet: string, id: string): Promise<void> {
+    const directory = join(fleet, 'remote', id);
     let inbox: ((text: string, kind: string, to?: string, extra?: Record<string, unknown>) => void) | undefined;
     /** A request of an administrator of the fleet, through the inbox as well. */
     let admin: ((action: string, agent: string) => void) | undefined;
@@ -66,6 +87,9 @@ async function remoteAgent(fleet: string, id: string): Promise<void> {
                 }));
                 await new Promise(() => undefined);
             }
+            if (said(context) === 'stream') {
+                return streamed(directory, context, bus);
+            }
             bus.publish(statusUpdate(context.taskId, context.contextId, TaskState.TASK_STATE_COMPLETED, agentMessage(`echo: ${said(context)}`, context)));
             bus.finished();
             if (said(context) === 'write later') {
@@ -85,7 +109,6 @@ async function remoteAgent(fleet: string, id: string): Promise<void> {
             }
         }
     }).listen();
-    const directory = join(fleet, 'remote', id);
     mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, 'agent.json'), JSON.stringify({ name: id, url: remote.url }));
 }
@@ -128,7 +151,8 @@ function groupOf(fleet: string, id: string, members: readonly string[]): void {
 }
 test.beforeAll(async () => {
     const fleet = join(workspace, 'fleet');
-    localAgent(fleet, 'claude', 'claude-code', { mcpHttp: true });
+    // `stream` answers in two pieces, the second once the gate is there (#157).
+    localAgent(fleet, 'claude', 'claude-code', { mcpHttp: true, gate: join(fleet, 'local', 'claude', 'gate') });
     memoryNotes(fleet, 'claude');
     localAgent(fleet, 'codex', 'codex', { mcpHttp: true });
     await remoteAgent(fleet, 'relay');
@@ -1088,6 +1112,63 @@ test('makes an agent an administrator in the settings; its action waits for a pe
     await page.getByRole('button', { name: 'Save' }).click();
     await expect(settingsRow(page, 'relay')).not.toContainText('admin');
     expect('admin' in manifest()).toBe(false);
+});
+/** How many pieces of a `stream` answer the pretend local agent has sent, from its record. */
+function piecesSent(id: string): number {
+    const record = join(workspace, 'fleet', 'local', id, 'record.jsonl');
+    return existsSync(record) ? readFileSync(record, 'utf8').split('\n').filter((line) => line.includes('"streamed"')).length : 0;
+}
+/**
+ * Asks the agent to answer in two pieces, and holds the second one back until
+ * `go`. `firstSent` says whether the agent has sent the first piece — from
+ * the record of a local agent, from the `streamed` file of a remote one.
+ */
+async function askToStream(page: Page, name: string): Promise<{ firstSent: () => boolean; go: () => void }> {
+    const directory = join(workspace, 'fleet', name === 'relay' ? 'remote' : 'local', name);
+    rmSync(join(directory, 'gate'), { force: true });
+    rmSync(join(directory, 'streamed'), { force: true });
+    const before = piecesSent(name);
+    await say(page, name, 'stream');
+    return {
+        firstSent: () => existsSync(join(directory, 'streamed')) || piecesSent(name) > before,
+        go: () => writeFileSync(join(directory, 'gate'), '')
+    };
+}
+test('an answer reaches the tab whole or as it is written, as Settings say, for a local and a remote agent alike (#157)', async ({ page }) => {
+    await page.goto(url);
+    await settingsButton(page).click();
+    const choice = page.getByRole('group', { name: 'Answers' }).getByRole('combobox');
+    await expect(choice).toHaveValue('streamed');
+    await choice.selectOption('whole');
+    const file = join(workspace, '.flotti', 'settings.json');
+    // Not there yet when this is the first setting saved: the poll reads it once it is.
+    const settings = () => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}) as Record<string, unknown>;
+    await expect.poll(() => settings()['answerDelivery']).toBe('whole');
+    const started = starts('claude');
+    for (const name of ['claude', 'relay']) {
+        const bubbles = feed(page, name).locator('.message-agent', { hasText: new RegExp(`^${name}one`) });
+        const { firstSent, go } = await askToStream(page, name);
+        await expect.poll(firstSent).toBe(true);
+        // The first piece is with flotti, and the tab shows nothing of it.
+        await expect(bubbles).toHaveCount(0);
+        go();
+        await expect(bubbles).toHaveCount(1);
+        await expect(bubbles).toContainText('one two');
+    }
+    await page.goto(`${url}#/_settings`);
+    await choice.selectOption('streamed');
+    await expect.poll(() => settings()['answerDelivery']).toBe('streamed');
+    for (const name of ['claude', 'relay']) {
+        const bubbles = feed(page, name).locator('.message-agent', { hasText: new RegExp(`^${name}one`) });
+        const { go } = await askToStream(page, name);
+        // The first piece shows at once, under the whole answer of before; the second grows the same bubble.
+        await expect(bubbles).toHaveCount(2);
+        await expect(bubbles.last()).not.toContainText('two');
+        go();
+        await expect(bubbles.last()).toContainText('one two');
+        await expect(bubbles).toHaveCount(2);
+    }
+    expect(starts('claude')).toBe(started);
 });
 test('adds a local agent in the settings, with no file edited by hand, and it answers in its tab', async ({ page }) => {
     await page.goto(url);

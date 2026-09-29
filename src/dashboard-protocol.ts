@@ -8,6 +8,7 @@
  * while the socket only carries what the agents do.
  */
 import type { AgentEvent, AgentStatus, Forwarded, Quote } from './agent-events.js';
+import type { AnswerDelivery } from './answer-delivery.js';
 import type { ConnectionHealth } from './connection-health.js';
 import type { FleetSource, LocalAgentAdapter, RemoteAuth, RemoteSsh, RestartPolicy } from './types.js';
 /**
@@ -114,6 +115,15 @@ type AdminSettings = {
      * in the dashboard; when off, it is done at once.
      */
     readonly confirmActions: boolean;
+};
+/** `GET /api/answer-delivery`, the body of `PUT /api/answer-delivery` and the answer to it. */
+type AnswerDeliverySettings = {
+    /**
+     * How the answer of an agent reaches its tab and the feed of the fleet
+     * (#157): `streamed` — piece by piece as it is written; `whole` — once,
+     * when the message is complete. One rule for every agent.
+     */
+    readonly mode: AnswerDelivery;
 };
 /** Body of `POST /api/agents/<id>/permissions/<requestId>`; no option refuses the request. */
 type PermissionAnswer = {
@@ -320,6 +330,7 @@ type ErrorResponse = {
 export type {
     AdminAnswer,
     AdminSettings,
+    AnswerDeliverySettings,
     AgentConfig,
     ConnectionHealth,
     AgentSummary,

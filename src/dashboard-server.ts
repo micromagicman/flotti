@@ -228,6 +228,16 @@ const ROUTES: readonly Route[] = [
         handle: async (context, _match, body) => [200, requireSettings(context).setAdminSettings(body)]
     },
     {
+        method: 'GET',
+        pattern: /^\/api\/answer-delivery$/,
+        handle: async (context) => [200, requireSettings(context).answerDelivery()]
+    },
+    {
+        method: 'PUT',
+        pattern: /^\/api\/answer-delivery$/,
+        handle: async (context, _match, body) => [200, requireSettings(context).setAnswerDelivery(body)]
+    },
+    {
         method: 'POST',
         pattern: /^\/api\/admin-actions\/([^/]+)$/,
         handle: async ({ supervisor }, [actionId], body) => {

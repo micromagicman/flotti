@@ -352,6 +352,12 @@ const en = {
         readingAdmin: 'Reading the settings…',
         adminConfirm: 'Ask me before an administrator restarts an agent or clears its context',
         adminHint: 'An administrator is an agent with Administrator ticked in its settings. When this is on, each of its actions waits for Allow in the dashboard; a refusal reaches it as one. When off, it is done at once.',
+        answersTitle: 'Answers',
+        answersLabel: 'How an answer of an agent reaches its tab',
+        answersStreamed: 'As it is written, piece by piece',
+        answersWhole: 'Whole, once the agent has finished it',
+        answersHint: 'One rule for every agent, local and remote, in the tabs and in the feed of the fleet. Holds for the next message, with no restart; saved in ~/.flotti/settings.json.',
+        readingAnswers: 'Reading the settings…',
         languageTitle: 'Language',
         languageLabel: 'Language of the dashboard',
         languageHint: 'Kept in this browser. Messages of agents and people are shown as they were written.'

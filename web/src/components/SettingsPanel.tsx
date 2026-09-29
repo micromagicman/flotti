@@ -5,6 +5,7 @@ import { fromConfig, newDraft } from '../agent-draft.js';
 import type { Draft } from '../agent-draft.js';
 import { api } from '../api.js';
 import { AgentForm } from './AgentForm.js';
+import { AnswerDeliverySection } from './AnswerDelivery.js';
 import { ConnectionHealthView } from './ConnectionHealth.js';
 import { NotificationSettingsSection } from './NotificationSettings.js';
 import type { BrowserNotify } from './NotificationSettings.js';
@@ -305,6 +306,7 @@ function SettingsSections({ agents, onEditing, notify, atAgents }: AgentListProp
             <AgentList agents={agents} onEditing={onEditing} atAgents={atAgents} />
             <NotificationSettingsSection notify={notify} />
             <AdminConfirm />
+            <AnswerDeliverySection />
             <LanguageSection />
         </>
     );

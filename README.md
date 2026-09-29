@@ -87,7 +87,9 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   which harness runs them, and the header says `harness unknown` rather than guess.
 - **Inside the tab**: the agent's output as it comes — messages, collapsed reasoning, tool calls with
   their progress, permission requests with the options the agent offered, diagnostics, and whatever
-  else the protocol said, raw and collapsed. Below it, a field to write to the agent: Enter sends,
+  else the protocol said, raw and collapsed. An answer reaches the tab the way **Answers** in Settings
+  says, the same for every agent: piece by piece as it is written, or whole once the agent has
+  finished it. Below it, a field to write to the agent: Enter sends,
   Shift+Enter makes a new line. A message to a busy agent waits in line at the end of the feed, under a
   dashed line "NEXT UP": each one with its place in line and **✕ cancel** to take it back before the
   agent gets it; the tab in the sidebar says how many wait ("working · 2 in line"). Once the agent takes
@@ -165,6 +167,17 @@ same files: the fleet stays directories a person can read and edit by hand.
   clears its context** makes every such action wait for **Allow** in the tab of the administrator —
   **Refuse** reaches the administrator as a refusal; off, the action is done at once. It is off by
   default, saved in `~/.flotti/settings.json` and read at every action.
+- **Answers.** How an answer of an agent reaches its tab and the feed of the fleet — one rule for every
+  agent, local over ACP or remote over A2A, whatever way the agent sends its answer. **As it is
+  written, piece by piece** shows the message growing as the pieces come; **Whole, once the agent has
+  finished it** shows the message once, when it is complete — at the end of the message, or at the end
+  of the turn when nothing marks the end of the message — and nothing partial before: no growing
+  bubble. Tool calls and reasoning between the pieces show as they come, and the message follows them.
+  What an agent says outside a turn has no end to wait for and shows as it comes. The rule is applied
+  once, on the way to the dashboard; what agents send one another is not held. Piece by piece by
+  default, saved in `~/.flotti/settings.json` as `answerDelivery` (`streamed` or `whole`); a change
+  holds for the next message, and no agent is restarted. The history of a tab keeps what the tab got:
+  the pieces when streamed, one message when whole — either way the tab reads the same after a reload.
 
 ### Notifications outside the browser
 
@@ -241,6 +254,7 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `POST /api/notifications/subscriptions`, `DELETE …` `{endpoint, keys}` | a browser subscribes to Web Push, or stops |
 | `POST /api/notifications/test`                | a test notification over every channel switched on      |
 | `GET /api/admin-settings`, `PUT /api/admin-settings` `{confirmActions}` | whether actions of administrators wait for a person |
+| `GET /api/answer-delivery`, `PUT /api/answer-delivery` `{mode}` | how answers reach the tabs: `streamed` piece by piece, `whole` once complete |
 | `POST /api/admin-actions/<action>` `{allow}`  | allows or refuses an action of an administrator waiting for it |
 | `/ws`                                         | `fleet` — the agents and the groups — first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and gets the events after them, then live ones; `health` whenever the health of the SSH connection of an agent changes |
 
