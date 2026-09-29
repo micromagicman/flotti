@@ -362,6 +362,17 @@ const en = {
         languageLabel: 'Language of the dashboard',
         languageHint: 'Kept in this browser. Messages of agents and people are shown as they were written.'
     },
+    groups: {
+        title: 'Groups',
+        noGroups: 'No groups yet: the agents do not see each other until they are in one.',
+        addGroup: 'Add group',
+        members: (n: number) => `${f.number(n)} member${s(n)}`,
+        noMembers: 'no members',
+        notInFleet: 'not in the fleet',
+        confirmDelete: (name: string) => `Move the group ${name} and its history to .trash in the fleet directory? Its members stop seeing each other through it.`,
+        keep: 'Keep',
+        reading: 'Reading the group…'
+    },
     form: {
         newAgent: (kind: 'local' | 'remote') => `New ${kind} agent`,
         agentLabel: (id: string) => `Agent ${id}`,
@@ -416,6 +427,23 @@ const en = {
         administratorHint: 'May restart the agents of the fleet and clear their context, itself included, with the tools of an administrator. Only a person gives and takes this role.',
         restartsOnSave: 'Saving restarts the agent with the new settings, unless it is stopped.',
         addAgent: 'Add agent'
+    },
+    groupForm: {
+        newGroup: 'New group',
+        groupLabel: (id: string) => `Group ${id}`,
+        id: 'Id',
+        idNewHint: 'Names the group directory: letters, digits, ".", "_" and "-", starting with a letter or a digit. Groups and agents may share an id.',
+        idHint: 'The id is the directory name and stays.',
+        name: 'Name',
+        nameHint: 'Empty: the id.',
+        topic: 'Topic',
+        topicHint: 'What the group is for, and what its members are expected to do there; the agents get it as it is.',
+        members: 'Members',
+        membersHint: 'The agents in the group see and write to each other. A member the fleet does not have is kept and marked so.',
+        noAgents: 'No agents in the fleet yet: add one, or name the members by id below.',
+        others: 'Other members',
+        othersHint: 'Ids of agents that are not in the fleet yet, one per line.',
+        addGroup: 'Add group'
     },
     notifications: {
         title: 'Notifications',

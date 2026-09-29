@@ -7,6 +7,8 @@ import type {
     Delivery,
     ErrorResponse,
     FleetInfo,
+    GroupConfig,
+    GroupSummary,
     MemoryBank,
     MemoryNote,
     NotificationSettings,
@@ -35,6 +37,9 @@ function requestInit(method: string, body?: object): RequestInit {
 const post = <T>(path: string, body: object = {}): Promise<T> => call<T>('POST', path, body);
 function agentPath(agentId: string, action?: string): string {
     return `/api/agents/${encodeURIComponent(agentId)}${action === undefined ? '' : `/${action}`}`;
+}
+function groupPath(groupId: string): string {
+    return `/api/groups/${encodeURIComponent(groupId)}`;
 }
 const api = {
     /** A message to one agent; `extras` make it a reply, or a forward. */
@@ -68,6 +73,11 @@ const api = {
     answerDelivery: (): Promise<AnswerDeliverySettings> => call('GET', '/api/answer-delivery'),
     setAnswerDelivery: (settings: AnswerDeliverySettings): Promise<AnswerDeliverySettings> => call('PUT', '/api/answer-delivery', settings),
     fleet: (): Promise<FleetInfo> => call('GET', '/api/fleet'),
+    /** The groups of the fleet (docs/groups.md): their file as it says it, made, changed and removed like agents. */
+    groupConfig: (groupId: string): Promise<GroupConfig> => call('GET', groupPath(groupId)),
+    createGroup: (config: GroupConfig): Promise<GroupSummary> => post('/api/groups', config),
+    updateGroup: (config: GroupConfig): Promise<GroupSummary> => call('PUT', groupPath(config.id), config),
+    removeGroup: (groupId: string): Promise<{ readonly trash?: string }> => call('DELETE', groupPath(groupId)),
     switchFleet: (path: string): Promise<FleetInfo> => call('PUT', '/api/fleet', { path }),
     notifications: (): Promise<NotificationSettings> => call('GET', '/api/notifications'),
     changeNotifications: (change: NotificationSettingsChange): Promise<NotificationSettings> => call('PUT', '/api/notifications', change),

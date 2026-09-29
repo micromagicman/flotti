@@ -1235,6 +1235,89 @@ test('deletes an agent: it stops, and its directory goes to .trash', async ({ pa
     expect(existsSync(join(workspace, 'fleet', 'local', 'helper'))).toBe(false);
     expect(readdirSync(join(workspace, 'fleet', '.trash')).some((name) => name.startsWith('local-helper-'))).toBe(true);
 });
+const groupRow = (page: Page, id: string) => page.getByRole('list', { name: 'Groups' }).locator(`[data-group="${id}"]`);
+const groupFile = (id: string) => JSON.parse(readFileSync(join(workspace, 'fleet', 'groups', id, 'group.json'), 'utf8')) as Record<string, unknown>;
+/** Has a local agent call `list_agents`, and gives what the tool said — the answer of the fleet, as the pretend adapter reports it. */
+async function listAgents(page: Page, name: string): Promise<Locator> {
+    await say(page, name, 'mcp {"name":"list_agents","arguments":{}}');
+    const answer = feed(page, name).locator('.message-agent').last();
+    await expect(answer).toContainText('mcp: [');
+    return answer;
+}
+test('makes a group in the settings: it is on disk as group.json, and the agents in it see each other on their next list_agents', async ({ page }) => {
+    await page.goto(`${url}#/_settings`);
+    await expect(groupRow(page, 'team')).toContainText('team · 3 members');
+    await expect(groupRow(page, 'team')).toContainText('claude, codex, relay');
+    await page.getByRole('button', { name: 'Add group' }).click();
+    const form = page.getByRole('form', { name: 'New group' });
+    await field(page, 'Id').fill('docs');
+    await field(page, 'Name').fill('Docs');
+    await field(page, 'Topic').fill('Write the docs.');
+    await form.getByRole('checkbox', { name: 'claude' }).check();
+    await form.getByRole('checkbox', { name: 'codex' }).check();
+    await form.getByRole('button', { name: 'Add group' }).click();
+    // The list follows the fleet message of the socket: no reload.
+    await expect(groupRow(page, 'docs')).toContainText('Docs');
+    await expect(groupRow(page, 'docs')).toContainText('docs · 2 members');
+    await expect(groupRow(page, 'docs')).toContainText('claude, codex');
+    await expect(groupRow(page, 'docs')).toContainText('Write the docs.');
+    expect(groupFile('docs')).toEqual({ name: 'Docs', topic: 'Write the docs.', members: ['claude', 'codex'] });
+    await expect(await listAgents(page, 'claude')).toContainText(/"id": "codex"[\s\S]*?"groups": \[\s*"docs",\s*"team"\s*\]/);
+});
+test('changes the members of a group in the settings: a member typed by hand that is not in the fleet is kept and marked, and the agents see the change', async ({ page }) => {
+    await page.goto(`${url}#/_settings`);
+    await groupRow(page, 'docs').getByRole('button', { name: 'Edit' }).click();
+    const form = page.getByRole('form', { name: 'Group docs' });
+    await expect(field(page, 'Id')).toHaveValue('docs');
+    await expect(field(page, 'Id')).toHaveAttribute('readonly', '');
+    await expect(field(page, 'Topic')).toHaveValue('Write the docs.');
+    await expect(form.getByRole('checkbox', { name: 'codex' })).toBeChecked();
+    await form.getByRole('checkbox', { name: 'codex' }).uncheck();
+    await field(page, 'Other members').fill('ghost');
+    await form.getByRole('button', { name: 'Save' }).click();
+    await expect(groupRow(page, 'docs')).toContainText('claude, ghost · not in the fleet');
+    expect(groupFile('docs')).toEqual({ name: 'Docs', topic: 'Write the docs.', members: ['claude', 'ghost'] });
+    const answer = await listAgents(page, 'claude');
+    await expect(answer).toContainText(/"id": "codex"[\s\S]*?"groups": \[\s*"team"\s*\]/);
+    await expect(answer).not.toContainText('ghost');
+    await page.goto(`${url}#/_settings`);
+    await groupRow(page, 'docs').getByRole('button', { name: 'Edit' }).click();
+    await expect(form.getByRole('checkbox', { name: 'ghost · not in the fleet' })).toBeChecked();
+    await form.getByRole('button', { name: 'Cancel' }).click();
+});
+test('refuses a group flotti run would refuse, and says why', async ({ page }) => {
+    await page.goto(`${url}#/_settings`);
+    await page.getByRole('button', { name: 'Add group' }).click();
+    const form = page.getByRole('form', { name: 'New group' });
+    await field(page, 'Id').fill('-bad');
+    await form.getByRole('button', { name: 'Add group' }).click();
+    await expect(page.getByRole('alert')).toContainText('"-bad" cannot be a group id — use letters, digits, ".", "_" and "-", starting with a letter or a digit');
+    await field(page, 'Id').fill('bad');
+    await field(page, 'Other members').fill('two words');
+    await form.getByRole('button', { name: 'Add group' }).click();
+    await expect(page.getByRole('alert')).toContainText('group.json: members[0] must be an agent id');
+    await field(page, 'Id').fill('team');
+    await field(page, 'Other members').fill('');
+    await form.getByRole('button', { name: 'Add group' }).click();
+    await expect(page.getByRole('alert')).toContainText('The id "team" is already taken by a group of this fleet');
+    await form.getByRole('button', { name: 'Cancel' }).click();
+    await expect(groupRow(page, 'bad')).toHaveCount(0);
+    expect(existsSync(join(workspace, 'fleet', 'groups', 'bad'))).toBe(false);
+});
+test('deletes a group: its directory goes to .trash, and the agents in it stop seeing each other through it', async ({ page }) => {
+    await page.goto(`${url}#/_settings`);
+    const row = groupRow(page, 'docs');
+    await row.getByRole('button', { name: 'Delete' }).click();
+    await expect(row).toContainText('Move the group Docs and its history to .trash in the fleet directory?');
+    await row.getByRole('button', { name: 'Keep' }).click();
+    await expect(row.getByRole('button', { name: 'Edit' })).toBeVisible();
+    await row.getByRole('button', { name: 'Delete' }).click();
+    await row.getByRole('button', { name: 'Delete' }).click();
+    await expect(row).toHaveCount(0);
+    expect(existsSync(join(workspace, 'fleet', 'groups', 'docs'))).toBe(false);
+    expect(readdirSync(join(workspace, 'fleet', '.trash')).some((name) => name.startsWith('group-docs-'))).toBe(true);
+    await expect(await listAgents(page, 'claude')).not.toContainText('"docs"');
+});
 test('the details of an agent say whether it has memory, as flotti delivered it', async ({ page }) => {
     await page.goto(url);
     const memoryOf = async (name: string) => {
