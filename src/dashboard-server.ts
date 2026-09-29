@@ -22,7 +22,7 @@ import { ConfigurationError } from './errors.js';
 import { MemoryError, readMemoryBank, readMemoryNote } from './memory-bank.js';
 import type { FleetSettings } from './fleet-settings.js';
 import type { NotificationService } from './notifications.js';
-import { UnknownAgentError } from './supervisor.js';
+import { UnknownAgentError, UnknownGroupError } from './supervisor.js';
 import type { Supervisor, SupervisorNotice } from './supervisor.js';
 /** Port the dashboard listens on unless told otherwise. */
 const DEFAULT_PORT = 4870;
@@ -122,6 +122,37 @@ const NOTIFICATION_ROUTES: readonly Route[] = [
         method: 'POST',
         pattern: /^\/api\/notifications\/test$/,
         handle: async (context) => [200, await requireNotifications(context).test()]
+    }
+];
+/** The groups of the fleet (docs/groups.md): listed, and made, changed and removed by the settings page. */
+const GROUP_ROUTES: readonly Route[] = [
+    {
+        method: 'GET',
+        pattern: /^\/api\/groups$/,
+        handle: async ({ supervisor }) => [200, supervisor.groups()]
+    },
+    {
+        method: 'POST',
+        pattern: /^\/api\/groups$/,
+        handle: async (context, _match, body) => [201, requireSettings(context).createGroup(body)]
+    },
+    {
+        method: 'GET',
+        pattern: /^\/api\/groups\/([^/]+)$/,
+        handle: async (context, [id]) => [200, requireSettings(context).groupConfig(id ?? '')]
+    },
+    {
+        method: 'PUT',
+        pattern: /^\/api\/groups\/([^/]+)$/,
+        handle: async (context, [id], body) => [200, requireSettings(context).updateGroup(id ?? '', body)]
+    },
+    {
+        method: 'DELETE',
+        pattern: /^\/api\/groups\/([^/]+)$/,
+        handle: async (context, [id]) => {
+            const trash = requireSettings(context).removeGroup(id ?? '');
+            return [200, trash === undefined ? {} : { trash }];
+        }
     }
 ];
 /** The memory bank of a local agent, read-only (#73): the list of its notes, and one note. */
@@ -414,7 +445,7 @@ function collectChunks(request: IncomingMessage, reject: (reason: unknown) => vo
     return chunks;
 }
 /** Every route of the API, in the order they are tried. */
-const ALL_ROUTES: readonly Route[] = [...ROUTES, ...NOTIFICATION_ROUTES, ...MEMORY_ROUTES];
+const ALL_ROUTES: readonly Route[] = [...ROUTES, ...GROUP_ROUTES, ...NOTIFICATION_ROUTES, ...MEMORY_ROUTES];
 type Found = { readonly route: Route; readonly match: RegExpExecArray };
 async function handleApi(context: Context, request: IncomingMessage, url: URL): Promise<[number, unknown]> {
     const { route, match } = findRoute(request.method, url.pathname);
@@ -484,6 +515,7 @@ function errorResponse(error: unknown): [number, ErrorResponse] {
 /** The status of a configuration error by its kind; 400 for the kinds not here. */
 const STATUS_OF_KIND: Readonly<Partial<Record<ConfigurationError['kind'], number>>> = {
     'duplicate-agent-id': 409,
+    'duplicate-group-id': 409,
     'already-running': 409,
     'ssh-failed': 502
 };
@@ -493,12 +525,16 @@ function statusOf(error: unknown): number {
     }
     return fleetStatus(error);
 }
-/** The status of an error the fleet threw: an unknown agent, a refused configuration, or else a failure. */
+/** The status of an error the fleet threw: an unknown agent or group, a refused configuration, or else a failure. */
 function fleetStatus(error: unknown): number {
-    if (error instanceof UnknownAgentError) {
+    if (isUnknown(error)) {
         return 404;
     }
     return error instanceof ConfigurationError ? STATUS_OF_KIND[error.kind] ?? 400 : 500;
+}
+/** Whether the request named an agent or a group that is not in the fleet. */
+function isUnknown(error: unknown): boolean {
+    return error instanceof UnknownAgentError || error instanceof UnknownGroupError;
 }
 function errorText(error: unknown): string {
     return error instanceof ConfigurationError ? configurationText(error) : describeError(error);
@@ -565,7 +601,7 @@ function attachPage(supervisor: Supervisor, socket: WebSocket): () => void {
     const held: SupervisorNotice[] = [];
     const deliver = (notice: SupervisorNotice): void => post(socket, notice);
     const unsubscribe = supervisor.subscribe((notice) => (caughtUp ? deliver(notice) : held.push(notice)));
-    post(socket, { type: 'fleet', agents: supervisor.agents() });
+    post(socket, { type: 'fleet', agents: supervisor.agents(), groups: supervisor.groups() });
     socket.on('message', (data) => {
         const message = parseClientMessage(String(data));
         if (message === undefined || message.type !== 'subscribe' || caughtUp) {

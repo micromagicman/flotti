@@ -413,7 +413,12 @@ export {
     SAMPLE_LOCAL_MANIFEST,
     SKILLS_DIRECTORY,
     SYSTEM_PROMPT_FILE,
+    isObject,
+    optionalString,
     readLocalManifest,
-    readRemoteManifest
+    readRemoteManifest,
+    reject,
+    shown,
+    typeName
 };
-export type { Environment, ManifestContext };
+export type { Environment, ManifestContext, Place };

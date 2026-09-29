@@ -55,10 +55,33 @@ type ClientMessage = {
     readonly type: 'subscribe';
     readonly since: Readonly<Record<string, number>>;
 };
+/** A group of agents as the page lists it (docs/groups.md): its members see and reach one another. */
+type GroupSummary = {
+    readonly id: string;
+    /** The id when the file names none. */
+    readonly name: string;
+    /** What the group is about, as written for the agents. */
+    readonly topic?: string;
+    /** Ids of the agents in the group, in the order they were added; one not in the fleet is kept and shown so. */
+    readonly members: readonly string[];
+};
+/**
+ * `group.json` as the settings page edits it: the fields as they are written
+ * in the file — the name defaults to nothing here — and the answer to
+ * `GET /api/groups/<id>`. The body of `POST /api/groups` (a new group) and of
+ * `PUT /api/groups/<id>` (a change) has the same shape; `members` left out of
+ * a request is a group with no member yet.
+ */
+type GroupConfig = {
+    readonly id: string;
+    readonly name?: string;
+    readonly topic?: string;
+    readonly members: readonly string[];
+};
 /** What the server sends over the socket. */
 type ServerMessage =
-    /** First message of every connection, and again whenever an agent is added, changed or removed. */
-    | { readonly type: 'fleet'; readonly agents: readonly AgentSummary[] }
+    /** First message of every connection, and again whenever an agent or a group is added, changed or removed. */
+    | { readonly type: 'fleet'; readonly agents: readonly AgentSummary[]; readonly groups: readonly GroupSummary[] }
     /** One event of one agent, from history or live; `seq` tells which. */
     | { readonly type: 'event'; readonly event: AgentEvent }
     /** How a message that had to wait in line ended up: taken at last, or dropped. */
@@ -306,6 +329,8 @@ export type {
     ErrorResponse,
     FleetInfo,
     FleetSwitch,
+    GroupConfig,
+    GroupSummary,
     Harness,
     LocalAgentConfig,
     MemoryBank,

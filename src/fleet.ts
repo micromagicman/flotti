@@ -2,6 +2,8 @@ import { mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import type { Stats } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { ConfigurationError } from './errors.js';
+import type { ConfigurationErrorKind } from './errors.js';
+import { GROUPS_DIRECTORY, GROUP_FILE, SAMPLE_GROUP, parseGroup } from './groups.js';
 import {
     MANIFEST_FILE,
     SAMPLE_LOCAL_MANIFEST,
@@ -11,7 +13,7 @@ import {
 } from './manifest.js';
 import type { Environment, ManifestContext } from './manifest.js';
 import { readSettings } from './settings.js';
-import type { Agent, Fleet, FleetLocation, FleetSource, LocalAgent } from './types.js';
+import type { Agent, Fleet, FleetLocation, FleetSource, Group, LocalAgent } from './types.js';
 /** Command line argument that points flotti at a fleet directory. */
 const FLEET_PATH_ARGUMENT = '--fleet';
 /** Environment variable that points flotti at a fleet directory. */
@@ -26,6 +28,46 @@ const REMOTE_DIRECTORY = 'remote';
 const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** Error codes that mean nothing is at the path. */
 const MISSING_CODES: ReadonlySet<string | undefined> = new Set([ 'ENOENT', 'ENOTDIR' ]);
+/** What the entries of a directory of the fleet are — agents, or groups — for the complaints about them. */
+type Entries = {
+    /** The file every entry must hold. */
+    readonly file: string;
+    /** What an entry is, in a sentence. */
+    readonly noun: 'agent' | 'group';
+    /** What the file is, in a sentence. */
+    readonly what: 'manifest' | 'group file';
+    /** What the file is, at the start of a sentence. */
+    readonly label: 'Agent manifest' | 'Group file';
+    readonly idName: 'an agent id' | 'a group id';
+    /** What the directory of the entries is. */
+    readonly place: string;
+    readonly invalidId: ConfigurationErrorKind;
+    readonly missing: ConfigurationErrorKind;
+    /** A file to start from, offered when one is missing. */
+    readonly sample: string;
+};
+const AGENT_ENTRIES: Entries = {
+    file: MANIFEST_FILE,
+    noun: 'agent',
+    what: 'manifest',
+    label: 'Agent manifest',
+    idName: 'an agent id',
+    place: 'a fleet group',
+    invalidId: 'invalid-agent-id',
+    missing: 'missing-manifest',
+    sample: SAMPLE_LOCAL_MANIFEST
+};
+const GROUP_ENTRIES: Entries = {
+    file: GROUP_FILE,
+    noun: 'group',
+    what: 'group file',
+    label: 'Group file',
+    idName: 'a group id',
+    place: 'the groups directory',
+    invalidId: 'invalid-group-id',
+    missing: 'missing-group-file',
+    sample: SAMPLE_GROUP
+};
 type ResolveFleetOptions = {
     /** Command line arguments without the node binary and the script; defaults to the real ones. */
     readonly argv?: readonly string[];
@@ -77,9 +119,10 @@ function nonEmpty(value: string | undefined): string | undefined {
     return trimmed === '' ? undefined : trimmed;
 }
 /**
- * Reads and checks every agent of the fleet. Starting agents, heartbeats and
- * restarts are somebody else's job: this only hands over checked values, and
- * writes nothing — {@link prepareFleet} creates what is missing.
+ * Reads and checks every agent and every group of the fleet. Starting agents,
+ * heartbeats and restarts are somebody else's job: this only hands over
+ * checked values, and writes nothing — {@link prepareFleet} creates what is
+ * missing. A fleet without `groups/` has no groups: none is made for it.
  *
  * @throws ConfigurationError with a message a human can act on.
  */
@@ -97,7 +140,9 @@ function loadFleet(options: LoadFleetOptions = {}): Fleet {
     const remote = agentDirectories(join(location.path, REMOTE_DIRECTORY)).map((id: string) =>
         readRemoteManifest(...manifest(location.path, REMOTE_DIRECTORY, id, env, readFile)));
     requireUniqueIds(local, remote);
-    return { location, exists: true, agents: [...local, ...remote] };
+    const groups = entryDirectories(join(location.path, GROUPS_DIRECTORY), GROUP_ENTRIES)
+        .map((id: string) => readGroup(location.path, id, readFile));
+    return { location, exists: true, agents: [...local, ...remote], groups };
 }
 /**
  * The fleet whose directory is not there: an empty one at the default or saved
@@ -113,7 +158,7 @@ function missingFleet(location: FleetLocation): Fleet {
                 + 'check the path, or create the directory.'
         });
     }
-    return { location, exists: false, agents: [] };
+    return { location, exists: false, agents: [], groups: [] };
 }
 /**
  * Creates the directories a local agent owns and flotti never writes to —
@@ -153,6 +198,18 @@ function readAgent(root: string, kind: Agent['kind'], id: string, env: Environme
     const found = manifest(root, group, id, env, readFileFromDisk);
     return kind === 'local' ? readLocalManifest(...found) : readRemoteManifest(...found);
 }
+/**
+ * Reads one group of the fleet from its directory, the way {@link loadFleet}
+ * reads each of them.
+ *
+ * @throws ConfigurationError with a message a human can act on.
+ */
+function readGroup(root: string, id: string, readFile: (path: string) => string = readFileFromDisk): Group {
+    const directory = join(root, GROUPS_DIRECTORY, id);
+    const filePath = join(directory, GROUP_FILE);
+    const contents = readEntryFile(filePath, readFile, GROUP_ENTRIES);
+    return parseGroup(parseJson(contents, filePath, GROUP_ENTRIES), { id, directory, filePath });
+}
 function manifest(
     root: string,
     group: string,
@@ -162,10 +219,10 @@ function manifest(
 ): [unknown, ManifestContext] {
     const directory = join(root, group, id);
     const manifestPath = join(directory, MANIFEST_FILE);
-    const contents = readManifest(manifestPath, readFile);
+    const contents = readEntryFile(manifestPath, readFile, AGENT_ENTRIES);
     const prompt = systemPrompt(directory, group);
     return [
-        parseManifest(contents, manifestPath),
+        parseJson(contents, manifestPath, AGENT_ENTRIES),
         { id, directory, manifestPath, env, hasSystemPrompt: prompt !== undefined }
     ];
 }
@@ -183,32 +240,36 @@ function systemPrompt(directory: string, group: string): Stats | undefined {
 }
 /** Names of the agent directories in `local/` or `remote/`, ordered; none when the directory is absent. */
 function agentDirectories(path: string): string[] {
+    return entryDirectories(path, AGENT_ENTRIES);
+}
+/** Names of the entry directories — agents, or groups — in the directory, ordered; none when it is absent. */
+function entryDirectories(path: string, entries: Entries): string[] {
     const found = inspect(path);
     if (found === undefined) {
         return [];
     }
-    requireDirectory(found, path, 'a fleet group');
+    requireDirectory(found, path, entries.place);
     const names = listDirectory(path).filter((name: string) => !name.startsWith('.')).sort();
     for (const name of names) {
-        requireAgentDirectory(path, name);
+        requireEntryDirectory(path, name, entries);
     }
     return names;
 }
-/** Checks that an entry of a fleet group is a directory named like an agent id. */
-function requireAgentDirectory(path: string, name: string): void {
+/** Checks that an entry of the directory is a directory named like an id. */
+function requireEntryDirectory(path: string, name: string, entries: Entries): void {
     const entry = join(path, name);
     const stats = inspect(entry);
     if (stats === undefined || !stats.isDirectory()) {
         throw new ConfigurationError(
             'not-a-directory',
-            `${entry}: every agent is a directory with ${MANIFEST_FILE} in it, and this is not a directory`,
+            `${entry}: every ${entries.noun} is a directory with ${entries.file} in it, and this is not a directory`,
             { path: entry }
         );
     }
     if (!AGENT_ID.test(name)) {
         throw new ConfigurationError(
-            'invalid-agent-id',
-            `${entry}: "${name}" cannot be an agent id — use letters, digits, ".", "_" and "-", `
+            entries.invalidId,
+            `${entry}: "${name}" cannot be ${entries.idName} — use letters, digits, ".", "_" and "-", `
             + 'starting with a letter or a digit',
             { path: entry }
         );
@@ -307,26 +368,27 @@ function listDirectory(path: string): string[] {
 function readFileFromDisk(path: string): string {
     return readFileSync(path, 'utf8');
 }
-function readManifest(path: string, readFile: (path: string) => string): string {
+/** The file of an entry — a manifest, or a group file — as text. */
+function readEntryFile(path: string, readFile: (path: string) => string, entries: Entries): string {
     try {
         return readFile(path);
     } catch (error) {
-        throw manifestReadFailure(error, path);
+        throw entryReadFailure(error, path, entries);
     }
 }
-function manifestReadFailure(error: unknown, path: string): ConfigurationError {
+function entryReadFailure(error: unknown, path: string, entries: Entries): ConfigurationError {
     const code = errorCode(error);
     if (MISSING_CODES.has(code)) {
-        return new ConfigurationError('missing-manifest', `Agent manifest not found: ${path}`, {
+        return new ConfigurationError(entries.missing, `${entries.label} not found: ${path}`, {
             path,
             cause: error,
-            hint: `Every agent directory needs ${MANIFEST_FILE}. One to start from:\n${SAMPLE_LOCAL_MANIFEST}`
+            hint: `Every ${entries.noun} directory needs ${entries.file}. One to start from:\n${entries.sample}`
         });
     }
     if (code === 'EISDIR') {
-        return new ConfigurationError('not-a-directory', `${path}: the manifest must be a file`, { path });
+        return new ConfigurationError('not-a-directory', `${path}: the ${entries.what} must be a file`, { path });
     }
-    return readFailure(error, path, 'Agent manifest');
+    return readFailure(error, path, entries.label);
 }
 function readFailure(error: unknown, path: string, what: string): ConfigurationError {
     const code = errorCode(error);
@@ -349,7 +411,7 @@ function errorCode(error: unknown): string | undefined {
 function hasCode(error: unknown): error is { code: unknown } {
     return typeof error === 'object' && error !== null && 'code' in error;
 }
-function parseManifest(contents: string, path: string): unknown {
+function parseJson(contents: string, path: string, entries: Entries): unknown {
     try {
         return JSON.parse(contents);
     } catch (error) {
@@ -357,7 +419,7 @@ function parseManifest(contents: string, path: string): unknown {
         // quoting the place. Its trailing "is not valid JSON" only repeats ours.
         const reason = (error instanceof Error ? error.message : String(error))
             .replace(/\s*is not valid JSON$/, '');
-        throw new ConfigurationError('not-json', `${path}: the manifest is not valid JSON (${reason})`, {
+        throw new ConfigurationError('not-json', `${path}: the ${entries.what} is not valid JSON (${reason})`, {
             path,
             cause: error
         });
@@ -374,6 +436,7 @@ export {
     prepareAgent,
     prepareFleet,
     readAgent,
+    readGroup,
     resolveFleetLocation
 };
 export type { LoadFleetOptions, ResolveFleetOptions };

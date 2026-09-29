@@ -6,6 +6,13 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Added
 
+- **Groups of agents in the fleet directory, and their API** — the first step of the groups of #144.
+  A group is `groups/<id>/group.json` next to the agents: a name, a topic and the members, read with
+  the fleet and checked like a manifest; a member not in the fleet is kept and shown so.
+  `GET/POST/PUT/DELETE /api/groups[/<id>]` make, change and remove groups the way agents are — written
+  atomically, deleted to `.trash/` — the `fleet` message of the socket carries them, and deleting an
+  agent takes it out of every group. An existing fleet starts without groups: none is made for it.
+  Who sees whom through a group, messages to a group and the dashboard come with the next steps (#149).
 - **A Storybook of the components of the dashboard.** `npm run storybook` opens the sidebar with its
   rail, the feed of the fleet, a message and the tab of an agent on their own, in every state they
   have — empty, waiting, in error, with long names, with many agents, on a phone, light and dark —

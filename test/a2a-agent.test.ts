@@ -719,7 +719,7 @@ describe('A2AAgent: answering another agent of the fleet', () => {
         const agents = [{ ...manifest(sender.agent.url), id: 'a' }, { ...manifest(receiver.agent.url), id: 'b' }];
         const running = new Map(agents.map(agent => [agent.id, new A2AAgent(agent, { reconnectDelayMs: 10, pollIntervalMs: 10 })]));
         clients.push(...running.values());
-        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents }, {
+        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents, groups: [] }, {
             createAgent: agent => running.get(agent.id) as A2AAgent
         });
         await supervisor.start();
@@ -739,7 +739,7 @@ describe('A2AAgent: answering another agent of the fleet', () => {
 /** A supervisor over these running agents, as a fleet of their ids. */
 async function fleetOf(agents: ReadonlyMap<string, A2AAgent | Harness>, options: SupervisorOptions = {}): Promise<Supervisor> {
     const manifests = [...agents].map(([id, agent]) => agent instanceof Harness ? { ...agent.agent.agent, id } : { ...manifest('http://127.0.0.1/'), id });
-    const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents: manifests }, {
+    const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents: manifests, groups: [] }, {
         ...options,
         createAgent: agent => {
             const found = agents.get(agent.id);
@@ -967,7 +967,7 @@ describe('A2AAgent: requests of an administrator through the inbox', () => {
         const other = await inboxAgent();
         const agents = [{ ...manifest(admin.agent.url), id: 'a', admin: true as const }, { ...manifest(other.agent.url), id: 'b' }];
         // No createAgent: the supervisor wires the inbox requests to its administrators itself.
-        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents });
+        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents, groups: [] });
         t.after(() => supervisor.stop());
         await supervisor.start();
         await eventually(() => admin.isOpen() && other.isOpen());
@@ -1004,7 +1004,7 @@ async function rosterFleet(fakes: ReadonlyMap<string, FakeAgent>, debounceMs: nu
     const fleetOptions = { rosterDebounceMs: debounceMs, fleet: { roster: () => supervisor.agents() } };
     const running = new Map(agents.map(agent => [agent.id, new A2AAgent(agent, { reconnectDelayMs: 10, pollIntervalMs: 10, ...fleetOptions })]));
     clients.push(...running.values());
-    const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents }, {
+    const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents, groups: [] }, {
         createAgent: (agent): A2AAgent => running.get(agent.id) as A2AAgent
     });
     await supervisor.start();
@@ -1016,7 +1016,7 @@ describe('A2AAgent: the fleet roster with the inbox request', () => {
         const other = await inboxAgent({ extensions: [INBOX_EXTENSION, FLEET] });
         const agents = [{ ...manifest(admin.agent.url), id: 'a', admin: true as const }, { ...manifest(other.agent.url), id: 'b' }];
         // No createAgent: the supervisor hands its roster to the remote agents itself.
-        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents });
+        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents, groups: [] });
         t.after(() => supervisor.stop());
         await supervisor.start();
         await eventually(() => admin.isOpen() && other.isOpen());

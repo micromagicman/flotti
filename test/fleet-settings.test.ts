@@ -11,7 +11,7 @@ import type { FleetSettingsOptions } from '../src/fleet-settings.js';
 import { SshError } from '../src/ssh.js';
 import type { PublishedAgent, SshTarget } from '../src/ssh.js';
 import { readSettings } from '../src/settings.js';
-import { Supervisor } from '../src/supervisor.js';
+import { Supervisor, UnknownGroupError } from '../src/supervisor.js';
 import type { Fleet } from '../src/types.js';
 import { FakeFleetAgent } from './fake-fleet-agent.js';
 const workspace = mkdtempSync(join(tmpdir(), 'flotti-settings-'));
@@ -264,5 +264,75 @@ describe('FleetSettings: a remote agent in one step, from user@host', () => {
         await rejects(empty.settings.addOverSsh({ target: '-oProxyCommand=x' }), /is not an SSH address/);
         await rejects(empty.settings.addOverSsh({}), /target is missing/);
         deepStrictEqual(readdirSync(empty.root), []);
+    });
+});
+/** Writes a group directory with its file. */
+function writeGroup(root: string, id: string, file: object): void {
+    mkdirSync(join(root, 'groups', id), { recursive: true });
+    writeFileSync(join(root, 'groups', id, 'group.json'), JSON.stringify(file));
+}
+function groupAt(root: string, id: string): Record<string, unknown> {
+    return JSON.parse(readFileSync(join(root, 'groups', id, 'group.json'), 'utf8')) as Record<string, unknown>;
+}
+describe('FleetSettings: groups', () => {
+    test('a new group is written with the fields sent, the blanks left out, and listed', () => {
+        const { root, settings, supervisor } = setUp(existing);
+        const summary = settings.createGroup({ id: ' release ', name: 'Release', topic: '', members: ['codex', ' eva '] });
+        deepStrictEqual(summary, { id: 'release', name: 'Release', members: ['codex', 'eva'] });
+        deepStrictEqual(groupAt(root, 'release'), { name: 'Release', members: ['codex', 'eva'] });
+        deepStrictEqual(supervisor.groups(), [summary]);
+        deepStrictEqual(settings.createGroup({ id: 'docs' }), { id: 'docs', name: 'docs', members: [] }, 'members left out: none yet');
+        deepStrictEqual(loadFleet({ argv: ['--fleet', root] }).groups.map((group) => group.id), ['docs', 'release'], 'flotti run reads them just the same');
+    });
+    test('refuses what flotti run would refuse, and writes nothing', () => {
+        const { root, settings } = setUp((fleet) => writeGroup(fleet, 'taken', { members: [] }));
+        const refused = (body: unknown, kind: string): void => {
+            throws(() => settings.createGroup(body), (error: unknown) => error instanceof ConfigurationError && error.kind === kind);
+        };
+        refused({ name: 'no id' }, 'missing-field');
+        refused({ id: '-release' }, 'invalid-group-id');
+        refused({ id: 'taken' }, 'duplicate-group-id');
+        refused({ id: 'release', members: 'eva' }, 'wrong-type');
+        refused({ id: 'release', members: ['eva', 'eva'] }, 'wrong-type');
+        refused({ id: 'release', name: 7 }, 'wrong-type');
+        deepStrictEqual(readdirSync(join(root, 'groups')).sort(), ['taken']);
+    });
+    test('its file is read as it says it, a change keeps what the page does not edit, and the fleet learns it', () => {
+        const { root, settings, supervisor } = setUp((fleet) => writeGroup(fleet, 'release', { name: 'Release', members: ['codex'], note: 'kept' }));
+        deepStrictEqual(settings.groupConfig('release'), { id: 'release', name: 'Release', members: ['codex'] });
+        const notices: string[] = [];
+        supervisor.subscribe((notice) => notices.push(notice.type === 'fleet' ? notice.groups.map((group) => group.members.join('+')).join(',') : notice.type));
+        const changed = settings.updateGroup('release', { name: '', topic: 'Ship it.', members: ['codex', 'eva'] });
+        deepStrictEqual(changed, { id: 'release', name: 'release', topic: 'Ship it.', members: ['codex', 'eva'] });
+        deepStrictEqual(groupAt(root, 'release'), { members: ['codex', 'eva'], note: 'kept', topic: 'Ship it.' });
+        deepStrictEqual(notices, ['codex+eva']);
+        throws(() => settings.updateGroup('release', { members: [3] }), ConfigurationError);
+        deepStrictEqual(groupAt(root, 'release')['members'], ['codex', 'eva'], 'a broken change leaves the file as it was');
+        throws(() => settings.updateGroup('nope', { members: [] }), UnknownGroupError);
+    });
+});
+describe('FleetSettings: removing a group, and an agent from its groups', () => {
+    test('removing moves its directory to .trash, and the fleet forgets it', () => {
+        const { root, settings, supervisor } = setUp((fleet) => writeGroup(fleet, 'release', { members: ['codex'] }));
+        const trash = settings.removeGroup('release');
+        ok(trash !== undefined && trash.startsWith(join(root, TRASH_DIRECTORY, 'group-release-')), String(trash));
+        ok(existsSync(join(trash, 'group.json')));
+        ok(!existsSync(join(root, 'groups', 'release')));
+        deepStrictEqual(supervisor.groups(), []);
+        strictEqual(loadFleet({ argv: ['--fleet', root] }).groups.length, 0, '.trash is not part of the fleet');
+        throws(() => settings.removeGroup('release'), UnknownGroupError);
+    });
+    test('removing an agent takes it out of every group, and leaves the other members', async () => {
+        const { root, settings, supervisor } = setUp((fleet) => {
+            existing(fleet);
+            writeGroup(fleet, 'release', { name: 'Release', members: ['eva', 'codex'], note: 'kept' });
+            writeGroup(fleet, 'docs', { members: ['codex'] });
+            writeGroup(fleet, 'other', { members: ['eva'] });
+        });
+        await settings.remove('codex');
+        deepStrictEqual(groupAt(root, 'release'), { name: 'Release', members: ['eva'], note: 'kept' });
+        deepStrictEqual(groupAt(root, 'docs'), { members: [] });
+        deepStrictEqual(groupAt(root, 'other'), { members: ['eva'] });
+        deepStrictEqual(supervisor.groups().map((group) => group.members), [[], ['eva'], ['eva']]);
     });
 });

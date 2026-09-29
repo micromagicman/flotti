@@ -5,6 +5,8 @@ import type {
     AgentConfig,
     AgentSummary,
     FleetInfo,
+    GroupConfig,
+    GroupSummary,
     LocalAgentConfig,
     RemoteAgentConfig,
     SshAgentsResponse
@@ -18,15 +20,17 @@ import {
     prepareAgent,
     prepareFleet,
     readAgent,
+    readGroup,
     resolveFleetLocation
 } from './fleet.js';
+import { GROUPS_DIRECTORY, GROUP_FILE, parseGroup } from './groups.js';
 import { MANIFEST_FILE, SYSTEM_PROMPT_FILE, readLocalManifest, readRemoteManifest } from './manifest.js';
 import type { Environment, ManifestContext } from './manifest.js';
 import { readSettings, settingsFile, writeSettings } from './settings.js';
 import { SshError, discover, parseTarget } from './ssh.js';
 import type { PublishedAgent, SshTarget } from './ssh.js';
 import type { Supervisor } from './supervisor.js';
-import type { Agent, Fleet, FleetLocation, RemoteAgent } from './types.js';
+import type { Agent, Fleet, FleetLocation, Group, RemoteAgent } from './types.js';
 /** Manifest fields the settings page edits; any other field of the file is kept as it is. */
 const LOCAL_FIELDS = [
     'name',
@@ -43,6 +47,8 @@ const LOCAL_FIELDS = [
     'admin'
 ] as const;
 const REMOTE_FIELDS = ['name', 'description', 'url', 'ssh', 'auth', 'admin'] as const;
+/** Group fields the settings page edits besides `members`; any other field of the file is kept as it is. */
+const GROUP_FIELDS = ['name', 'topic'] as const;
 /**
  * Where a removed agent goes, in the fleet directory. Removing an agent
  * would otherwise take its memory bank and skills with it; from here they can
@@ -103,6 +109,42 @@ function agentId(id: unknown): string {
     }
     return id.trim();
 }
+/** The body of a request that describes a group: its id and the fields. */
+function groupBody(body: unknown): { id: string; fields: Fields } {
+    if (!isObject(body)) {
+        throw invalid('The group must be a JSON object.');
+    }
+    const id = body['id'];
+    if (typeof id !== 'string' || id.trim() === '') {
+        throw new ConfigurationError('missing-field', 'id is missing: every group needs one, it names its directory.');
+    }
+    return { id: id.trim(), fields: body };
+}
+/** The group file to write: what the file had, with the name and the topic set or left out, and the members as sent. */
+function groupFileFrom(fields: Fields, kept: Fields): Fields {
+    const file: Fields = { ...kept };
+    for (const field of GROUP_FIELDS) {
+        setField(file, field, fields[field]);
+    }
+    file['members'] = membersFrom(fields['members']);
+    return file;
+}
+/** The members as sent, trimmed; none when left out. What is not a list of ids is left for the check to refuse. */
+function membersFrom(members: unknown): unknown {
+    if (members === undefined) {
+        return [];
+    }
+    return Array.isArray(members) ? members.map((member: unknown) => (typeof member === 'string' ? member.trim() : member)) : members;
+}
+/** The group file without the agent: the members it lists, less this one. */
+function withoutMember(kept: Fields, agentId: string): Fields {
+    const members = kept['members'];
+    return { ...kept, members: Array.isArray(members) ? members.filter((member: unknown) => member !== agentId) : members };
+}
+/** The group file as flotti loaded it, for when the file cannot be read any more. */
+function groupFileOf(group: Group): Fields {
+    return { ...(group.name === group.id ? {} : { name: group.name }), ...(group.topic === undefined ? {} : { topic: group.topic }), members: group.members };
+}
 function optionalPrompt(systemPrompt: unknown): string | undefined {
     if (systemPrompt !== undefined && typeof systemPrompt !== 'string') {
         throw invalid('systemPrompt must be text.');
@@ -129,7 +171,7 @@ function setField(manifest: Fields, field: string, value: unknown): void {
         manifest[field] = typeof value === 'string' ? value.trim() : value;
     }
 }
-function readJson(path: string): Fields {
+function readJson(path: string, what = 'manifest'): Fields {
     let value: unknown;
     try {
         value = JSON.parse(readFileSync(path, 'utf8'));
@@ -140,7 +182,7 @@ function readJson(path: string): Fields {
         });
     }
     if (!isObject(value)) {
-        throw new ConfigurationError('wrong-type', `${path}: the manifest must be a JSON object`, { path });
+        throw new ConfigurationError('wrong-type', `${path}: the ${what} must be a JSON object`, { path });
     }
     return value;
 }
@@ -260,6 +302,16 @@ function writeSystemPrompt(directory: string, prompt: string | undefined): void 
     } else {
         writeAtomically(promptPath, prompt.endsWith('\n') ? prompt : `${prompt}\n`);
     }
+}
+/** The group file as it says it, for the page to edit: the name is not filled in. */
+function readGroupConfig(group: Group): GroupConfig {
+    const fields = readJson(group.filePath, 'group');
+    return {
+        id: group.id,
+        ...textField(fields, 'name'),
+        ...textField(fields, 'topic'),
+        members: pick<string[]>(fields, 'members', Array.isArray) ?? []
+    };
 }
 /** The manifest as the file says it, for the page to edit: defaults are not filled in. */
 function readConfig(agent: Agent): AgentConfig {
@@ -486,14 +538,108 @@ class FleetSettings {
     async remove(agentId: string): Promise<string | undefined> {
         const agent = this.supervisor.agent(agentId);
         await this.supervisor.remove(agentId);
-        if (!exists(agent.directory)) {
+        const target = this.trash(agent.directory, `${agent.kind}-${agent.id}`);
+        this.leaveGroups(agentId);
+        return target;
+    }
+    /**
+     * Moves the directory to `.trash` in the fleet directory, under the name
+     * and the time.
+     *
+     * @returns Where the directory went; `undefined` when it was gone already.
+     */
+    private trash(directory: string, name: string): string | undefined {
+        if (!exists(directory)) {
             return undefined;
         }
         const trash = join(this.location.path, TRASH_DIRECTORY);
         mkdirSync(trash, { recursive: true });
-        const target = join(trash, `${agent.kind}-${agent.id}-${new Date().toISOString().replace(/[:.]/g, '-')}`);
-        renameSync(agent.directory, target);
+        const target = join(trash, `${name}-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+        renameSync(directory, target);
         return target;
+    }
+    /** Takes the agent out of every group it is in: the files are rewritten, the running fleet learns it. */
+    private leaveGroups(agentId: string): void {
+        for (const summary of this.supervisor.groups()) {
+            if (summary.members.includes(agentId)) {
+                const group = this.supervisor.group(summary.id);
+                this.supervisor.replaceGroup(this.writeGroup(group.id, withoutMember(this.keptGroup(group), agentId)));
+            }
+        }
+    }
+    /** The group file as it is; as flotti loaded it, when it was broken by hand since — the page sends its fields anew. */
+    private keptGroup(group: Group): Fields {
+        try {
+            return readJson(group.filePath, 'group');
+        } catch {
+            return groupFileOf(group);
+        }
+    }
+    /** The groups of the fleet, by id. */
+    groups(): GroupSummary[] {
+        return this.supervisor.groups();
+    }
+    /** The group file as it says it. */
+    groupConfig(groupId: string): GroupConfig {
+        return readGroupConfig(this.supervisor.group(groupId));
+    }
+    /**
+     * Writes the directory of a new group; the agents in it see one another
+     * from now on.
+     *
+     * @throws ConfigurationError when the group is not one `flotti run` would take.
+     */
+    createGroup(body: unknown): GroupSummary {
+        const { id, fields } = groupBody(body);
+        if (!AGENT_ID.test(id)) {
+            throw new ConfigurationError(
+                'invalid-group-id',
+                `"${id}" cannot be a group id — use letters, digits, ".", "_" and "-", starting with a letter or a digit`
+            );
+        }
+        if (this.isGroupTaken(id)) {
+            throw new ConfigurationError('duplicate-group-id', `The id "${id}" is already taken by a group of this fleet`);
+        }
+        this.supervisor.addGroup(this.writeGroup(id, groupFileFrom(fields, {})));
+        return this.groupSummary(id);
+    }
+    /** Whether a group of the fleet or a directory in `groups/` has this id already. */
+    private isGroupTaken(id: string): boolean {
+        return this.supervisor.groups().some((group) => group.id === id) || exists(join(this.location.path, GROUPS_DIRECTORY, id));
+    }
+    /** Writes the changed group file and puts it to work: the members see one another as it says. */
+    updateGroup(groupId: string, body: unknown): GroupSummary {
+        const current = this.supervisor.group(groupId);
+        const { fields } = groupBody({ ...(isObject(body) ? body : {}), id: groupId });
+        this.supervisor.replaceGroup(this.writeGroup(groupId, groupFileFrom(fields, this.keptGroup(current))));
+        return this.groupSummary(groupId);
+    }
+    /**
+     * Takes the group out of the fleet and moves its directory to `.trash` in
+     * the fleet directory, as an agent's goes.
+     *
+     * @returns Where the directory went; `undefined` when it was gone already.
+     */
+    removeGroup(groupId: string): string | undefined {
+        const group = this.supervisor.group(groupId);
+        this.supervisor.removeGroup(groupId);
+        return this.trash(group.directory, `group-${group.id}`);
+    }
+    /** Checks the group file the way `flotti run` would, and only then writes the group directory. */
+    private writeGroup(id: string, file: Fields): Group {
+        const directory = join(this.location.path, GROUPS_DIRECTORY, id);
+        const filePath = join(directory, GROUP_FILE);
+        parseGroup(file, { id, directory, filePath });
+        mkdirSync(directory, { recursive: true });
+        writeAtomically(filePath, `${JSON.stringify(file, null, 4)}\n`);
+        return readGroup(this.location.path, id);
+    }
+    private groupSummary(groupId: string): GroupSummary {
+        const found = this.supervisor.groups().find((group) => group.id === groupId);
+        if (found === undefined) {
+            throw new Error(`The group "${groupId}" is not in the fleet.`);
+        }
+        return found;
     }
     /**
      * Works with another fleet directory from now on and saves it in the

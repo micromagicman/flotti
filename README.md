@@ -231,13 +231,18 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `GET /api/agents/<id>/memory` `?q=`           | the notes of the agent's memory bank, with the words `q` when given; `available: false` and why for an agent whose memory is not here |
 | `GET /api/agents/<id>/memory/<path>`          | one note and its text; `<path>` is its path in the bank, encoded as one segment |
 | `GET /api/fleet`, `PUT /api/fleet` `{path}`   | the fleet directory; switches to another one            |
+| `GET /api/groups`                             | the groups of the fleet: `id`, `name`, `topic`, `members` |
+| `POST /api/groups` `{id, name?, topic?, members?}` | a new group: writes `groups/<id>/group.json`; `members` left out is none yet |
+| `GET /api/groups/<id>`                        | its file as it says it                                  |
+| `PUT /api/groups/<id>` `{name?, topic?, members?}` | a changed group: writes the file, keeps the fields the page does not edit |
+| `DELETE /api/groups/<id>`                     | moves its directory to `.trash/`, as `group-<id>-<time>` |
 | `POST /api/agents/<id>/permissions/<request>` `{optionId?}` | answers a permission request; no option refuses it |
 | `GET /api/notifications`, `PUT /api/notifications` `{events?, repeatMinutes?, dashboardUrl?, telegram?, webPush?}` | the notification settings, without secrets; a change of them |
 | `POST /api/notifications/subscriptions`, `DELETE …` `{endpoint, keys}` | a browser subscribes to Web Push, or stops |
 | `POST /api/notifications/test`                | a test notification over every channel switched on      |
 | `GET /api/admin-settings`, `PUT /api/admin-settings` `{confirmActions}` | whether actions of administrators wait for a person |
 | `POST /api/admin-actions/<action>` `{allow}`  | allows or refuses an action of an administrator waiting for it |
-| `/ws`                                         | `fleet` first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and gets the events after them, then live ones; `health` whenever the health of the SSH connection of an agent changes |
+| `/ws`                                         | `fleet` — the agents and the groups — first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and gets the events after them, then live ones; `health` whenever the health of the SSH connection of an agent changes |
 
 With no login, the server guards against other web pages rather than against people: it answers only
 to the host names of this machine (a page elsewhere cannot rebind a name of its own to `127.0.0.1`),
@@ -257,10 +262,13 @@ Every agent is a directory, and the directory name is the agent id:
 │       ├── skills/         the agent's own skills
 │       ├── memory/         the agent's memory bank: markdown notes linked with [[…]]
 │       └── .flotti-history.jsonl  what its tab shows, kept across restarts
-└── remote/                 agents that run elsewhere, reached over A2A
-    └── eva/
-        ├── agent.json
-        └── .flotti-history.jsonl
+├── remote/                 agents that run elsewhere, reached over A2A
+│   └── eva/
+│       ├── agent.json
+│       └── .flotti-history.jsonl
+└── groups/                 groups of agents: who sees and reaches whom
+    └── release/
+        └── group.json      the group: its name, its topic and its members
 ```
 
 - An id is letters, digits, `.`, `_` and `-`, starting with a letter or a digit. Ids are shared by
@@ -268,6 +276,12 @@ Every agent is a directory, and the directory name is the agent id:
 - Entries whose names start with `.` are skipped, so `.DS_Store` and the like do no harm. Anything else
   in `local/` or `remote/` must be an agent directory.
 - `local/` and `remote/` may be absent — that group is simply empty.
+- `groups/` holds the groups of agents: each is a directory named by its id with `group.json` in it —
+  an optional `name` and `topic`, and `members`, the ids of the agents in it, which may be empty. It is
+  read with the fleet and checked like a manifest, naming the file when something is wrong; a member
+  that is not in the fleet is kept and shown so; fields flotti does not know are kept. A fleet has no
+  `groups/` until a person makes a group — none is made for it. What a group does is in
+  [docs/groups.md](docs/groups.md).
 - `skills/` and `memory/` belong to the agent: flotti creates them when they are missing, and writes
   there only what [memory](#memory) needs — the built-in skill `skills/flotti-memory`, never over a skill
   of the agent's own of that name, and the notes the agent writes with the memory tools; the dashboard
@@ -768,6 +782,8 @@ non-zero exit code — never a stack trace:
 | The manifest names another id                          | `…/agent.json: id is "claude", but the agent directory is "agent"; …`                 |
 | A secret where a variable name is expected             | `…/agent.json: auth.tokenEnv must name an environment variable …`                     |
 | A local and a remote agent share an id                 | `…/remote/eva: the id "eva" is already taken by the local agent …`                    |
+| A group directory without `group.json`                 | `Group file not found: …` plus a group to start from                                 |
+| Something is wrong in a group file                     | `…/groups/release/group.json: members[1] must be an agent id — …`                     |
 | The dashboard port is taken                            | `Port 4870 is taken, so the dashboard cannot start.` plus how to pick another         |
 | The fleet is already run by another flotti             | `flotti already runs this fleet (process …, dashboard …).`                            |
 

@@ -146,7 +146,7 @@ function localAgent(id: string): LocalAgent {
 /** A fleet of fake agents with these ids, and the way to reach each fake. */
 function fakeFleet(...ids: string[]): { fleet: Fleet; fakes: Map<string, FakeFleetAgent>; createAgent: (agent: Agent) => FleetAgent } {
     const fakes = new Map(ids.map((id) => [id, new FakeFleetAgent(id)]));
-    const fleet: Fleet = { location: { path: '/fleet', source: 'argument' }, exists: true, agents: ids.map(localAgent) };
+    const fleet: Fleet = { location: { path: '/fleet', source: 'argument' }, exists: true, agents: ids.map(localAgent), groups: [] };
     const createAgent = (agent: Agent): FleetAgent => {
         const fake = fakes.get(agent.id);
         if (fake === undefined) {

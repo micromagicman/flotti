@@ -8,13 +8,13 @@ import { HistoryFile } from './agent-history.js';
 import type { ConnectionHealth } from './connection-health.js';
 import { Delegations } from './delegations.js';
 import type { DelegationCancel, DelegationFleet, DelegationStart } from './delegations.js';
-import type { AgentSummary, Delivery, Harness, MemoryStatus } from './dashboard-protocol.js';
+import type { AgentSummary, Delivery, GroupSummary, Harness, MemoryStatus } from './dashboard-protocol.js';
 import { FleetAdmin } from './fleet-admin.js';
 import type { AdminFleet, AdminOutcome } from './fleet-admin.js';
 import type { DeliveredMessage, FleetToolsAccess } from './fleet-mcp.js';
 import { LocalAgentProcess } from './local-agent.js';
 import { present } from './present.js';
-import type { Agent, Fleet, LocalAgent, LocalAgentAdapter } from './types.js';
+import type { Agent, Fleet, Group, LocalAgent, LocalAgentAdapter } from './types.js';
 /** The harness each ACP adapter runs. */
 const ADAPTER_HARNESS: Readonly<Record<LocalAgentAdapter, Harness>> = {
     'claude-code': 'claude',
@@ -59,7 +59,7 @@ type SupervisorNotice =
     /** The health of the connection of an agent changed. */
     | { readonly type: 'health'; readonly agentId: string; readonly health: ConnectionHealth }
     /** An agent was added, changed or removed, or the whole fleet was replaced. */
-    | { readonly type: 'fleet'; readonly agents: readonly AgentSummary[] };
+    | { readonly type: 'fleet'; readonly agents: readonly AgentSummary[]; readonly groups: readonly GroupSummary[] };
 type SupervisorListener = (notice: SupervisorNotice) => void;
 type SupervisorOptions = {
     /** How an agent of the fleet becomes a running one; tests put their own in. */
@@ -123,6 +123,19 @@ function freshMember(): Pick<Member, 'answers' | 'unsubscribe' | 'harness' | 'me
 }
 /** An agent the request names that is not in the fleet. */
 class UnknownAgentError extends Error {}
+/** A group the request names that is not in the fleet. */
+class UnknownGroupError extends Error {}
+function groupsById(groups: readonly Group[]): Map<string, Group> {
+    return new Map(groups.map((group: Group) => [group.id, group]));
+}
+/** Groups by id, the order of the fleet directory. */
+function groupOrder(left: Group, right: Group): number {
+    return left.id < right.id ? -1 : 1;
+}
+/** A group as the page lists it. */
+function groupSummary(group: Group): GroupSummary {
+    return { id: group.id, name: group.name, ...present('topic', group.topic), members: group.members };
+}
 /**
  * How an agent of the fleet runs: a local process, or a remote agent whose
  * requests as an administrator go to `onAdminRequest`.
@@ -209,6 +222,8 @@ class Supervisor {
     private readonly delegations: Delegations;
     /** What administrators of the fleet do to the agents. */
     private readonly admin: FleetAdmin;
+    /** The groups of the fleet (docs/groups.md), by id. */
+    private groupList = new Map<string, Group>();
     constructor(fleet: Fleet, options: SupervisorOptions = {}) {
         this.createAgent = options.createAgent
             ?? defaultAgent(options.fleetTools, (agentId, request) => void this.adminRequest(agentId, request), () => this.agents());
@@ -224,6 +239,7 @@ class Supervisor {
         for (const agent of fleet.agents) {
             this.join(agent, []);
         }
+        this.groupList = groupsById(fleet.groups);
     }
     /** The agents in fleet order: local first, then remote, each by id. */
     agents(): AgentSummary[] {
@@ -255,6 +271,42 @@ class Supervisor {
     /** The agent as its manifest describes it. */
     agent(agentId: string): Agent {
         return this.member(agentId).agent;
+    }
+    /** The groups of the fleet, by id. */
+    groups(): GroupSummary[] {
+        return [...this.groupList.values()].sort(groupOrder).map(groupSummary);
+    }
+    /**
+     * The group as its file describes it.
+     *
+     * @throws UnknownGroupError when there is no such group.
+     */
+    group(groupId: string): Group {
+        const group = this.groupList.get(groupId);
+        if (group === undefined) {
+            throw new UnknownGroupError(`There is no group "${groupId}" in the fleet.`);
+        }
+        return group;
+    }
+    /** Takes a new group into the fleet; the pages and the agents learn it with the fleet. */
+    addGroup(group: Group): void {
+        if (this.groupList.has(group.id)) {
+            throw new Error(`There is a group "${group.id}" in the fleet already.`);
+        }
+        this.groupList.set(group.id, group);
+        this.announce();
+    }
+    /** Puts a changed group file to work. */
+    replaceGroup(group: Group): void {
+        this.group(group.id);
+        this.groupList.set(group.id, group);
+        this.announce();
+    }
+    /** Lets the group go: it is no longer in the fleet. */
+    removeGroup(groupId: string): void {
+        this.group(groupId);
+        this.groupList.delete(groupId);
+        this.announce();
     }
     /** Kept events of the agent that came after `afterSeq`, oldest first. */
     history(agentId: string, afterSeq = 0): AgentEvent[] {
@@ -342,6 +394,7 @@ class Supervisor {
         for (const agent of fleet.agents) {
             this.join(agent, []);
         }
+        this.groupList = groupsById(fleet.groups);
         this.announce();
         void this.start();
     }
@@ -647,7 +700,7 @@ class Supervisor {
         }
     }
     private announce(): void {
-        this.notify({ type: 'fleet', agents: this.agents() });
+        this.notify({ type: 'fleet', agents: this.agents(), groups: this.groups() });
         this.rosterChanged();
     }
     /** The agents that are told who is in the fleet learn it changed (docs/a2a-fleet.md). */
@@ -776,5 +829,5 @@ class Supervisor {
     }
 }
 export { UnknownDelegationError } from './delegations.js';
-export { Supervisor, UnknownAgentError };
+export { Supervisor, UnknownAgentError, UnknownGroupError };
 export type { SupervisorListener, SupervisorNotice, SupervisorOptions };

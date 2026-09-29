@@ -29,6 +29,12 @@ type ConfigurationErrorKind =
     | 'id-mismatch'
     /** A local and a remote agent share one id. */
     | 'duplicate-agent-id'
+    /** A group directory has no `group.json`. */
+    | 'missing-group-file'
+    /** A group directory name cannot serve as a group id. */
+    | 'invalid-group-id'
+    /** Two groups would share one id. */
+    | 'duplicate-group-id'
     /** `flotti run` found another flotti running the same fleet. */
     | 'already-running'
     /** The dashboard port is taken by another program. */
