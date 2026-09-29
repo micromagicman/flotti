@@ -251,7 +251,7 @@ describe('fleet tools: an agent writes to another', { timeout: 30_000 }, () => {
         const bob = make('bob');
         const running = new Map([['alice', alice.agent], ['bob', bob.agent]]);
         const supervisor = new Supervisor(
-            { location: { path: workspace, source: 'argument' }, exists: true, agents: [alice.agent.agent, bob.agent.agent] },
+            { location: { path: workspace, source: 'argument' }, exists: true, agents: [alice.agent.agent, bob.agent.agent], groups: [] },
             { createAgent: (agent) => running.get(agent.id) ?? alice.agent }
         );
         server.serve(supervisor);
