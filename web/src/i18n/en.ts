@@ -129,7 +129,10 @@ const en = {
         fleet: 'Fleet',
         agents: 'Agents',
         allMessages: 'All messages',
-        allMessagesHint: (n: number) => `The latest ${f.number(n)} of the fleet`
+        allMessagesHint: (n: number) => `The latest ${f.number(n)} of the fleet`,
+        sections: 'Sections of the sidebar',
+        waitsForYou: (names: string, n: number) => `${names} wait${n === 1 ? 's' : ''} for you`,
+        withNew: (n: number) => `${f.number(n)} with something new`
     },
     health: {
         label: 'SSH connection',

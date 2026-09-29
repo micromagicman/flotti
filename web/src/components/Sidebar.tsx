@@ -1,3 +1,5 @@
+import { useRef } from 'react';
+import type { JSX, KeyboardEvent } from 'react';
 import type { AgentStatus } from '../../../src/agent-events.js';
 import type { AgentSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
@@ -9,6 +11,8 @@ import { AgentMark, PairMarks, nameOf } from './AgentMark.js';
 import { PoorConnectionMark } from './ConnectionHealth.js';
 import { StatusBadge } from './StatusBadge.js';
 import { useT } from '../i18n/I18n.js';
+import { SECTIONS, hasUnread, markerDot, markerOf, sectionForKey, statusOf } from '../sidebar-sections.js';
+import type { Marker, Section } from '../sidebar-sections.js';
 /** How many conversations the sidebar lists by name; the rest are in the list of them all. */
 const CONVERSATIONS_SHOWN = 4;
 type SidebarProps = {
@@ -26,6 +30,9 @@ type SidebarProps = {
     readonly addAgentId: string;
     readonly conversationsId: string;
     readonly onSelect: (tab: string) => void;
+    /** The section in sight (#136), and how to open another. */
+    readonly section: Section;
+    readonly onSection: (section: Section) => void;
 };
 type SideTabProps = {
     readonly className: string;
@@ -66,10 +73,6 @@ function TabStatus({ status, inLine }: { readonly status: AgentStatus; readonly 
             {inLine > 0 ? <span className="tab-in-line">· {t.common.inLine(inLine)}</span> : null}
         </span>
     );
-}
-/** The live status of the agent: its feed knows it first. */
-function statusOf(agent: AgentSummary, feed: AgentFeed | undefined): AgentStatus {
-    return feed?.status ?? agent.status;
 }
 function inLineOf(feed: AgentFeed | undefined): number {
     return feed?.queue.length ?? 0;
@@ -113,72 +116,154 @@ function PairTab({ conversation, agents, colors, unread, selected, onSelect }: P
         </button>
     );
 }
-/**
- * Whether a tab not open has more than it showed when it was: the last event
- * of an agent, or how many messages of a conversation.
- */
-function hasUnread(id: string, selected: string, shown: number, seenSeq: SidebarProps['seenSeq']): boolean {
-    return id !== selected && shown > (seenSeq[id] ?? 0);
-}
 function lastSeqOf(feed: AgentFeed | undefined): number {
     return feed?.lastSeq ?? 0;
-}
-/** The tab of all conversations: on a narrow screen only, when every one has a tab; marked when one of them is open. */
-function conversationsClass(rest: number, holdsOpen: boolean): string {
-    return `tab tab-conversations${rest > 0 ? '' : ' tab-narrow-only'}${holdsOpen ? ' tab-holds-open' : ''}`;
 }
 type ConversationTabsProps = Pick<SidebarProps, 'agents' | 'colors' | 'conversations' | 'seenSeq' | 'selected' | 'conversationsId' | 'onSelect'>;
 /**
  * The newest conversations by name, then the list of them all when there are
- * more. On a narrow screen the list alone stays: a row of pairs would run off it.
+ * more, or when there is none yet: the section is never empty.
  */
 function ConversationTabs({ agents, colors, conversations, seenSeq, selected, conversationsId, onSelect }: ConversationTabsProps) {
     const shown = shownInSidebar(conversations, CONVERSATIONS_SHOWN, selected);
     const rest = conversations.length - shown.length;
-    const holdsOpen = selected === conversationsId || conversations.some((conversation) => conversation.id === selected);
     const t = useT();
     return (
         <>
-            <div className="side-head" aria-hidden="true">{t.sidebar.conversations}</div>
             {shown.map((conversation) => (
                 <PairTab key={conversation.id} conversation={conversation} agents={agents} colors={colors} selected={conversation.id === selected}
                     unread={hasUnread(conversation.id, selected, conversation.messages.length, seenSeq)} onSelect={onSelect} />
             ))}
-            <SideTab className={conversationsClass(rest, holdsOpen)} selected={selected === conversationsId}
-                onClick={() => onSelect(conversationsId)} name={rest > 0 ? t.sidebar.allConversations : t.sidebar.conversations} hint={t.sidebar.pairs(conversations.length)} />
+            {rest > 0 || conversations.length === 0
+                ? <SideTab className="tab tab-conversations" selected={selected === conversationsId} onClick={() => onSelect(conversationsId)}
+                    name={rest > 0 ? t.sidebar.allConversations : t.sidebar.conversations} hint={t.sidebar.pairs(conversations.length)} />
+                : null}
         </>
     );
 }
 type FleetTabsProps = Pick<SidebarProps, 'selected' | 'broadcastId' | 'feedId' | 'onSelect'>;
-/**
- * The two tabs of the whole fleet under a heading of their own (#114): the
- * broadcast and the feed of every message, apart from the agents below them.
- */
+/** The two tabs of the whole fleet (#114): the broadcast and the feed of every message. */
 function FleetTabs({ selected, broadcastId, feedId, onSelect }: FleetTabsProps) {
     const t = useT();
     return (
         <>
-            <div className="side-head" aria-hidden="true">{t.sidebar.fleet}</div>
             <SideTab className="tab tab-broadcast tab-fleet" selected={selected === broadcastId} onClick={() => onSelect(broadcastId)} name={t.sidebar.allAgents} hint={t.sidebar.broadcast} />
             <SideTab className="tab tab-feed tab-fleet" selected={selected === feedId} onClick={() => onSelect(feedId)} name={t.sidebar.allMessages} hint={t.sidebar.allMessagesHint(FLEET_FEED_SIZE)} />
-            <div className="side-head" aria-hidden="true">{t.sidebar.agents}</div>
         </>
     );
 }
-function Sidebar({ agents, feeds, colors, conversations, seenSeq, selected, broadcastId, feedId, addAgentId, conversationsId, onSelect }: SidebarProps) {
-    const t = useT();
+function AgentTabs({ agents, feeds, colors, seenSeq, selected, onSelect }: Pick<SidebarProps, 'agents' | 'feeds' | 'colors' | 'seenSeq' | 'selected' | 'onSelect'>) {
     return (
-        <nav className="sidebar" role="tablist" aria-label={t.sidebar.label} aria-orientation="vertical">
-            <FleetTabs selected={selected} broadcastId={broadcastId} feedId={feedId} onSelect={onSelect} />
+        <>
             {agents.map((agent) => (
                 <AgentTab key={agent.id} agent={agent} feed={feeds[agent.id]} color={colors[agent.id]} selected={agent.id === selected} onSelect={onSelect}
                     unread={hasUnread(agent.id, selected, lastSeqOf(feeds[agent.id]), seenSeq)} />
             ))}
-            {conversations.length === 0
-                ? null
-                : <ConversationTabs agents={agents} colors={colors} conversations={conversations} seenSeq={seenSeq} selected={selected} conversationsId={conversationsId} onSelect={onSelect} />}
+        </>
+    );
+}
+/** Line icons of the switch, 24 units drawn at 20 px (16 px on a phone). */
+const ICONS: Readonly<Record<Section, JSX.Element>> = {
+    fleet: <><path d="M3 17V11Q6.5 13 7 17Z" /><path d="M9 17V7.5Q13.5 10.5 14 17Z" /><path d="M16 17V3.5Q21 8 21.5 17Z" /><path d="M3 20.5H21.5" /></>,
+    agents: <><circle cx="12" cy="8" r="4" /><path d="M4 20.5c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5" /></>,
+    conversations: <><path d="M3 4.5h12v8.5H8l-5 3.5z" /><path d="M11 16h6.5l3.5 3v-10h-3" /></>
+};
+function useSectionLabel(): (section: Section) => string {
+    const t = useT();
+    return (section) => ({ fleet: t.sidebar.fleet, agents: t.sidebar.agents, conversations: t.sidebar.conversations })[section];
+}
+/** In words, what the dot of a closed section says. */
+function markerWords(sidebar: ReturnType<typeof useT>['sidebar'], marker: Marker | undefined): string[] {
+    if (marker === undefined) {
+        return [];
+    }
+    return [
+        ...(marker.waiting.length > 0 ? [sidebar.waitsForYou(marker.waiting.join(', '), marker.waiting.length)] : []),
+        ...(marker.unread > 0 ? [sidebar.withNew(marker.unread)] : [])
+    ];
+}
+function MarkerDot({ marker }: { readonly marker: Marker | undefined }) {
+    const dot = markerDot(marker);
+    if (dot === undefined) {
+        return null;
+    }
+    return <span className="rail-mark" aria-hidden="true"><span className={dot === 'waiting' ? 'rail-wait' : 'unread'} /></span>;
+}
+type RailTabProps = {
+    readonly section: Section;
+    readonly open: boolean;
+    readonly marker: Marker | undefined;
+    readonly onSection: (section: Section) => void;
+    readonly tabRef: (element: HTMLButtonElement | null) => void;
+};
+/** A tab of the switch: the icon over the name, the dot on the corner of the icon, the dot in words for a screen reader. */
+function RailTab({ section, open, marker, onSection, tabRef }: RailTabProps) {
+    const t = useT();
+    const label = useSectionLabel()(section);
+    return (
+        <button type="button" role="tab" className="rail-tab" id={`side-tab-${section}`} data-section={section} aria-selected={open}
+            aria-controls={`side-panel-${section}`} tabIndex={open ? 0 : -1} aria-label={[label, ...markerWords(t.sidebar, marker)].join(', ')}
+            ref={tabRef} onClick={() => onSection(section)}>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">{ICONS[section]}</svg>
+            <span className="rail-label">{label}</span>
+            <MarkerDot marker={marker} />
+        </button>
+    );
+}
+type RailProps = Pick<SidebarProps, 'section' | 'onSection' | 'agents' | 'feeds' | 'conversations' | 'seenSeq' | 'selected'>;
+/**
+ * The switch of the sections (#136): a rail of icons at the left edge of the
+ * sidebar, a row on a phone. One stop of Tab; the arrows, Home and End move
+ * along it and open the section they reach (WAI-ARIA tabs).
+ */
+function Rail({ section, onSection, ...input }: RailProps) {
+    const t = useT();
+    const tabs = useRef<Partial<Record<Section, HTMLButtonElement | null>>>({});
+    const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+        const next = sectionForKey(section, event.key);
+        if (next !== undefined) {
+            event.preventDefault();
+            onSection(next);
+            tabs.current[next]?.focus();
+        }
+    };
+    return (
+        <div className="side-rail" role="tablist" aria-label={t.sidebar.sections} aria-orientation="vertical" onKeyDown={onKeyDown}>
+            {SECTIONS.map((key) => (
+                <RailTab key={key} section={key} open={key === section} marker={markerOf(key, section, input)} onSection={onSection}
+                    tabRef={(element) => { tabs.current[key] = element; }} />
+            ))}
+        </div>
+    );
+}
+/** What the open section lists. */
+function SectionTabs(props: SidebarProps) {
+    if (props.section === 'fleet') {
+        return <FleetTabs {...props} />;
+    }
+    return props.section === 'agents' ? <AgentTabs {...props} /> : <ConversationTabs {...props} />;
+}
+/** The open section: its tabs, then Add agent at the foot of every one. */
+function SectionList(props: SidebarProps) {
+    const { section, selected, addAgentId, onSelect } = props;
+    const t = useT();
+    return (
+        <nav className="sidebar" role="tablist" aria-label={useSectionLabel()(section)} aria-orientation="vertical">
+            <SectionTabs {...props} />
             <SideTab className="tab tab-add-agent" selected={selected === addAgentId} onClick={() => onSelect(addAgentId)} name={t.sidebar.addAgent} hint={t.sidebar.addAgentHint} />
         </nav>
+    );
+}
+function Sidebar(props: SidebarProps) {
+    return (
+        <aside className="side">
+            <Rail {...props} />
+            {SECTIONS.map((key) => (
+                <div key={key} className="side-panel" role="tabpanel" id={`side-panel-${key}`} aria-labelledby={`side-tab-${key}`} hidden={key !== props.section}>
+                    {key === props.section ? <SectionList {...props} /> : null}
+                </div>
+            ))}
+        </aside>
     );
 }
 export { Sidebar };
