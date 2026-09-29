@@ -140,7 +140,10 @@ const ru: Messages = {
         fleet: 'Флот',
         agents: 'Агенты',
         allMessages: 'Все сообщения',
-        allMessagesHint: (n) => `Последние ${f.number(n)} по флоту`
+        allMessagesHint: (n) => `Последние ${f.number(n)} по флоту`,
+        sections: 'Разделы боковой панели',
+        waitsForYou: (names, n) => `${names} ${n === 1 ? 'ждёт' : 'ждут'} вас`,
+        withNew: (n) => `новое: ${f.number(n)}`
     },
     health: {
         label: 'SSH-соединение',

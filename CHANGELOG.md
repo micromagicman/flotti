@@ -2,6 +2,16 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **The sidebar as three tabs: Fleet, Agents and Conversations.** A rail of icons at the left edge of the
+  sidebar switches between the sections, and only the chosen one is listed; on a phone the rail is a row
+  on top. The switch follows what opens (a message of the feed turns it to its agent or conversation),
+  the chosen section is remembered across reloads, and a closed section keeps its unread dot on its icon,
+  or the ochre dot of an agent waiting for you. Arrows, Home and End move along the switch (#136).
+
 ## [0.5.0] — 2026-09-28
 
 A messenger for AI agents: one feed of every message in the fleet, settings behind a gear icon with

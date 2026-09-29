@@ -137,19 +137,37 @@ test.afterAll(async () => {
     await telegram?.close();
     rmSync(workspace, { recursive: true, force: true });
 });
-const tab = (page: Page, name: string) => page.getByRole('tab', { name: new RegExp(`^${name}`) });
+/** A tab of the open section of the sidebar. */
+const tab = (page: Page, name: string) => page.locator('.sidebar').getByRole('tab', { name: new RegExp(`^${name}`) });
+/** A tab of the switch of the sections of the sidebar (#136): Fleet, Agents, Conversations. */
+const section = (page: Page, name: string) => page.getByRole('tablist', { name: 'Sections of the sidebar' }).getByRole('tab', { name: new RegExp(`^${name}`) });
+/** The section a tab of the sidebar is in; none for Add agent, which is under every one. */
+function sectionOfTab(name: string): string | undefined {
+    if (['All agents', 'All messages'].includes(name)) {
+        return 'Fleet';
+    }
+    return name.startsWith('Add agent') ? undefined : 'Agents';
+}
+/** Opens the section of a tab when another is in sight, then the tab. */
+async function openTab(page: Page, name: string, where = sectionOfTab(name)): Promise<void> {
+    if (where !== undefined && await section(page, where).getAttribute('aria-selected') !== 'true') {
+        await section(page, where).click();
+    }
+    await tab(page, name).click();
+}
 const feed = (page: Page, name: string) => page.getByRole('log', { name: `Output of ${name}` });
 /** The settings: an icon in the header, right of the connection status (#116). */
 const settingsButton = (page: Page, name = 'Settings') => page.getByRole('banner').getByRole('button', { name, exact: true });
 async function say(page: Page, name: string, text: string): Promise<void> {
-    await tab(page, name).click();
+    await openTab(page, name);
     const field = page.getByRole('textbox', { name: `Message to ${name}` });
     await field.fill(text);
     await field.press('Enter');
 }
 test('every agent has a tab with its status', async ({ page }) => {
     await page.goto(url);
-    await expect(page.getByRole('tab')).toHaveText([/All agents/, /All messages/, /claude/, /codex/, /relay/, /Add agent/]);
+    await expect(page.getByRole('tablist', { name: 'Sections of the sidebar' }).getByRole('tab')).toHaveText(['Fleet', 'Agents', 'Conversations']);
+    await expect(page.locator('.sidebar').getByRole('tab')).toHaveText([/claude/, /codex/, /relay/, /Add agent/]);
     for (const name of ['claude', 'codex', 'relay']) {
         await expect(tab(page, name).locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     }
@@ -170,7 +188,7 @@ test('the page carries the flotti logo in its header and the icon in its tab', a
 test('the header of an agent is one line; its harness and type are in the details, which say when it is not known', async ({ page }) => {
     await page.goto(url);
     for (const [name, harness] of [['claude', 'claude'], ['codex', 'codex'], ['relay', 'not known']] as const) {
-        await tab(page, name).click();
+        await openTab(page, name);
         await expect(page.locator('.agent-header [data-harness]')).toHaveCount(0);
         const header = await page.locator('.agent-header').boundingBox();
         expect(header?.height ?? 0).toBeLessThan(60);
@@ -185,7 +203,7 @@ test('the header of an agent is one line; its harness and type are in the detail
 test('on a phone the actions of an agent are behind a menu, and the details cover the chat', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 800 });
     await page.goto(url);
-    await tab(page, 'claude').click();
+    await openTab(page, 'claude');
     await expect(page.locator('.agent-header .actions')).toBeHidden();
     await page.getByRole('button', { name: 'Actions' }).click();
     const menu = page.getByRole('menu', { name: 'Actions' });
@@ -203,9 +221,9 @@ test('writes to one agent, and the answer stays in its tab', async ({ page }) =>
     await say(page, 'relay', 'hello relay');
     await expect(feed(page, 'relay')).toContainText('echo: hello relay');
     await expect(feed(page, 'relay')).not.toContainText('hello claude');
-    await tab(page, 'codex').click();
+    await openTab(page, 'codex');
     await expect(feed(page, 'codex')).not.toContainText('you said');
-    await tab(page, 'claude').click();
+    await openTab(page, 'claude');
     await expect(feed(page, 'claude')).toContainText('you said: hello claude');
 });
 test('a turn that ended normally draws nothing under the answer; one that ended otherwise says why (#115)', async ({ page }) => {
@@ -215,7 +233,7 @@ test('a turn that ended normally draws nothing under the answer; one that ended 
     await say(page, 'relay', 'no line under me');
     await expect(feed(page, 'relay')).toContainText('echo: no line under me');
     for (const name of ['claude', 'relay']) {
-        await tab(page, name).click();
+        await openTab(page, name);
         await expect(feed(page, name).locator('hr, .turn-end')).toHaveCount(0);
     }
     await say(page, 'claude', 'wait');
@@ -240,7 +258,7 @@ test('an agent writes to another: both tabs show who wrote to whom, apart from w
     const sent = feed(page, 'relay').locator('.message-sent');
     await expect(sent.locator('.envelope-bar')).toContainText('relay → claude');
     await expect(sent).toContainText('Please rerun the e2e job');
-    await tab(page, 'claude').click();
+    await openTab(page, 'claude');
     const received = feed(page, 'claude').locator('.message-peer');
     await expect(received.locator('.envelope-bar')).toContainText('relay → claude');
     await expect(received).toContainText('Please rerun the e2e job');
@@ -248,9 +266,13 @@ test('an agent writes to another: both tabs show who wrote to whom, apart from w
 });
 const lane = (page: Page) => page.getByRole('log', { name: 'Conversation of relay and claude' });
 const pairTab = (page: Page) => page.getByRole('tab', { name: /^Conversation of relay and claude/ });
+async function openPair(page: Page): Promise<void> {
+    await section(page, 'Conversations').click();
+    await pairTab(page).click();
+}
 test('the conversation of two agents has a tab of its own: one lane, read-only, with the way to write to either', async ({ page }) => {
     await page.goto(url);
-    await pairTab(page).click();
+    await openPair(page);
     // The message of relay, and the answer claude sends back to it (#45): it says the same words.
     const [message, answer] = [lane(page).locator('.lane-row').nth(0), lane(page).locator('.lane-row').nth(1)];
     await expect(message.locator('.envelope-bar')).toContainText('relay → claude');
@@ -269,8 +291,7 @@ const fleetRow = (page: Page, from: string, to: string) => fleetFeed(page).getBy
 const feedFilter = (page: Page) => page.getByRole('group', { name: 'Show messages of' });
 test('every message of the fleet is in one feed, apart from the agents: who wrote to whom and when, and only messages (#114)', async ({ page }) => {
     await page.goto(url);
-    await expect(page.locator('.sidebar .side-head')).toHaveText(['Fleet', 'Agents', 'Conversations']);
-    await tab(page, 'All messages').click();
+    await openTab(page, 'All messages');
     await expect(page.getByRole('heading', { name: 'All messages' })).toBeVisible();
     await expect(fleetFeed(page)).toContainText('The latest 200 messages of the fleet');
     await expect(fleetRow(page, 'You', 'relay').filter({ hasText: 'write to claude' })).toHaveCount(1);
@@ -294,10 +315,10 @@ test('the feed of the fleet is filtered by one agent, whether it wrote or got th
 });
 test('a message of the feed of the fleet opens where it lives: between two agents their conversation, between a person and an agent its tab (#114)', async ({ page }) => {
     await page.goto(url);
-    await tab(page, 'All messages').click();
+    await openTab(page, 'All messages');
     await fleetRow(page, 'relay', 'claude').filter({ hasText: 'Please rerun the e2e job' }).click();
     await expect(lane(page).locator('.lane-row.message-found')).toContainText('Please rerun the e2e job');
-    await tab(page, 'All messages').click();
+    await openTab(page, 'All messages');
     const toRelay = fleetRow(page, 'You', 'relay').filter({ hasText: 'write to claude' });
     await toRelay.focus();
     await toRelay.press('Enter');
@@ -313,12 +334,13 @@ test('the feed of the fleet shows a new message as it comes, without a reload (#
     await expect(fleetRow(page, 'codex', 'You').filter({ hasText: 'you said: live in the feed' })).toHaveCount(1);
     await other.close();
 });
-test('on a narrow screen both tabs of the whole fleet lead the row, and the feed fits the screen (#114)', async ({ page }) => {
+test('on a narrow screen both tabs of the whole fleet are in sight under Fleet, and the feed fits the screen (#114)', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 800 });
     await page.goto(url);
+    await section(page, 'Fleet').click();
     await expect(tab(page, 'All agents')).toBeInViewport();
     await expect(tab(page, 'All messages')).toBeInViewport();
-    await tab(page, 'All messages').click();
+    await openTab(page, 'All messages');
     await expect(fleetRow(page, 'relay', 'claude').first()).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
@@ -363,10 +385,10 @@ async function bar(envelope: Locator): Promise<Bar> {
     };
 }
 async function relayColors(page: Page): Promise<{ marks: string[]; bars: Bar[] }> {
-    await tab(page, 'relay').click();
+    await openTab(page, 'relay');
     const marks = [await paint(tab(page, 'relay').locator('.agent-mark')), await paint(page.locator('.agent-header .agent-mark'))];
     const bars = [await bar(feed(page, 'relay').locator('.message-sent').first())];
-    await pairTab(page).click();
+    await openPair(page);
     marks.push(await paint(page.locator('.lane-title .agent-mark').first()));
     bars.push(await bar(lane(page).locator('.lane-first .message-sent').first()));
     return { marks, bars };
@@ -389,19 +411,119 @@ test('an agent has one hue on its mark in the sidebar, in the header of its tab 
         }
     }
 });
-test('on a narrow screen the conversations are one tab away, in the list of them all', async ({ page }) => {
+test('on a narrow screen the conversations are one tab away: the pairs have a row of their own under Conversations', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 800 });
     await page.goto(url);
     await expect(pairTab(page)).toBeHidden();
-    await page.getByRole('tab', { name: /^Conversations/ }).click();
-    await page.getByRole('list').getByRole('button', { name: /relay ↔ claude/ }).click();
+    await openPair(page);
     await expect(lane(page)).toContainText('Please rerun the e2e job');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 const viewButton = (page: Page, name: 'Chat' | 'Memory') => page.getByRole('group', { name: 'View' }).getByRole('button', { name, exact: true });
+const rail = (page: Page) => page.getByRole('tablist', { name: 'Sections of the sidebar' });
+test('the sidebar is three tabs: a click shows its section and hides the other two, what is open stays open, and the pick survives a reload (#136)', async ({ page }) => {
+    await page.goto(`${url}#/claude`);
+    await expect(rail(page).getByRole('tab')).toHaveText(['Fleet', 'Agents', 'Conversations']);
+    await expect(section(page, 'Agents'), 'the first time the sidebar opens on Agents').toHaveAttribute('aria-selected', 'true');
+    await expect(tab(page, 'claude')).toBeVisible();
+    await section(page, 'Fleet').click();
+    await expect(section(page, 'Fleet')).toHaveAttribute('aria-selected', 'true');
+    await expect(tab(page, 'All agents')).toBeVisible();
+    await expect(tab(page, 'All messages')).toBeVisible();
+    await expect(tab(page, 'claude')).toHaveCount(0);
+    await expect(pairTab(page)).toHaveCount(0);
+    await expect(page.getByRole('textbox', { name: 'Message to claude' }), 'the chat open stays open').toBeVisible();
+    await section(page, 'Conversations').click();
+    await expect(pairTab(page)).toBeVisible();
+    await expect(tab(page, 'All agents')).toHaveCount(0);
+    await expect(tab(page, 'claude')).toHaveCount(0);
+    await expect(tab(page, 'Add agent'), 'Add agent is under every section').toBeVisible();
+    await page.reload();
+    await expect(section(page, 'Conversations')).toHaveAttribute('aria-selected', 'true');
+    await expect(pairTab(page)).toBeVisible();
+});
+test('the switch is one stop of Tab; the arrows, Home and End move along it and open what they reach (#136)', async ({ page }) => {
+    await page.goto(`${url}#/claude`);
+    await section(page, 'Agents').focus();
+    await expect(rail(page).locator('[tabindex="0"]')).toHaveCount(1);
+    await page.keyboard.press('ArrowDown');
+    await expect(section(page, 'Conversations')).toBeFocused();
+    await expect(section(page, 'Conversations')).toHaveAttribute('aria-selected', 'true');
+    await expect(pairTab(page)).toBeVisible();
+    await page.keyboard.press('ArrowDown');
+    await expect(section(page, 'Fleet')).toBeFocused();
+    await expect(tab(page, 'All agents')).toBeVisible();
+    await page.keyboard.press('End');
+    await expect(section(page, 'Conversations')).toBeFocused();
+    await page.keyboard.press('Home');
+    await expect(section(page, 'Fleet')).toBeFocused();
+    await page.keyboard.press('ArrowRight');
+    await expect(section(page, 'Agents')).toBeFocused();
+    await page.keyboard.press('ArrowLeft');
+    await expect(section(page, 'Fleet')).toBeFocused();
+    await expect(rail(page).locator('[tabindex="0"]')).toHaveCount(1);
+    await page.keyboard.press('Tab');
+    await expect(tab(page, 'All agents'), 'Tab leaves the switch for the section').toBeFocused();
+});
+test('the switch follows what opens: a message of the feed turns it to Conversations or to Agents (#136)', async ({ page }) => {
+    await page.goto(url);
+    await openTab(page, 'All messages');
+    await fleetRow(page, 'relay', 'claude').filter({ hasText: 'Please rerun the e2e job' }).click();
+    await expect(section(page, 'Conversations')).toHaveAttribute('aria-selected', 'true');
+    await expect(pairTab(page)).toHaveAttribute('aria-selected', 'true');
+    await openTab(page, 'All messages');
+    await fleetRow(page, 'You', 'relay').filter({ hasText: 'write to claude' }).click();
+    await expect(section(page, 'Agents')).toHaveAttribute('aria-selected', 'true');
+    await expect(tab(page, 'relay')).toHaveAttribute('aria-selected', 'true');
+});
+test('a closed section keeps its markers on the switch: new output, an agent waiting for you in its place, new messages of a conversation (#136)', async ({ page, context }) => {
+    await page.goto(url);
+    for (const name of ['claude', 'codex', 'relay']) {
+        await openTab(page, name);
+    }
+    await openPair(page);
+    await openTab(page, 'All agents');
+    const agents = section(page, 'Agents');
+    await expect(agents.locator('.unread, .rail-wait'), 'every agent seen: nothing new').toHaveCount(0);
+    await expect(section(page, 'Fleet').locator('.unread, .rail-wait')).toHaveCount(0);
+    const other = await context.newPage();
+    await other.goto(url);
+    await say(other, 'codex', 'marked on the switch');
+    await expect(agents.locator('.unread')).toBeVisible();
+    await expect(agents).toHaveAccessibleName('Agents, 1 with something new');
+    await say(other, 'codex', 'permission');
+    await expect(agents.locator('.rail-wait')).toBeVisible();
+    await expect(agents.locator('.unread'), 'the waiting dot takes its place').toHaveCount(0);
+    await expect(agents).toHaveAccessibleName(/^Agents, codex waits for you/);
+    await feed(other, 'codex').getByRole('button', { name: 'Allow' }).click();
+    await expect(agents.locator('.rail-wait')).toHaveCount(0);
+    const conversations = section(page, 'Conversations');
+    await expect(conversations.locator('.unread')).toHaveCount(0);
+    await say(other, 'relay', 'write to claude');
+    await expect(conversations.locator('.unread')).toBeVisible();
+    await expect(conversations).toHaveAccessibleName('Conversations, 1 with something new');
+    await other.close();
+});
+for (const width of [1280, 390]) {
+    test(`at ${width} px the words of the switch are whole, and the page does not scroll sideways (#136)`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 800 });
+        for (const language of ['en', 'ru']) {
+            await page.addInitScript((code) => window.localStorage.setItem('flotti.language', code), language);
+            await page.goto(`${url}#/claude`);
+            const labels = rail(page).or(page.getByRole('tablist', { name: 'Разделы боковой панели' })).locator('.rail-label');
+            await expect(labels).toHaveCount(3);
+            const cut = await labels.evaluateAll((spans) => spans.filter((span) => span.scrollWidth > span.clientWidth).map((span) => span.textContent));
+            expect(cut, `${language}: labels cut`).toEqual([]);
+            for (const key of ['fleet', 'agents', 'conversations']) {
+                await page.locator(`[data-section="${key}"]`).click();
+                expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${language} ${key}`).toBe(true);
+            }
+        }
+    });
+}
 test('the Memory view of a local agent shows its notes: a tree, a note rendered, [[links]] both ways, search', async ({ page }) => {
     await page.goto(url);
-    await tab(page, 'claude').click();
+    await openTab(page, 'claude');
     await viewButton(page, 'Memory').click();
     const notes = page.getByRole('navigation', { name: 'Notes' });
     await expect(notes.getByRole('button')).toHaveText([/Home/, /Release process/]);
@@ -422,14 +544,14 @@ test('the Memory view of a local agent shows its notes: a tree, a note rendered,
 });
 test('the Memory view says why a remote agent has no notes to show', async ({ page }) => {
     await page.goto(url);
-    await tab(page, 'relay').click();
+    await openTab(page, 'relay');
     await viewButton(page, 'Memory').click();
     await expect(page.locator('.memory-state')).toContainText('A remote agent keeps its memory on its own machine');
 });
 test('on a narrow screen the Memory view is the list, then a note with the way back', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 800 });
     await page.goto(url);
-    await tab(page, 'claude').click();
+    await openTab(page, 'claude');
     await viewButton(page, 'Memory').click();
     const notes = page.getByRole('navigation', { name: 'Notes' });
     await expect(page.locator('.note-card')).toBeHidden();
@@ -450,7 +572,7 @@ test('an agent gives another a task: both tabs show who gave it to whom and how 
     const outcome = feed(page, 'relay').locator('.message-peer').filter({ hasText: 'you said: [from relay] Task' }).last();
     await expect(outcome.locator('.envelope-bar')).toContainText('claude → relay');
     await expect(outcome.locator('.quote')).toContainText('Collect the failing tests');
-    await tab(page, 'claude').click();
+    await openTab(page, 'claude');
     await expect(feed(page, 'claude').getByRole('group', { name: 'Task from relay to claude: completed' })).toBeVisible();
     await expect(feed(page, 'claude')).toContainText(/you said: \[from relay\] Task \S+, given to you\./);
 });
@@ -486,7 +608,7 @@ test('a message forwarded to another agent says who wrote it, in the tab of the 
     await answer.getByRole('button', { name: 'Forward' }).click();
     await answer.getByRole('group', { name: 'Forward to' }).getByRole('button', { name: 'claude' }).click();
     await expect(answer.getByRole('status')).toHaveText('Forwarded to claude');
-    await tab(page, 'claude').click();
+    await openTab(page, 'claude');
     const forwarded = messageRow(page, 'claude', 'forwarded · codex', 'user');
     await expect(forwarded.locator('.fwd')).toContainText('you said: forward me');
     await expect(feed(page, 'claude')).toContainText(/you said: Forwarded from agent "codex":\s*you said: forward me/);
@@ -531,13 +653,13 @@ test('a link opens from the quote of a reply and from a forwarded message', asyn
     await answer.getByRole('button', { name: 'Forward' }).click();
     await answer.getByRole('group', { name: 'Forward to' }).getByRole('button', { name: 'claude' }).click();
     await expect(answer.getByRole('status')).toHaveText('Forwarded to claude');
-    await tab(page, 'claude').click();
+    await openTab(page, 'claude');
     const forwarded = messageRow(page, 'claude', `you said: quote ${address}`, 'user');
     expect(await openLink(page, forwarded.locator('.fwd').getByRole('link', { name: address }))).toBe(address);
 });
 test('a broadcast reaches every agent picked, and each answers in its own tab', async ({ page }) => {
     await page.goto(url);
-    await tab(page, 'All agents').click();
+    await openTab(page, 'All agents');
     await page.getByRole('checkbox', { name: 'codex' }).uncheck();
     const field = page.getByRole('textbox', { name: 'Message to all agents' });
     await expect(page.locator('.composer-count')).toHaveText('2 agents selected');
@@ -545,18 +667,18 @@ test('a broadcast reaches every agent picked, and each answers in its own tab', 
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     const deliveries = page.getByRole('list', { name: 'Delivery' }).getByRole('listitem');
     await expect(deliveries).toHaveText([/claude\s*delivered/, /relay\s*delivered/]);
-    await tab(page, 'claude').click();
+    await openTab(page, 'claude');
     await expect(feed(page, 'claude')).toContainText('you said: ping');
-    await tab(page, 'relay').click();
+    await openTab(page, 'relay');
     await expect(feed(page, 'relay')).toContainText('echo: ping');
-    await tab(page, 'codex').click();
+    await openTab(page, 'codex');
     await expect(feed(page, 'codex')).not.toContainText('ping');
 });
 /** The composer of the tab of `name`: the card with the field, the chip of the status, the keys and Send. */
 const composer = (page: Page, name: string) => page.locator('.composer').filter({ has: page.getByRole('textbox', { name: `Message to ${name}` }) });
 test('the composer: Enter sends, Shift+Enter makes a new line, the field grows with the text and then scrolls', async ({ page }) => {
     await page.goto(url);
-    await tab(page, 'claude').click();
+    await openTab(page, 'claude');
     const card = composer(page, 'claude');
     const field = card.getByRole('textbox');
     await expect(card.locator('[data-status]')).toHaveAttribute('data-status', 'idle');
@@ -647,7 +769,7 @@ test('on a wide screen the composer and the line waiting in it span the feed, in
         await page.getByRole('button', { name: 'Cancel', exact: true }).click();
         await expect(line).toHaveCount(0);
     }
-    await tab(page, 'All agents').click();
+    await openTab(page, 'All agents');
     const targets = await edges(page.locator('.targets'));
     const broadcast = await edges(page.locator('.broadcast .composer-card'));
     expect(Math.abs(broadcast.left - targets.left)).toBeLessThanOrEqual(1);
@@ -711,13 +833,14 @@ test('a broadcast to busy agents waits in line in the tab of each', async ({ pag
     await say(page, 'claude', 'wait');
     await say(page, 'codex', 'wait');
     await expect(tab(page, 'codex').locator('[data-status]')).toHaveAttribute('data-status', 'working');
-    await tab(page, 'All agents').click();
+    await openTab(page, 'All agents');
     await page.getByRole('checkbox', { name: 'relay' }).uncheck();
     await page.getByRole('textbox', { name: 'Message to all agents' }).fill('when you can');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await section(page, 'Agents').click();
     for (const name of ['claude', 'codex']) {
         await expect(tab(page, name)).toContainText('1 in line');
-        await tab(page, name).click();
+        await openTab(page, name);
         await expect(nextUp(page, name)).toContainText('when you can');
         await page.getByRole('button', { name: 'Cancel', exact: true }).click();
         await expect(feed(page, name)).toContainText('you said: when you can');
@@ -830,8 +953,8 @@ test('the settings are an icon right of the connection status, and open the sett
 });
 test('Add agent stands where the settings were, and leads to adding a local or a remote agent', async ({ page }) => {
     await page.goto(url);
-    await expect(page.getByRole('tab').last()).toHaveText(/^Add agent/);
-    await tab(page, 'Add agent').click();
+    await expect(page.locator('.sidebar').getByRole('tab').last()).toHaveText(/^Add agent/);
+    await openTab(page, 'Add agent');
     await expect(tab(page, 'Add agent')).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('button', { name: 'Add local agent' })).toBeFocused();
     await expect(page.getByRole('button', { name: 'Add local agent' })).toBeInViewport();
@@ -842,7 +965,7 @@ test('on a narrow screen the settings icon and Add agent are in sight, and the h
     await page.goto(url);
     await expect(settingsButton(page)).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-    await tab(page, 'Add agent').click();
+    await openTab(page, 'Add agent');
     await expect(page.getByRole('button', { name: 'Add local agent' })).toBeInViewport();
     await settingsButton(page).click();
     await expect(page.getByRole('heading', { name: 'Fleet settings' })).toBeVisible();
@@ -850,13 +973,13 @@ test('on a narrow screen the settings icon and Add agent are in sight, and the h
 test('the restart button restarts a local agent and starts over with a remote one', async ({ page }) => {
     await page.goto(url);
     const before = starts('claude');
-    await tab(page, 'claude').click();
+    await openTab(page, 'claude');
     await page.getByRole('button', { name: 'Restart' }).click();
     await expect.poll(() => starts('claude')).toBe(before + 1);
     await expect(tab(page, 'claude').locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     await say(page, 'claude', 'still there?');
     await expect(feed(page, 'claude')).toContainText('you said: still there?');
-    await tab(page, 'relay').click();
+    await openTab(page, 'relay');
     await page.getByRole('button', { name: 'Restart' }).click();
     await expect(feed(page, 'relay')).toContainText('new conversation');
 });
@@ -869,7 +992,7 @@ test('the language is picked in the settings: the page speaks it at once, and af
     await page.goto(`${url}#/_settings`);
     await page.getByRole('combobox', { name: 'Language of the dashboard' }).selectOption('ru');
     await expect(page.getByRole('heading', { name: 'Настройки флота' })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /^Все агенты/ })).toBeVisible();
+    await expect(page.getByRole('tablist', { name: 'Разделы боковой панели' }).getByRole('tab')).toHaveText(['Флот', 'Агенты', 'Переписки']);
     await expect(tab(page, 'claude').locator('[data-status]')).toHaveText(/^(запускается|свободен|работает|ждёт вас|ошибка|остановлен)/);
     expect(await page.evaluate(() => document.documentElement.lang)).toBe('ru');
     await page.reload();
@@ -888,7 +1011,7 @@ test.describe('in a browser set to Russian', () => {
     test.use({ locale: 'ru-RU' });
     test('the dashboard opens in Russian until another language is picked', async ({ page }) => {
         await page.goto(`${url}#/all`);
-        await expect(page.getByRole('tab', { name: /^Все агенты/ })).toBeVisible();
+        await expect(page.getByRole('tab', { name: /^Флот/ })).toBeVisible();
         await expect(page.getByRole('heading', { name: 'Сообщение всем агентам' })).toBeVisible();
         await expect(page.getByRole('combobox', { name: 'Язык дашборда' })).toHaveCount(0);
     });
@@ -946,7 +1069,7 @@ test('makes an agent an administrator in the settings; its action waits for a pe
     await expect(request).toContainText('relay asks to clear the context of codex');
     await request.getByRole('button', { name: 'Allow' }).click();
     await expect(feed(page, 'relay')).toContainText('relay cleared the context of codex');
-    await tab(page, 'codex').click();
+    await openTab(page, 'codex');
     await expect(feed(page, 'codex').getByRole('separator', { name: /Context cleared: relay cleared the context of codex/ })).toBeVisible();
     await page.goto(`${url}#/_settings`);
     await confirm.uncheck();
@@ -1026,7 +1149,7 @@ test('deletes an agent: it stops, and its directory goes to .trash', async ({ pa
 test('the details of an agent say whether it has memory, as flotti delivered it', async ({ page }) => {
     await page.goto(url);
     const memoryOf = async (name: string) => {
-        await tab(page, name).click();
+        await openTab(page, name);
         await page.getByRole('button', { name: `Details of ${name}` }).click();
         return page.getByRole('complementary', { name: `Details of ${name}` }).locator('[data-memory]');
     };
@@ -1055,7 +1178,7 @@ test('the details of an agent say whether it has memory, as flotti delivered it'
         }
         await close(name);
     }
-    await tab(page, 'codex').click();
+    await openTab(page, 'codex');
     await viewButton(page, 'Memory').click();
     await expect(page.locator('.memory-state')).toContainText('is not a folder');
 });
@@ -1065,7 +1188,7 @@ test('switches the fleet directory, and saves it for the next run', async ({ pag
     await page.goto(`${url}#/_settings`);
     await field(page, 'Fleet directory path').fill(next);
     await page.getByRole('button', { name: 'Switch' }).click();
-    await expect(page.getByRole('tab')).toHaveText([/All agents/, /All messages/, /newcomer/, /Add agent/]);
+    await expect(page.locator('.sidebar').getByRole('tab')).toHaveText([/newcomer/, /Add agent/]);
     await expect(settingsRow(page, 'newcomer').locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     await expect(page.getByRole('form', { name: 'Fleet directory' })).toContainText(`${next} — saved in`);
     const saved = JSON.parse(readFileSync(join(workspace, '.flotti', 'settings.json'), 'utf8')) as { fleet: string };

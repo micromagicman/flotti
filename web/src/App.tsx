@@ -20,6 +20,8 @@ import type { FleetMessage } from './fleet-feed.js';
 import type { Link } from './fleet-state.js';
 import { useAgentColors } from './use-agent-colors.js';
 import { useAttention } from './use-attention.js';
+import { sectionOf } from './sidebar-sections.js';
+import { useSidebarSection } from './use-sidebar-section.js';
 /** The tab is kept in the address, so a reload opens the same one. */
 const BROADCAST = 'all';
 /** No agent id starts with `_`, so the settings tab cannot hide an agent. */
@@ -237,11 +239,13 @@ function App() {
     const model = useAppModel();
     const { state, tab, setTab, colors, conversations, seenSeq } = model;
     const tabs = { broadcastId: BROADCAST, feedId: FEED, addAgentId: ADD_AGENT, conversationsId: CONVERSATIONS };
+    const selected = selectedTab(model);
+    const [section, setSection] = useSidebarSection(tab, sectionOf(selected, state.agents.map((summary) => summary.id), tabs));
     return (
         <div className="app">
             <Topbar link={state.link} settingsOpen={tab === SETTINGS} onSettings={() => setTab(SETTINGS)} />
             <Sidebar agents={state.agents} feeds={state.feeds} colors={colors} conversations={conversations.all}
-                seenSeq={seenSeq} selected={selectedTab(model)} onSelect={setTab} {...tabs} />
+                seenSeq={seenSeq} selected={selected} onSelect={setTab} section={section} onSection={setSection} {...tabs} />
             <Main model={model} />
         </div>
     );
