@@ -1,5 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { isAnswerDelivery } from './answer-delivery.js';
+import type { AnswerDelivery } from './answer-delivery.js';
 import { ConfigurationError } from './errors.js';
 /**
  * What flotti remembers about itself between runs, as the dashboard set it:
@@ -16,6 +18,8 @@ type Settings = {
     readonly fleet?: string;
     /** Whether an action of an administrator of the fleet waits for a person to allow it; off when absent. */
     readonly confirmAdminActions?: boolean;
+    /** How the answers of the agents reach the dashboard (#157); `streamed` when absent. */
+    readonly answerDelivery?: AnswerDelivery;
 };
 type Environment = Readonly<Record<string, string | undefined>>;
 /** Where the settings live, relative to the home directory. */
@@ -87,13 +91,22 @@ function settingsText(path: string): string | undefined {
  * @throws ConfigurationError when the text is not settings.
  */
 function parseSettings(text: string, path: string): Settings {
-    const fields = settingsObject(text, path) as { fleet?: unknown; confirmAdminActions?: unknown };
+    const fields = settingsObject(text, path) as { fleet?: unknown; confirmAdminActions?: unknown; answerDelivery?: unknown };
     const fleet = fleetField(fields.fleet, path);
     const confirmAdminActions = confirmField(fields.confirmAdminActions, path);
+    const answerDelivery = deliveryField(fields.answerDelivery, path);
     return {
         ...(fleet === undefined ? {} : { fleet }),
-        ...(confirmAdminActions === undefined ? {} : { confirmAdminActions })
+        ...(confirmAdminActions === undefined ? {} : { confirmAdminActions }),
+        ...(answerDelivery === undefined ? {} : { answerDelivery })
     };
+}
+/** @throws ConfigurationError when `answerDelivery` is there but is neither `streamed` nor `whole`. */
+function deliveryField(answerDelivery: unknown, path: string): AnswerDelivery | undefined {
+    if (answerDelivery !== undefined && !isAnswerDelivery(answerDelivery)) {
+        throw new ConfigurationError('wrong-type', `${path}: answerDelivery must be "streamed" or "whole"`, { path });
+    }
+    return answerDelivery;
 }
 /** @throws ConfigurationError when the fleet is there but is not a path. */
 function fleetField(fleet: unknown, path: string): string | undefined {

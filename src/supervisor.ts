@@ -3,6 +3,8 @@ import { A2AAgent } from './a2a-agent.js';
 import type { AdminRequest } from './a2a-agent.js';
 import { AgentAnswers } from './agent-answers.js';
 import { waitingInLine } from './agent-events.js';
+import { AnswerDeliveryRule, DEFAULT_ANSWER_DELIVERY } from './answer-delivery.js';
+import type { AnswerDelivery } from './answer-delivery.js';
 import type { AdminAction, AgentEvent, AgentEventBody, FleetAgent, Quote, SendOptions } from './agent-events.js';
 import { HistoryFile } from './agent-history.js';
 import type { ConnectionHealth } from './connection-health.js';
@@ -93,6 +95,12 @@ type SupervisorOptions = {
      * allow it in the dashboard; asked at every action, off when absent.
      */
     readonly confirmAdminActions?: () => boolean;
+    /**
+     * How the answers of the agents reach the tabs (#157): piece by piece, or
+     * whole once complete. Asked when a message starts, so a change holds for
+     * the next one; `streamed` when absent.
+     */
+    readonly answerDelivery?: () => AnswerDelivery;
 };
 /** One agent of the fleet with what the dashboard needs of it. */
 type Member = {
@@ -170,6 +178,10 @@ function compareIds(left: string, right: string): number {
 function hasMemoryBank(agent: Agent): agent is LocalAgent {
     return agent.kind === 'local' && agent.ssh === undefined && agent.adapter !== undefined;
 }
+/** The rule of the answer delivery (#157) over the choice given; `streamed` for every message when none is. */
+function answerRule(options: SupervisorOptions): AnswerDeliveryRule {
+    return new AnswerDeliveryRule(options.answerDelivery ?? (() => DEFAULT_ANSWER_DELIVERY));
+}
 /** How much history is kept, and whether it outlives flotti. */
 function historyTuning(options: SupervisorOptions): { readonly limit: number; readonly persist: boolean } {
     return { limit: options.historyLimit ?? 5000, persist: options.persistHistory ?? false };
@@ -234,12 +246,15 @@ class Supervisor {
     private readonly delegations: Delegations;
     /** What administrators of the fleet do to the agents. */
     private readonly admin: FleetAdmin;
+    /** The one place the rule of #157 is applied: on the way of every event to the history and the pages. */
+    private readonly delivery: AnswerDeliveryRule;
     /** The groups of the fleet (docs/groups.md), by id. */
     private groupList = new Map<string, Group>();
     constructor(fleet: Fleet, options: SupervisorOptions = {}) {
         this.createAgent = options.createAgent
             ?? defaultAgent(options.fleetTools, (agentId, request) => void this.adminRequest(agentId, request), (agentId) => this.fleetView(agentId));
         this.admin = new FleetAdmin(this.adminFleet(), adminOptions(options.confirmAdminActions));
+        this.delivery = answerRule(options);
         const history = historyTuning(options);
         this.historyLimit = history.limit;
         this.persistHistory = history.persist;
@@ -773,8 +788,20 @@ class Supervisor {
             running.fleetChanged?.();
         }
     }
+    /**
+     * Keeps an event for the tab, through the rule of the answer delivery: a
+     * piece of an answer held back is not kept yet, and the whole answer, once
+     * complete, is kept as a line of flotti's own before the event that
+     * completed it — it takes the next number, as {@link put} numbers.
+     */
     private keep(member: Member, received: AgentEvent): void {
-        this.store(member, member.offset === 0 ? received : { ...received, seq: received.seq + member.offset });
+        const { released, kept } = this.delivery.take(member, received, member.inTurn);
+        if (released !== undefined) {
+            this.put(member, released);
+        }
+        if (kept) {
+            this.store(member, member.offset === 0 ? received : { ...received, seq: received.seq + member.offset });
+        }
     }
     /**
      * Puts a line of flotti's own into the tab of an agent, between its events:

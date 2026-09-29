@@ -1,5 +1,6 @@
 import type {
     AdminSettings,
+    AnswerDeliverySettings,
     AgentConfig,
     AgentSummary,
     BroadcastResponse,
@@ -64,6 +65,8 @@ const api = {
         post(`/api/admin-actions/${encodeURIComponent(actionId)}`, { allow }),
     adminSettings: (): Promise<AdminSettings> => call('GET', '/api/admin-settings'),
     setAdminSettings: (settings: AdminSettings): Promise<AdminSettings> => call('PUT', '/api/admin-settings', settings),
+    answerDelivery: (): Promise<AnswerDeliverySettings> => call('GET', '/api/answer-delivery'),
+    setAnswerDelivery: (settings: AnswerDeliverySettings): Promise<AnswerDeliverySettings> => call('PUT', '/api/answer-delivery', settings),
     fleet: (): Promise<FleetInfo> => call('GET', '/api/fleet'),
     switchFleet: (path: string): Promise<FleetInfo> => call('PUT', '/api/fleet', { path }),
     notifications: (): Promise<NotificationSettings> => call('GET', '/api/notifications'),

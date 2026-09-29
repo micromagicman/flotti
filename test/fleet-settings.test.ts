@@ -159,6 +159,21 @@ describe('FleetSettings: administrators', () => {
         deepStrictEqual(settings.adminSettings(), { confirmActions: true });
     });
 });
+describe('FleetSettings: answer delivery (#157)', () => {
+    test('answers stream until chosen otherwise; the choice is saved with the other settings, and only the two ways are taken', () => {
+        const { home, env, settings } = setUp();
+        deepStrictEqual(settings.answerDelivery(), { mode: 'streamed' });
+        deepStrictEqual(settings.setAnswerDelivery({ mode: 'whole' }), { mode: 'whole' });
+        strictEqual(readSettings(env).answerDelivery, 'whole');
+        throws(() => settings.setAnswerDelivery({ mode: 'bit by bit' }), ConfigurationError);
+        throws(() => settings.setAnswerDelivery({}), ConfigurationError);
+        deepStrictEqual(settings.answerDelivery(), { mode: 'whole' });
+        deepStrictEqual(settings.setAnswerDelivery({ mode: 'streamed' }), { mode: 'streamed' });
+        strictEqual(readSettings(env).answerDelivery, 'streamed');
+        writeFileSync(join(home, '.flotti', 'settings.json'), JSON.stringify({ answerDelivery: 'later' }));
+        throws(() => readSettings(env), ConfigurationError);
+    });
+});
 describe('FleetSettings: removing an agent', () => {
     test('removing stops the agent and moves its directory, memory and all, to .trash', async () => {
         const { root, supervisor, settings, fakes } = setUp(existing);

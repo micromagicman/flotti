@@ -6,6 +6,16 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Added
 
+- **Answers reach the dashboard streamed or whole, one rule for every agent, chosen in Settings.**
+  **Answers** in Settings picks how an answer of an agent reaches its tab and the feed of the fleet:
+  piece by piece as it is written — the default, what the tabs did — or whole, once the agent has
+  finished it: at the end of the message, or of the turn when nothing marks the end of the message,
+  with nothing partial shown before. The rule is applied in one place, on the way of every event to
+  the history and the pages, so the chunks of a local agent over ACP and the artifacts of a remote
+  agent over A2A behave alike; what an agent says outside a turn, and what agents send one another,
+  are not held. Saved in `~/.flotti/settings.json` as `answerDelivery`, read and changed at
+  `GET/PUT /api/answer-delivery`; a change holds for the next message, with no restart. The history
+  keeps what the tab got, so a tab reads the same after a reload (#157).
 - **Groups of agents in the fleet directory, and their API** — the first step of the groups of #144.
   A group is `groups/<id>/group.json` next to the agents: a name, a topic and the members, read with
   the fleet and checked like a manifest; a member not in the fleet is kept and shown so.

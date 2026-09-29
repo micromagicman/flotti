@@ -35,6 +35,8 @@ class Harness {
     readonly directory: string;
     readonly recordFile: string;
     readonly agent: LocalAgentProcess;
+    /** The agent as the fleet would read it: for a supervisor over the harness. */
+    readonly manifest: LocalAgent;
     readonly events: AgentEvent[] = [];
     private readonly waiting: { test: (event: AgentEvent) => boolean; resolve: (event: AgentEvent) => void }[] = [];
     constructor(setup: FakeSetup = {}) {
@@ -65,6 +67,7 @@ class Harness {
             ...(setup.remote === true ? { ssh: 'eva@example.org', workdir: '~', env: { FAKE_ACP: JSON.stringify(fake) } } : {}),
             ...setup.manifest
         };
+        this.manifest = manifest;
         this.agent = new LocalAgentProcess(manifest, {
             env: { ...process.env, FAKE_ACP: JSON.stringify(fake) },
             startSecs: 5,

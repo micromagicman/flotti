@@ -3,6 +3,8 @@ import type { ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DEFAULT_ANSWER_DELIVERY } from './answer-delivery.js';
+import type { AnswerDelivery } from './answer-delivery.js';
 import { formatDuration } from './connection-health.js';
 import type { ConnectionHealth } from './connection-health.js';
 import { ConfigurationError } from './errors.js';
@@ -202,6 +204,18 @@ function confirmsAdminActions(env: Environment): boolean {
         return true;
     }
 }
+/**
+ * How the answers of the agents reach the dashboard, as the settings say now
+ * (#157): asked when a message starts, so the choice holds for the next one.
+ * Settings that cannot be read stream, as a fleet that never chose does.
+ */
+function answerDeliveryOf(env: Environment): AnswerDelivery {
+    try {
+        return readSettings(env).answerDelivery ?? DEFAULT_ANSWER_DELIVERY;
+    } catch {
+        return DEFAULT_ANSWER_DELIVERY;
+    }
+}
 /** Starts the fleet tools and puts the supervisor, the settings of the fleet and its notifications on them. */
 async function startSupervisor(fleet: Fleet, file: RunFile, options: RunOptions): Promise<RunParts> {
     const tools = await FleetMcpServer.start();
@@ -210,6 +224,7 @@ async function startSupervisor(fleet: Fleet, file: RunFile, options: RunOptions)
         persistHistory: true,
         fleetTools: tools,
         confirmAdminActions: () => confirmsAdminActions(env),
+        answerDelivery: () => answerDeliveryOf(env),
         ...options.supervisor
     });
     tools.serve(supervisor);

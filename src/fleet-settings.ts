@@ -3,6 +3,7 @@ import { isAbsolute, join } from 'node:path';
 import type {
     AdminSettings,
     AgentConfig,
+    AnswerDeliverySettings,
     AgentSummary,
     FleetInfo,
     GroupConfig,
@@ -11,6 +12,7 @@ import type {
     RemoteAgentConfig,
     SshAgentsResponse
 } from './dashboard-protocol.js';
+import { DEFAULT_ANSWER_DELIVERY, isAnswerDelivery } from './answer-delivery.js';
 import { ConfigurationError } from './errors.js';
 import {
     AGENT_ID,
@@ -682,6 +684,22 @@ class FleetSettings {
         }
         writeSettings(this.env, { confirmAdminActions: confirmActions });
         return this.adminSettings();
+    }
+    /** How the answers of the agents reach the dashboard (#157), as the settings file says; `streamed` until chosen. */
+    answerDelivery(): AnswerDeliverySettings {
+        return { mode: readSettings(this.env).answerDelivery ?? DEFAULT_ANSWER_DELIVERY };
+    }
+    /**
+     * Chooses how the answers reach the dashboard, in the settings file: it
+     * holds for the next message of every agent, and for the next runs.
+     */
+    setAnswerDelivery(body: unknown): AnswerDeliverySettings {
+        const { mode } = (isObject(body) ? body : {}) as Partial<AnswerDeliverySettings>;
+        if (!isAnswerDelivery(mode)) {
+            throw invalid('mode must be "streamed" or "whole".');
+        }
+        writeSettings(this.env, { answerDelivery: mode });
+        return this.answerDelivery();
     }
     /**
      * Checks the manifest the way `flotti run` would, and only then writes the

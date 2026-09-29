@@ -12,6 +12,9 @@
  * - `spawn`           — starts a grandchild process and writes its pid to the record;
  * - `later`           — answers, and a moment after the turn is over goes on of its own:
  *                       a tool call and a message without `messageId`;
+ * - `stream`          — answers one message in two pieces, `one ` and `two`, each recorded as
+ *                       `streamed` once sent; with `gate` in the config the second piece waits
+ *                       until that file exists;
  * - `mcp <call>`      — calls a tool of the MCP server `flotti` it was given, `<call>` being the
  *                       JSON of `tools/call` params, and says the text of the result;
  *
@@ -37,6 +40,8 @@ type FakeConfig = {
     readonly authRequired?: boolean;
     /** Say it takes MCP servers over HTTP. */
     readonly mcpHttp?: boolean;
+    /** The file `stream` waits for before its second piece; none: it does not wait. */
+    readonly gate?: string;
 };
 const config = JSON.parse(process.env['FAKE_ACP'] ?? '{}') as FakeConfig;
 function record(entry: object): void {
@@ -136,6 +141,20 @@ async function say(client: acp.AgentContext, sessionId: string, text: string): P
         update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text }, messageId: 'm1' }
     });
 }
+/** One message in two pieces, the second once the gate of the config is open. */
+async function stream(client: acp.AgentContext, sessionId: string): Promise<void> {
+    for (const piece of ['one ', 'two']) {
+        await say(client, sessionId, piece);
+        record({ event: 'streamed', text: piece });
+        await gateOpen();
+    }
+}
+/** Resolves once the gate file of the config is there; at once when the config names none. */
+async function gateOpen(): Promise<void> {
+    while (config.gate !== undefined && !existsSync(config.gate)) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+}
 /** What an agent does with no prompt to answer: works on, and says so. */
 async function onMyOwn(client: acp.AgentContext, sessionId: string): Promise<void> {
     await client.notify(acp.methods.client.session.update, {
@@ -225,6 +244,9 @@ acp.agent({ name: 'fake-acp-agent' })
                 await say(context.client, sessionId, 'spawned');
                 break;
             }
+            case 'stream':
+                await stream(context.client, sessionId);
+                break;
             case 'later':
                 await say(context.client, sessionId, 'on it');
                 setTimeout(() => void onMyOwn(context.client, sessionId), 50);

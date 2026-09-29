@@ -324,6 +324,26 @@ test('the settings page adds, reads, changes and removes agents, and switches th
     deepStrictEqual([switched.status, (switched.body as { path: string }).path], [200, join(home, 'other')]);
     strictEqual((await call(port, 'PUT', '/api/fleet', { path: 'relative' })).status, 400);
 });
+test('the settings page chooses how answers reach the tabs (#157): read, changed, and only the two ways taken', async () => {
+    const bare = await serve('a');
+    strictEqual((await call(bare.dashboard.port, 'GET', '/api/answer-delivery')).status, 404);
+    const home = mkdtempSync(join(webRoot, 'home-'));
+    const root = join(home, 'fleet');
+    mkdirSync(root);
+    const env = { HOME: home };
+    const fleet = loadFleet({ argv: ['--fleet', root], env });
+    const supervisor = new Supervisor(fleet, { createAgent: (agent: { id: string }) => new FakeFleetAgent(agent.id) });
+    const settings = new FleetSettings(fleet, supervisor, { env });
+    const dashboard = await startDashboard(supervisor, { port: 0, webRoot, settings });
+    open.push({ dashboard, supervisor, sockets: [] });
+    const { port } = dashboard;
+    deepStrictEqual((await call(port, 'GET', '/api/answer-delivery')).body, { mode: 'streamed' });
+    const changed = await call(port, 'PUT', '/api/answer-delivery', { mode: 'whole' });
+    deepStrictEqual([changed.status, changed.body], [200, { mode: 'whole' }]);
+    deepStrictEqual((await call(port, 'GET', '/api/answer-delivery')).body, { mode: 'whole' });
+    strictEqual((await call(port, 'PUT', '/api/answer-delivery', { mode: 'bit by bit' })).status, 400);
+    deepStrictEqual((await call(port, 'GET', '/api/answer-delivery')).body, { mode: 'whole' });
+});
 test('tells the pages when it goes away', async () => {
     const { dashboard, sockets } = await serve('a');
     const { messages, socket } = await page(dashboard.port, sockets, {});
