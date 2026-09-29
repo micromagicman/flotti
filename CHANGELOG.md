@@ -79,6 +79,12 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
     the conversation in the tab of the group. The README gets a «Groups» section — what a group is, who
     sees whom, a message to a group and its one round of answers, the dashboard, an existing fleet
     after the upgrade — and the fleet layout shows `groups/` (#154).
+- **Groups: how a member in line took a group message is written down once it is known.** A member
+  busy when a message is posted to its group is `queued` in the line of the history; when it takes
+  the message or fails it, the line is corrected on disk — written again under its number, the later
+  line counts — and goes out on the socket as a `group-message` once more, so the fold under the
+  message in the tab of the group, and a page opened later, say `taken` or `failed` with the reason
+  instead of «in line» for good (#162).
 - **A Storybook of the components of the dashboard.** `npm run storybook` opens the sidebar with its
   rail, the feed of the fleet, a message and the tab of an agent on their own, in every state they
   have — empty, waiting, in error, with long names, with many agents, on a phone, light and dark —

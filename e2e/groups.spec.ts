@@ -20,12 +20,12 @@ const workspace = mkdtempSync(join(tmpdir(), 'flotti-e2e-groups-'));
 const fleet = join(workspace, 'fleet');
 let flotti: ChildProcess | undefined;
 let url = '';
-/** A pretend local agent that answers «you said: …» to whatever it gets. */
+/** A pretend local agent that answers «you said: …» to whatever it gets; asked to `stream`, it is busy until `gate` in its directory is there (#157). */
 function localAgent(id: string): void {
     const directory = join(fleet, 'local', id);
     mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, 'agent.json'), JSON.stringify({
-        name: id, command: process.execPath, arguments: [FAKE_ACP], env: { FAKE_ACP: JSON.stringify({ record: join(directory, 'record.jsonl') }) }
+        name: id, command: process.execPath, arguments: [FAKE_ACP], env: { FAKE_ACP: JSON.stringify({ record: join(directory, 'record.jsonl'), gate: join(directory, 'gate') }) }
     }));
 }
 function startFlotti(): Promise<string> {
@@ -59,6 +59,7 @@ test.afterAll(async () => {
     rmSync(workspace, { recursive: true, force: true });
 });
 const section = (page: Page, name: string) => page.getByRole('tablist', { name: 'Sections of the sidebar' }).getByRole('tab', { name: new RegExp(`^${name}`) });
+const agentTab = (page: Page, name: string) => page.locator('.sidebar').getByRole('tab', { name: new RegExp(`^${name}`) });
 const groupTab = (page: Page) => page.locator('.sidebar').getByRole('tab', { name: /^Group Everyone/ });
 const lane = (page: Page) => page.getByRole('log', { name: 'Group Everyone' });
 const fleetFeed = (page: Page) => page.getByRole('log', { name: 'Messages' });
@@ -116,4 +117,33 @@ test('a group message of the feed of the fleet is one row with the tag «group»
     await row.click();
     await expect(lane(page).locator('.message-row.message-found')).toContainText('hello team');
     await expect(section(page, 'Groups')).toHaveAttribute('aria-selected', 'true');
+});
+test('a member busy when the message is posted is «in line» under it, and the fold, the history and a reloaded page say how it ended once it does (#162)', async ({ page }) => {
+    const gate = join(fleet, 'local', 'claude', 'gate');
+    rmSync(gate, { force: true });
+    // claude works on `stream` until the gate is there: busy while the group gets its message.
+    await page.goto(url);
+    await section(page, 'Agents').click();
+    await agentTab(page, 'claude').click();
+    const toClaude = page.getByRole('textbox', { name: 'Message to claude' });
+    await toClaude.fill('stream');
+    await toClaude.press('Enter');
+    await expect(agentTab(page, 'claude').locator('[data-status]')).toHaveAttribute('data-status', 'working');
+    await openGroups(page);
+    await groupTab(page).click();
+    const field = page.getByRole('textbox', { name: 'Message to Everyone' });
+    await field.fill('who is free');
+    await field.press('Enter');
+    const message = lane(page).locator('.message-row-user').filter({ hasText: 'who is free' });
+    await expect(message.locator('.took summary')).toHaveText('codex got it · claude in line');
+    writeFileSync(gate, '');
+    await expect(message.locator('.took summary')).toHaveText('claude, codex got it');
+    await message.locator('.took summary').click();
+    await expect(message.getByRole('list', { name: 'How the members took it' }).locator('.delivery-result')).toHaveText(['delivered', 'delivered']);
+    // The history has the outcome too: a page opened later shows it, not «in line».
+    await page.reload();
+    await section(page, 'Groups').click();
+    await groupTab(page).click();
+    await expect(lane(page).locator('.message-row-user').filter({ hasText: 'who is free' }).locator('.took summary')).toHaveText('claude, codex got it');
+    rmSync(gate, { force: true });
 });

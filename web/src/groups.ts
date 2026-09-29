@@ -22,12 +22,27 @@ type GroupFeed = {
     readonly lastSeq: number;
 };
 const EMPTY_GROUP_FEED: GroupFeed = { messages: [], lastSeq: 0 };
-/** A message goes in once: one with a `seq` the page has — a replay after a reconnect — is not taken again. */
+/**
+ * A message goes in once: one with a `seq` the page has is the same message
+ * again — a replay after a reconnect, not taken again — or the line as the
+ * history has it now, once a member that was in line took the message or
+ * failed it (#162): then it takes the place of the one the page had.
+ */
 function withGroupMessage(feed: GroupFeed, message: GroupMessage): GroupFeed {
-    if (message.seq <= feed.lastSeq) {
+    if (message.seq > feed.lastSeq) {
+        return { messages: [...feed.messages, message], lastSeq: message.seq };
+    }
+    const kept = feed.messages.find((known) => known.seq === message.seq);
+    if (kept === undefined || sameDeliveries(kept.deliveries, message.deliveries)) {
         return feed;
     }
-    return { messages: [...feed.messages, message], lastSeq: message.seq };
+    return { ...feed, messages: feed.messages.map((known) => (known.seq === message.seq ? message : known)) };
+}
+function sameDeliveries(one: readonly Delivery[], other: readonly Delivery[]): boolean {
+    return one.length === other.length && one.every((delivery, index) => sameDelivery(delivery, other[index]));
+}
+function sameDelivery(one: Delivery, other: Delivery | undefined): boolean {
+    return other !== undefined && one.agentId === other.agentId && one.result === other.result && one.error === other.error;
 }
 /** Unique in the fleet, and tells where the message is: `<tab of the group>:<seq>`, as `<agent>:<seq>` does for a tab. */
 function groupMessageKey(message: GroupMessage): string {

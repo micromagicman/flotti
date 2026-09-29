@@ -217,6 +217,8 @@ function isGroupMessage(event: AgentEvent): event is AgentEvent & { type: 'messa
 }
 /** A message to a group: who posts it, when it is an agent, and what it answers or sends on. */
 type GroupSendOptions = Pick<SendOptions, 'from' | 'replyTo' | 'forwarded' | 'turnAnswer'>;
+/** A message handed to a member of a group: what is answered at once, and how the delivery ended in the end. */
+type Handed = { readonly answer: Promise<Delivery>; readonly outcome: Promise<Delivery> };
 /** A member the message did not reach: it is not in the fleet, or it did not take it. */
 function failed(agentId: string, error: string): Delivery {
     return { agentId, result: 'failed', error };
@@ -422,11 +424,29 @@ class Supervisor {
         this.posting.set(groupId, posted.catch(() => undefined));
         return posted;
     }
-    /** Hands the message to every other member and writes it down with how each took it. */
+    /**
+     * Hands the message to every other member and writes it down with how each
+     * took it; a member in line gets its outcome written to the line later
+     * (#162), once the message is there to write it to.
+     */
     private async postToGroup(group: Group, text: string, options: GroupSendOptions): Promise<GroupMessage> {
         const receivers = group.members.filter((id) => id !== options.from);
-        const deliveries = await Promise.all(receivers.map((id) => this.deliverToMember(id, text, { ...options, group: group.id })));
-        return this.post(group, text, options, deliveries);
+        const handed = receivers.map((id) => this.deliverToMember(id, text, { ...options, group: group.id }));
+        const deliveries = await Promise.all(handed.map(({ answer }) => answer));
+        const message = this.post(group, text, options, deliveries);
+        for (const [index, { outcome }] of handed.entries()) {
+            if (deliveries[index]?.result === 'queued') {
+                void outcome.then((delivery) => this.settle(group.id, message.seq, delivery));
+            }
+        }
+        return message;
+    }
+    /** Writes down how a delivery of a group message that was in line ended, and tells the pages the line as it is now (#162). */
+    private settle(groupId: string, seq: number, delivery: Delivery): void {
+        const settled = this.groupHistories.get(groupId)?.settle(seq, delivery);
+        if (settled !== undefined) {
+            this.notify({ type: 'group-message', message: settled });
+        }
     }
     /** Whether the agent is in a group with anyone of the fleet. */
     private hasPeers(agentId: string): boolean {
@@ -1062,19 +1082,21 @@ class Supervisor {
     }
     /**
      * Hands a message posted to a group to one member, under a `messageId` of
-     * its own tab, and answers within `queuedAfterMs` as {@link deliver} does.
+     * its own tab: `answer` within `queuedAfterMs` as {@link deliver} does,
+     * `outcome` once the agent took it or it failed, however long that takes.
      * Once an agent's message is taken, the fleet tools are told, so `reply`
      * of the member answers the group. A member not in the fleet fails at once.
      */
-    private deliverToMember(agentId: string, text: string, options: SendOptions & { group: string }): Promise<Delivery> {
+    private deliverToMember(agentId: string, text: string, options: SendOptions & { group: string }): Handed {
         const member = this.members.get(agentId);
         if (member === undefined) {
-            return Promise.resolve(failed(agentId, 'not in the fleet'));
+            const outcome = Promise.resolve(failed(agentId, 'not in the fleet'));
+            return { answer: outcome, outcome };
         }
         const messageId = randomUUID();
-        const sent = this.hand(member, text, { ...options, messageId });
-        void sent.then((delivery) => this.tellTaken(delivery, agentId, messageId, text, options));
-        return this.answerWithin(agentId, sent);
+        const outcome = this.hand(member, text, { ...options, messageId });
+        void outcome.then((delivery) => this.tellTaken(delivery, agentId, messageId, text, options));
+        return { answer: this.answerWithin(agentId, outcome), outcome };
     }
     /** Tells the fleet tools of a message of an agent that a member took: its `reply` and `forward` act on it. */
     private tellTaken(delivery: Delivery, to: string, messageId: string, text: string, options: SendOptions & { group: string }): void {

@@ -22,6 +22,11 @@ function isLine(value: unknown): value is Line {
 function hasLineFields({ seq, time }: Record<string, unknown>): boolean {
     return isEventNumber(seq) && typeof time === 'string';
 }
+/** The number of the last event; 0 when there is none. */
+function lastSeq(events: readonly Numbered[]): number {
+    const last = events[events.length - 1];
+    return last === undefined ? 0 : last.seq;
+}
 function isEventNumber(seq: unknown): boolean {
     return typeof seq === 'number' && Number.isInteger(seq) && seq > 0;
 }
@@ -53,20 +58,25 @@ class HistoryFile<T extends Numbered> {
     /**
      * @param owner Whose history it is, for the warning: `agent "eva"`, `group "release"`.
      * @param read What a line of the file is, when it is one: {@link agentEvents}, {@link groupMessages}.
+     * @param corrections Whether a line may be written again under its number, as it is now (#162): the file of a group does that, the file of an agent never.
      */
     constructor(
         private readonly owner: string,
         directory: string,
         private readonly limit: number,
         private readonly warn: (text: string) => void,
-        private readonly read: Reader<T>
+        private readonly read: Reader<T>,
+        private readonly corrections = false
     ) {
         this.path = join(directory, HISTORY_FILE);
     }
     /**
      * The newest `limit` events of the file, oldest first. A line that is not
      * an event — the last one torn by a crash, a hand edit — is skipped, and so
-     * is one whose number does not grow: the numbers of an agent only grow.
+     * is one whose number does not grow: the numbers of an agent only grow. In
+     * a file that takes corrections, as the file of a group does, a line
+     * numbered as one already read is that line as it is now (#162) and takes
+     * its place.
      */
     load(): T[] {
         const contents = this.contents();
@@ -78,18 +88,32 @@ class HistoryFile<T extends Numbered> {
         this.lines = lines.filter((line) => line.trim() !== '').length;
         return events.slice(-this.limit);
     }
-    /** The events of the lines, each numbered above the one before it. */
+    /** The events of the lines, each numbered above the one before it; with corrections, one numbered as an event already read replaces it. */
     private growing(lines: readonly string[]): T[] {
         const events: T[] = [];
-        let last = 0;
+        const at = new Map<number, number>();
         for (const line of lines) {
             const event = this.parse(line);
-            if (event !== undefined && event.seq > last) {
-                events.push(event);
-                last = event.seq;
+            if (event !== undefined) {
+                this.place(events, at, event);
             }
         }
         return events;
+    }
+    /**
+     * Puts the event after the ones read when its number grows — or, in a file
+     * that takes corrections, in place of the one of its number.
+     *
+     * @param at Where the event of each number is in `events`.
+     */
+    private place(events: T[], at: Map<number, number>, event: T): void {
+        const index = this.corrections ? at.get(event.seq) : undefined;
+        if (index !== undefined) {
+            events[index] = event;
+        } else if (event.seq > lastSeq(events)) {
+            at.set(event.seq, events.length);
+            events.push(event);
+        }
     }
     /** The whole file; nothing when there is none yet or it cannot be read. */
     private contents(): string | undefined {
@@ -103,7 +127,9 @@ class HistoryFile<T extends Numbered> {
         }
     }
     /**
-     * Writes one more event down.
+     * Writes one more event down. In a file that takes corrections, an event
+     * with the number of one already written corrects it: the file keeps both
+     * lines, {@link load} takes the later, and the rewrite drops the older.
      *
      * @param kept What is left of the history once this event is in it: the file is rewritten with it when it grows too long.
      */

@@ -195,6 +195,30 @@ test('the messages of a group are there again after flotti is started anew, and 
     deepStrictEqual(second.warnings, []);
     await second.supervisor.stop();
 });
+test('how a member in line took a group message is in the file once known, and there again after a restart (#162)', async () => {
+    const { fleet, groupDirectory } = fleetOnDisk('a', 'b');
+    const first = run(fleet);
+    await first.supervisor.start();
+    const b = first.fakes.get('b');
+    if (b === undefined) {
+        throw new Error('no fake for b');
+    }
+    b.busy = true;
+    const posted = await first.supervisor.sendToGroup('everyone', 'hello');
+    deepStrictEqual(posted.deliveries, [{ agentId: 'a', result: 'taken' }, { agentId: 'b', result: 'queued' }]);
+    // a answers; its answer is posted as the second line, in line for b as well.
+    await until(() => first.supervisor.groupHistory('everyone').length === 2);
+    b.release();
+    await until(() => first.supervisor.groupHistory('everyone').length === 3 && first.supervisor.groupHistory('everyone').every((message) => message.deliveries.every((delivery) => delivery.result === 'taken')));
+    await first.supervisor.stop();
+    const before = first.supervisor.groupHistory('everyone');
+    deepStrictEqual(before[0]?.deliveries, [{ agentId: 'a', result: 'taken' }, { agentId: 'b', result: 'taken' }]);
+    const onDisk = readFileSync(join(groupDirectory, HISTORY_FILE), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { seq: number; deliveries: { result: string }[] });
+    deepStrictEqual(onDisk.filter((line) => line.seq === 1).map((line) => line.deliveries.map((delivery) => delivery.result)), [['taken', 'queued'], ['taken', 'taken']], 'the line is written again with the outcome, after the first');
+    const second = run(fleet);
+    deepStrictEqual(second.supervisor.groupHistory('everyone'), before, 'the later line of a number is the one that counts');
+    deepStrictEqual(second.warnings, []);
+});
 test('without persistHistory the messages of a group stay in memory', async () => {
     const { fleet, groupDirectory } = fleetOnDisk('a');
     const { supervisor } = run(fleet, { persistHistory: false });
