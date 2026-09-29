@@ -38,7 +38,7 @@
     "url": "https://github.com/micromagicman/flotti/issues"
   },
   "homepage": "https://github.com/micromagicman/flotti#readme",
-  "description": "Let your AI agents talk — to you and to each other.",
+  "description": "A messenger for AI agents: local agents over ACP, remote agents over A2A, and a dashboard with a tab per agent, tasks between agents and a broadcast to all of them.",
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@stylistic/eslint-plugin": "^5.10.0",
