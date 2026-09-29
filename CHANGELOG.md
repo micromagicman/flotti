@@ -13,6 +13,16 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   atomically, deleted to `.trash/` — the `fleet` message of the socket carries them, and deleting an
   agent takes it out of every group. An existing fleet starts without groups: none is made for it.
   Who sees whom through a group, messages to a group and the dashboard come with the next steps (#149).
+- **Agents see and write to each other only inside a group** — the second step of the groups of #144.
+  `list_agents` and the roster of a remote agent name the peers only — the members of every group the
+  agent is in, each with the `groups` it shares — and the roster carries the agent's `groups` beside
+  `agents` and goes out again when a group changes; the new read-only tool `list_groups` names the
+  caller's groups with their topic and members. `send_message`, `reply`, `forward`, `delegate`, `to` of
+  the inbox and the actions of an administrator reach a peer only; any other agent is refused with the
+  words for one that does not exist, and the tab of the sender says the real reason. What comes back
+  from an exchange that was allowed — the answer of a turn, the outcome of a task — still reaches the
+  agent that started it after a membership change. A person's messages are not bound. A fleet without
+  groups is a fleet where no agent sees another. Messages to a group and the dashboard come next (#150).
 - **A Storybook of the components of the dashboard.** `npm run storybook` opens the sidebar with its
   rail, the feed of the fleet, a message and the tab of an agent on their own, in every state they
   have — empty, waiting, in error, with long names, with many agents, on a phone, light and dark —

@@ -12,7 +12,7 @@ import { RemoteStartReader, remoteCommandArguments } from '../src/ssh.js';
 import type { SshOptions } from '../src/ssh.js';
 import { Supervisor } from '../src/supervisor.js';
 import type { LocalAgent } from '../src/types.js';
-import { fakeFleet } from './fake-fleet-agent.js';
+import { everyone, fakeFleet, group, seeingEachOther } from './fake-fleet-agent.js';
 import type { FakeFleetAgent } from './fake-fleet-agent.js';
 import { rejected, single } from './fleet-helpers.js';
 import { Harness, eventually, workspace } from './local-agent-helpers.js';
@@ -37,10 +37,12 @@ const noDelegations: Pick<FleetDirectory, 'delegate' | 'cancelDelegation'> = {
 function directory(ids: readonly string[]): FleetDirectory & { sent: string[]; options: SendOptions[] } {
     const sent: string[] = [];
     const options: SendOptions[] = [];
+    const agents = (): AgentSummary[] => ids.map((id) => ({ id, name: id, kind: 'local', status: 'idle' }));
     return {
         sent,
         options,
-        agents: (): AgentSummary[] => ids.map((id) => ({ id, name: id, kind: 'local', status: 'idle' })),
+        agents,
+        ...seeingEachOther(ids, agents),
         send: async (agentId: string, text: string, given: SendOptions = {}): Promise<Delivery> => {
             sent.push(`${given.from ?? '-'} -> ${agentId}: ${composeText(text, given, agentId)}`);
             options.push(given);
@@ -82,7 +84,7 @@ describe('fleet tools: the MCP server', () => {
         strictEqual(result['protocolVersion'], '2025-03-26');
         deepStrictEqual(result['capabilities'], { tools: {} });
         const tools = (await rpc(server, token, 'tools/list')).body?.['result'] as { tools: { name: string }[] };
-        deepStrictEqual(tools.tools.map((tool) => tool.name), ['list_agents', 'send_message', 'reply', 'delegate', 'cancel_delegation', 'forward']);
+        deepStrictEqual(tools.tools.map((tool) => tool.name), ['list_agents', 'list_groups', 'send_message', 'reply', 'delegate', 'cancel_delegation', 'forward']);
     });
     it('takes notifications without an answer, and offers its own version to a client it does not know', async () => {
         const server = await toolsServer();
@@ -108,7 +110,7 @@ describe('fleet tools: what they do', () => {
     it('says so when the fleet refuses the message', async () => {
         const server = await toolsServer();
         server.serve({
-            agents: () => directory(['alice', 'bob']).agents(),
+            ...directory(['alice', 'bob']),
             send: () => {
                 throw new Error('There is no agent "alice" in the fleet.');
             },
@@ -186,6 +188,66 @@ function received(agent: FakeFleetAgent, from: string): { messageId: string; tex
     const text = call.slice('send '.length, call.length - ` from ${from}`.length);
     return { messageId: options.messageId ?? `u-${text}`, text };
 }
+/** A fleet of fakes with these groups, run by a supervisor that serves the tools. */
+async function fleetWithGroups(ids: readonly string[], groups: Parameters<typeof group>[]) {
+    const server = await toolsServer();
+    const { fleet, fakes, createAgent } = fakeFleet(...ids);
+    const supervisor = new Supervisor({ ...fleet, groups: groups.map((fields) => group(...fields)) }, { createAgent, fleetTools: server });
+    server.serve(supervisor);
+    await supervisor.start();
+    const call = (caller: string, name: string, args: object = {}) => callTool(server, server.access(caller).token, name, args);
+    const lines = (agentId: string) => supervisor.history(agentId).flatMap((event) => (event.type === 'log' ? [event.text] : []));
+    return { supervisor, fakes, call, lines };
+}
+const NO_SUCH_AGENT = (id: string) => `there is no agent "${id}" among the agents you can write to; list_agents names them`;
+describe('fleet tools: who sees whom (docs/groups.md)', () => {
+    it('list_agents names the peers with the groups shared, the caller marked; an agent in no group with anyone gets an empty list and why', async () => {
+        const { call, supervisor } = await fleetWithGroups(['eva', 'loner', 'reviewer', 'writer'], [['docs', ['writer', 'eva']], ['release', ['eva', 'reviewer']]]);
+        const listed = JSON.parse((await call('eva', 'list_agents')).text) as Record<string, unknown>[];
+        deepStrictEqual(listed.map((agent) => [agent['id'], agent['groups'], agent['you'] ?? false]), [
+            ['eva', ['docs', 'release'], true],
+            ['reviewer', ['release'], false],
+            ['writer', ['docs'], false]
+        ]);
+        const alone = await call('loner', 'list_agents');
+        strictEqual(alone.isError, false);
+        match(alone.text, /^\[\]\nYou are not in a group with anyone yet, so there is no agent you can write to/);
+        await supervisor.stop();
+    });
+    it('list_groups names the groups of the caller: id, name, topic and the members by id and name', async () => {
+        const { call, supervisor } = await fleetWithGroups(['eva', 'loner', 'reviewer'], [['release', ['eva', 'reviewer', 'gone'], { name: 'Release', topic: 'Ship it.' }]]);
+        deepStrictEqual(JSON.parse((await call('eva', 'list_groups')).text), [
+            { id: 'release', name: 'Release', topic: 'Ship it.', members: [{ id: 'eva', name: 'EVA' }, { id: 'reviewer', name: 'REVIEWER' }] }
+        ]);
+        match((await call('loner', 'list_groups')).text, /^\[\]\nYou are in no group yet/);
+        await supervisor.stop();
+    });
+    it('send_message, forward and delegate to an agent out of sight are refused with the words for no agent; a peer gets it', async () => {
+        const { call, supervisor, fakes, lines } = await fleetWithGroups(['eva', 'reviewer', 'writer'], [['docs', ['writer', 'eva']], ['release', ['eva', 'reviewer']]]);
+        const refused = await call('writer', 'send_message', { to: 'reviewer', text: 'hi' });
+        ok(refused.isError);
+        strictEqual(refused.text, NO_SUCH_AGENT('reviewer'));
+        strictEqual((await call('writer', 'send_message', { to: 'nobody', text: 'hi' })).text, NO_SUCH_AGENT('nobody'), 'the same words as for no agent');
+        match((await call('writer', 'delegate', { to: 'reviewer', text: 'do it' })).text, /^Task \S+ failed at once: there is no agent "reviewer" among the agents you can write to/);
+        deepStrictEqual(fakes.get('reviewer')?.calls, ['start'], 'nothing reaches the agent out of sight');
+        deepStrictEqual(lines('writer'), ['"reviewer" is not in a group with "writer"', '"reviewer" is not in a group with "writer"'], 'the tab of the sender says the real reason');
+        strictEqual((await call('writer', 'send_message', { to: 'eva', text: 'hi' })).isError, false);
+        await eventually(() => (fakes.get('writer')?.calls.length ?? 0) > 1);
+        match((await call('writer', 'forward', { to: 'reviewer' })).text, /^there is no agent "reviewer" among/);
+        strictEqual((await call('writer', 'forward', { to: 'eva' })).isError, false);
+        await supervisor.stop();
+    });
+    it('reply is a new exchange: refused once the two no longer share a group', async () => {
+        const { call, supervisor, fakes } = await fleetWithGroups(['eva', 'writer'], [['docs', ['writer', 'eva']]]);
+        strictEqual((await call('eva', 'send_message', { to: 'writer', text: 'hi' })).isError, false);
+        await eventually(() => (fakes.get('eva')?.calls.length ?? 0) > 1, 2_000);
+        supervisor.replaceGroup(group('docs', ['eva']));
+        const reply = await call('writer', 'reply', { text: 'hello' });
+        ok(reply.isError);
+        strictEqual(reply.text, NO_SUCH_AGENT('eva'));
+        await supervisor.stop();
+    });
+});
 describe('fleet tools: replies to what the supervisor delivers', () => {
     it('replies to a remote agent that wrote to the caller, quoting its message', async () => {
         const { server, supervisor, fake } = await fleetWithTools('alice', 'remote');
@@ -251,7 +313,7 @@ describe('fleet tools: an agent writes to another', { timeout: 30_000 }, () => {
         const bob = make('bob');
         const running = new Map([['alice', alice.agent], ['bob', bob.agent]]);
         const supervisor = new Supervisor(
-            { location: { path: workspace, source: 'argument' }, exists: true, agents: [alice.agent.agent, bob.agent.agent], groups: [] },
+            { location: { path: workspace, source: 'argument' }, exists: true, agents: [alice.agent.agent, bob.agent.agent], groups: [everyone(['alice', 'bob'])] },
             { createAgent: (agent) => running.get(agent.id) ?? alice.agent }
         );
         server.serve(supervisor);

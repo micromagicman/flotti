@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentEvent, AgentEventBody, AgentStatus, Delegation, DelegationMark, DelegationState, Quote, SendOptions } from './agent-events.js';
 import { describeError } from './describe-error.js';
+import { noSuchAgent } from './groups.js';
 import { present } from './present.js';
 /** What the tasks need of the fleet: the supervisor gives it. */
 interface DelegationFleet {
@@ -14,6 +15,8 @@ interface DelegationFleet {
     cancel(agentId: string): Promise<void>;
     /** Puts an event of flotti's own into the tab of the agent, when it is in the fleet. */
     note(agentId: string, body: AgentEventBody): void;
+    /** Whether `from` may write to `to` — the two share a group (docs/groups.md); the tab of `from` says why not. */
+    mayWrite(from: string, to: string): boolean;
 }
 /** Where a task stands right after it was given. */
 type DelegationStart = {
@@ -60,8 +63,10 @@ type TaskTurn = {
 type MessageEvent = AgentEvent & { type: 'message' };
 /** How a task ends: its state, and why when it did not complete. */
 type Outcome = { readonly state: DelegationState; readonly why?: string };
+/** What the fleet says of the agent a task goes to: its status, and whether the giver may write to it. */
+type Sight = { readonly status: AgentStatus | undefined; readonly reachable: boolean };
 /** Why a task cannot be given, by one check; nothing when this check lets it be given. */
-type RefusalCheck = (delegation: Delegation, status: AgentStatus | undefined) => string | undefined;
+type RefusalCheck = (delegation: Delegation, sight: Sight) => string | undefined;
 /** A task the agent asks about that it never gave. */
 class UnknownDelegationError extends Error {}
 /** Turn ends that are a pause, not an end: the agent waits for a person and goes on after. */
@@ -76,11 +81,15 @@ const OUTCOMES: ReadonlyMap<string, Outcome> = new Map<string, Outcome>([
     ['max_tokens', { state: 'failed', why: 'the agent ran out of tokens' }],
     ['error', { state: 'failed', why: 'the turn of the agent on it ended with an error' }]
 ]);
-/** Why a task cannot be given, checked in this order: the first that says something is the reason. */
+/**
+ * Why a task cannot be given, checked in this order: the first that says
+ * something is the reason. An agent the giver cannot write to is refused with
+ * the words for one that does not exist (docs/groups.md).
+ */
 const REFUSAL_CHECKS: readonly RefusalCheck[] = [
-    ({ to }, status) => status === undefined ? `there is no agent "${to}" in the fleet` : undefined,
     ({ from, to }) => to === from ? 'an agent does not give tasks to itself' : undefined,
-    ({ to }, status) => status === 'stopped' ? `"${to}" is stopped` : undefined,
+    ({ to }, { status, reachable }) => status === undefined || !reachable ? noSuchAgent(to) : undefined,
+    ({ to }, { status }) => status === 'stopped' ? `"${to}" is stopped` : undefined,
     ({ deadline }) => deadline !== undefined && Number.isNaN(Date.parse(deadline)) ? `the deadline "${deadline}" is not a time` : undefined,
     ({ deadline }) => deadline !== undefined && Date.parse(deadline) <= Date.now() ? 'its deadline has passed already' : undefined
 ];
@@ -167,8 +176,7 @@ class Delegations {
         const task = this.newTask(from, to, text, options);
         const refusal = this.refusal(task.view);
         if (refusal !== undefined) {
-            this.settle(task, 'failed', refusal, options.tellFailure === true);
-            return Promise.resolve({ delegation: task.view, queued: false });
+            return Promise.resolve(this.refused(task, refusal, options.tellFailure === true));
         }
         this.show(task);
         this.arm(task);
@@ -240,16 +248,32 @@ class Delegations {
         this.tasks.set(id, task);
         return task;
     }
+    /**
+     * A task refused at the door: failed, in the tab of the giver only — it
+     * never went the other agent's way, and one out of sight is not told of it.
+     */
+    private refused(task: Task, why: string, tell: boolean): DelegationStart {
+        task.view = ended(task.view, 'failed', why);
+        this.fleet.note(task.view.from, { type: 'delegation', ...task.view });
+        if (tell) {
+            this.tellGiver(task);
+        }
+        return { delegation: task.view, queued: false };
+    }
     /** Why the task cannot be given at all; nothing when it can. */
     private refusal(delegation: Delegation): string | undefined {
-        const status = this.fleet.status(delegation.to);
+        const sight = this.sight(delegation);
         for (const check of REFUSAL_CHECKS) {
-            const why = check(delegation, status);
+            const why = check(delegation, sight);
             if (why !== undefined) {
                 return why;
             }
         }
         return undefined;
+    }
+    /** The agent the task goes to, as the fleet sees it from the giver; a task to oneself reaches nobody. */
+    private sight({ from, to }: Delegation): Sight {
+        return { status: this.fleet.status(to), reachable: to !== from && this.fleet.mayWrite(from, to) };
     }
     /**
      * Sends the task to the agent. A refusal within the wait fails the task at

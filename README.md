@@ -453,7 +453,8 @@ and `session/load`. A bare Claude Code or Codex sees them as `mcp__flotti__…`:
 
 | Tool           | What it does                                                                          |
 |----------------|---------------------------------------------------------------------------------------|
-| `list_agents`  | the agents of the fleet — id, name, description, harness, status; the caller is marked `you`, administrators `admin` |
+| `list_agents`  | the agents the caller can write to — those in a group with it — id, name, description, harness, status, `groups` it shares with each; the caller is marked `you`, administrators `admin`; an agent in no group with anyone gets an empty list and a sentence saying so |
+| `list_groups`  | the groups the caller is in: `id`, `name`, `topic`, `members` — id and name of each member that is in the fleet |
 | `send_message` | sends a message to another agent: `to` — its id, `text`                                |
 | `reply`        | answers the agent whose message came last, quoting it                                  |
 | `forward`      | forwards the last message another agent sent, as it was, to another agent; `comment` goes before it |
@@ -484,6 +485,18 @@ deadline fails, and the agent working on it is told to stop. Both tabs show the 
 it to whom, where it stands, and the result or the reason once it is over (#51). An A2A agent gives and
 takes back tasks through its inbox: see [docs/a2a-inbox.md](https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md); who is in the fleet it
 learns through [the fleet extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md).
+
+**Agents see and write to each other only inside a group** ([docs/groups.md](https://github.com/micromagicman/flotti/blob/main/docs/groups.md), #144, #150).
+`list_agents` and the roster of a remote agent name the peers — the members of every group the agent is
+in — and `send_message`, `reply`, `forward`, `delegate`, `to` of the inbox and the actions of an
+administrator reach a peer only: any other agent is refused with the words for one that does not exist,
+`there is no agent "x" among the agents you can write to; list_agents names them`, so an agent outside
+a group learns nothing of the members — the tab of the sender, which a person reads, says the real
+reason, `"x" is not in a group with "eva"`. The check is at the door: what comes back from an exchange
+that was allowed — the answer at the end of a turn, the outcome of a task — reaches the agent that
+started it even when the two no longer share a group by then. A person is bound by nothing: the message
+of a tab and the broadcast go to any agent. A fleet without groups is a fleet where no agent sees
+another; a person makes groups in the settings or by hand (`groups/` in [The fleet](#the-fleet)).
 
 The server speaks MCP over HTTP (the streamable transport, with plain JSON answers) on a free port of
 `127.0.0.1`, and every agent gets a token of its own in the `Authorization` header: the token tells who
@@ -556,7 +569,9 @@ by default there are none. An administrator gets two more tools:
 | `clear_context`  | starts the conversation of an agent anew: a local agent gets a new ACP session, a remote one a new `contextId`; what it is doing now is cancelled |
 
 A remote administrator asks the same through [the inbox](https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md#requests-of-an-administrator).
-An administrator may name itself; the action is then done once the turn it asked in is over.
+An administrator may name itself; the action is then done once the turn it asked in is over. It acts on
+the agents it sees — those in a group with it, as `list_agents` names them — and on itself; an
+administrator for the whole fleet is put in every group ([docs/groups.md](https://github.com/micromagicman/flotti/blob/main/docs/groups.md)).
 Whether the caller may is decided by flotti: an agent that is not an administrator is refused, with
 the reason, and nothing happens. No tool gives or takes the role — only a person does, in the manifest
 or the settings. A cleared context drops the session only: the tab keeps its history, with a divider
@@ -673,9 +688,10 @@ agent: the dashboard gets the same events and drives it the same way.
   like any other. A broken inbox is reconnected to for as long as the agent is connected. Without the
   extension an A2A agent has no way to speak first: its tab shows only its answers.
 - **Who is in the fleet.** An agent that declares the [fleet extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md) next to the
-  inbox gets the roster of the fleet — the same entries `list_agents` gives a local agent, its own marked
-  `you` and administrators `admin` — with the inbox request, and again whenever the fleet changes. So it
-  can write to any agent without waiting for that one to write first.
+  inbox gets the roster of the fleet — the same entries `list_agents` gives a local agent, the agents in
+  a group with it, its own marked `you` and administrators `admin`, and its groups beside them — with the
+  inbox request, and again whenever the fleet or a group changes. So it can write to any peer without
+  waiting for that one to write first.
 
 ### Over SSH
 

@@ -3,7 +3,7 @@ import { after, test } from 'node:test';
 import type { AgentEvent, Delegation } from '../src/agent-events.js';
 import { FleetMcpServer } from '../src/fleet-mcp.js';
 import { Supervisor, UnknownDelegationError } from '../src/supervisor.js';
-import { fakeFleet } from './fake-fleet-agent.js';
+import { fakeFleet, group } from './fake-fleet-agent.js';
 import type { FakeFleetAgent } from './fake-fleet-agent.js';
 function supervised(...ids: string[]) {
     const { fleet, fakes, createAgent } = fakeFleet(...ids);
@@ -63,7 +63,7 @@ test('a task to an agent that is not there, is stopped, or is the giver fails at
     await supervisor.start();
     await supervisor.stopAgent('b');
     const nobody = await supervisor.delegate('a', 'nobody', 'hi');
-    deepStrictEqual([nobody.delegation.state, nobody.delegation.result], ['failed', 'there is no agent "nobody" in the fleet']);
+    deepStrictEqual([nobody.delegation.state, nobody.delegation.result], ['failed', 'there is no agent "nobody" among the agents you can write to; list_agents names them']);
     const stopped = await supervisor.delegate('a', 'b', 'hi');
     deepStrictEqual([stopped.delegation.state, stopped.delegation.result], ['failed', '"b" is stopped']);
     const self = await supervisor.delegate('a', 'a', 'hi');
@@ -75,6 +75,33 @@ test('a task to an agent that is not there, is stopped, or is the giver fails at
     await pause(10);
     deepStrictEqual(fake('a').calls, ['start'], 'the caller has the failure already: no message besides');
     deepStrictEqual(cards(supervisor, 'a').map((card) => card.state), ['failed', 'failed', 'failed', 'working', 'failed'], 'the last one was on its way');
+});
+test('a task to an agent in no group with the giver fails at once with the words for no agent; the tab of the giver says why (docs/groups.md)', async () => {
+    const { fleet, fakes, createAgent } = fakeFleet('a', 'b', 'c');
+    const supervisor = new Supervisor({ ...fleet, groups: [group('pair', ['a', 'b'])] }, { createAgent, queuedAfterMs: 50 });
+    await supervisor.start();
+    const outOfSight = await supervisor.delegate('a', 'c', 'hi');
+    const nobody = await supervisor.delegate('a', 'nobody', 'hi');
+    strictEqual(outOfSight.delegation.state, 'failed');
+    strictEqual(outOfSight.delegation.result, 'there is no agent "c" among the agents you can write to; list_agents names them');
+    strictEqual(nobody.delegation.result, outOfSight.delegation.result?.replace('"c"', '"nobody"'), 'the same words: the agent learns nothing of who exists');
+    deepStrictEqual(supervisor.history('a').flatMap((event) => (event.type === 'log' ? [event.text] : [])), ['"c" is not in a group with "a"']);
+    deepStrictEqual(fakes.get('c')?.calls, ['start'], 'nothing reaches the agent out of sight');
+    deepStrictEqual(cards(supervisor, 'c'), [], 'and its tab shows no task');
+    const peer = await supervisor.delegate('a', 'b', 'hi');
+    ok(peer.delegation.state !== 'failed', 'a peer gets the task');
+});
+test('the outcome of a task comes back to the giver after the membership changed: the task was given while they shared a group', async () => {
+    const { supervisor, fake } = supervised('a', 'b');
+    await supervisor.start();
+    fake('b').slow = true;
+    const { delegation } = await supervisor.delegate('a', 'b', 'rerun the e2e job');
+    supervisor.replaceGroup(group('everyone', ['a']));
+    fake('b').finish('all green');
+    await eventually(() => fake('a').calls.length > 1);
+    deepStrictEqual(fake('a').calls, ['start', 'send all green from b']);
+    deepStrictEqual(fake('a').options[0]?.delegation, { id: delegation.delegationId, state: 'completed' });
+    deepStrictEqual(cards(supervisor, 'a').map((card) => card.state), ['working', 'completed']);
 });
 test('taking back a task the agent works on stops the agent; the giver gets no outcome for it', async () => {
     const { supervisor, fake } = supervised('a', 'b');
@@ -205,7 +232,7 @@ test('the tools give a task, return its id, and take it back', async () => {
     match((await callTool(server, 'b', 'cancel_delegation', { id })).text, /"b" gave no task/);
     const failed = await callTool(server, 'a', 'delegate', { to: 'nobody', text: 'x' });
     ok(failed.isError);
-    match(failed.text, /^Task \S+ failed at once: there is no agent "nobody" in the fleet$/);
+    match(failed.text, /^Task \S+ failed at once: there is no agent "nobody" among the agents you can write to; list_agents names them$/);
     match((await callTool(server, 'a', 'delegate', { to: 'b', text: 'x', deadline_minutes: -1 })).text, /deadline_minutes must be/);
     await supervisor.stop();
 });

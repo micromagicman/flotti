@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { ConfigurationError } from '../src/errors.js';
 import { readGroup } from '../src/fleet.js';
-import { canReach, groupsOf, peersOf } from '../src/groups.js';
+import { canReach, groupView, groupsOf, noSuchAgent, peersOf, sharedGroups } from '../src/groups.js';
 import type { Group } from '../src/types.js';
 import { HOME, LOCAL, REMOTE, agent, failure, fleetDirectory, load } from './fleet-helpers.js';
 /** Writes a group directory with the file given as text or as an object. */
@@ -130,5 +130,28 @@ describe('groupsOf, peersOf and canReach', () => {
         ok(!canReach(GROUPS, 'eva', 'nobody'));
         ok(!canReach([], 'eva', 'tester'), 'a fleet without groups: nobody sees anybody');
         ok(canReach([of('r', ['eva', 'gone'])], 'eva', 'gone'), 'membership only: whether the agent is in the fleet is for the supervisor to say');
+    });
+    it('sharedGroups: the groups both are in, in the order of the groups; none for an agent alone', () => {
+        deepStrictEqual(sharedGroups(GROUPS, 'eva', 'reviewer'), ['release']);
+        deepStrictEqual(sharedGroups(GROUPS, 'reviewer', 'eva'), ['release']);
+        deepStrictEqual(sharedGroups([of('a', ['eva', 'x']), of('b', ['x', 'eva'])], 'eva', 'x'), ['a', 'b']);
+        deepStrictEqual(sharedGroups(GROUPS, 'writer', 'reviewer'), []);
+        deepStrictEqual(sharedGroups(GROUPS, 'eva', 'nobody'), []);
+    });
+});
+describe('what an agent is told of a group, and of an agent it cannot write to', () => {
+    it('groupView: the members by id and name, those in the fleet; the topic when there is one', () => {
+        const names = new Map([['eva', 'Eva'], ['reviewer', 'The reviewer']]);
+        const nameOf = (id: string) => names.get(id);
+        deepStrictEqual(groupView({ ...of('release', ['eva', 'gone', 'reviewer']), topic: 'Ship it.' }, nameOf), {
+            id: 'release',
+            name: 'release',
+            topic: 'Ship it.',
+            members: [{ id: 'eva', name: 'Eva' }, { id: 'reviewer', name: 'The reviewer' }]
+        });
+        deepStrictEqual(groupView(of('empty', []), nameOf), { id: 'empty', name: 'empty', members: [] });
+    });
+    it('noSuchAgent: the same words whether the agent is out of sight or does not exist', () => {
+        strictEqual(noSuchAgent('x'), 'there is no agent "x" among the agents you can write to; list_agents names them');
     });
 });

@@ -12,6 +12,8 @@ import type { AgentSummary, Delivery, GroupSummary, Harness, MemoryStatus } from
 import { FleetAdmin } from './fleet-admin.js';
 import type { AdminFleet, AdminOutcome } from './fleet-admin.js';
 import type { DeliveredMessage, FleetToolsAccess } from './fleet-mcp.js';
+import { canReach, groupView, groupsOf, sharedGroups } from './groups.js';
+import type { GroupView, PeerSummary } from './groups.js';
 import { LocalAgentProcess } from './local-agent.js';
 import { present } from './present.js';
 import type { Agent, Fleet, Group, LocalAgent, LocalAgentAdapter } from './types.js';
@@ -136,6 +138,8 @@ function groupOrder(left: Group, right: Group): number {
 function groupSummary(group: Group): GroupSummary {
     return { id: group.id, name: group.name, ...present('topic', group.topic), members: group.members };
 }
+/** The fleet as one remote agent is told of it (docs/a2a-fleet.md): its peers and its groups. */
+type FleetView = { readonly roster: () => PeerSummary[]; readonly groups: () => GroupView[] };
 /**
  * How an agent of the fleet runs: a local process, or a remote agent whose
  * requests as an administrator go to `onAdminRequest`.
@@ -143,11 +147,11 @@ function groupSummary(group: Group): GroupSummary {
 function defaultAgent(
     fleetTools: SupervisorOptions['fleetTools'],
     onAdminRequest: (agentId: string, request: AdminRequest) => void,
-    roster: () => AgentSummary[]
+    fleetOf: (agentId: string) => FleetView
 ): (agent: Agent) => FleetAgent {
     return (agent) => agent.kind === 'local'
         ? new LocalAgentProcess(agent, fleetTools === undefined ? {} : { fleetTools: fleetTools.access(agent.id) })
-        : new A2AAgent(agent, { onAdminRequest: (request) => onAdminRequest(agent.id, request), fleet: { roster } });
+        : new A2AAgent(agent, { onAdminRequest: (request) => onAdminRequest(agent.id, request), fleet: fleetOf(agent.id) });
 }
 function describeError(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -198,6 +202,14 @@ function endsTurn(event: AgentEvent): boolean {
 function turnAnswerMark(turnAnswer: boolean): { turnAnswer?: true } {
     return turnAnswer ? { turnAnswer: true } : {};
 }
+/** The ids of the groups the agent shares with another one; with itself, the groups it is in. */
+function groupsShared(groups: readonly Group[], agentId: string, other: string): string[] {
+    return agentId === other ? groupsOf(groups, agentId).map((group) => group.id) : sharedGroups(groups, agentId, other);
+}
+/** The real reason a message was refused, as the tab of the sender says it to a person (docs/groups.md). */
+function notInAGroup(from: string, to: string): string {
+    return `"${to}" is not in a group with "${from}"`;
+}
 /**
  * The fleet at work: every agent started, its events numbered and kept, so a
  * page that connects later — or loses its connection for a while — gets what
@@ -226,7 +238,7 @@ class Supervisor {
     private groupList = new Map<string, Group>();
     constructor(fleet: Fleet, options: SupervisorOptions = {}) {
         this.createAgent = options.createAgent
-            ?? defaultAgent(options.fleetTools, (agentId, request) => void this.adminRequest(agentId, request), () => this.agents());
+            ?? defaultAgent(options.fleetTools, (agentId, request) => void this.adminRequest(agentId, request), (agentId) => this.fleetView(agentId));
         this.admin = new FleetAdmin(this.adminFleet(), adminOptions(options.confirmAdminActions));
         const history = historyTuning(options);
         this.historyLimit = history.limit;
@@ -274,7 +286,57 @@ class Supervisor {
     }
     /** The groups of the fleet, by id. */
     groups(): GroupSummary[] {
-        return [...this.groupList.values()].sort(groupOrder).map(groupSummary);
+        return this.groupsInOrder().map(groupSummary);
+    }
+    /**
+     * The agents this one sees (docs/groups.md): the members of every group it
+     * is in — with the ids of the groups the two share — and itself; none at
+     * all when it is in no group with anyone, so that it does not take the
+     * fleet for empty by mistake.
+     */
+    peers(agentId: string): PeerSummary[] {
+        if (!this.hasPeers(agentId)) {
+            return [];
+        }
+        const groups = this.groupsInOrder();
+        return this.agents().flatMap((agent) => {
+            const shared = groupsShared(groups, agentId, agent.id);
+            return shared.length === 0 ? [] : [{ ...agent, groups: shared }];
+        });
+    }
+    /** The groups the agent is in, as it sees them: the members by id and name. */
+    groupsOf(agentId: string): GroupView[] {
+        return groupsOf(this.groupsInOrder(), agentId).map((group) => groupView(group, (id) => this.members.get(id)?.agent.name));
+    }
+    /** Whether `from` may write to `to`: the two share a group (docs/groups.md). */
+    canReach(from: string, to: string): boolean {
+        return canReach(this.groupsInOrder(), from, to);
+    }
+    /**
+     * Whether `from` may write to `to`; when it may not because of the groups,
+     * the tab of `from` says so, for a person to read — the agent itself is
+     * told only that there is no such agent among those it can write to.
+     */
+    mayWrite(from: string, to: string): boolean {
+        if (this.canReach(from, to)) {
+            return true;
+        }
+        const sender = this.members.get(from);
+        if (sender !== undefined && this.members.has(to)) {
+            this.say(sender, notInAGroup(from, to));
+        }
+        return false;
+    }
+    /** Whether the agent is in a group with anyone of the fleet. */
+    private hasPeers(agentId: string): boolean {
+        return this.agents().some((agent) => canReach(this.groupsInOrder(), agentId, agent.id));
+    }
+    private groupsInOrder(): Group[] {
+        return [...this.groupList.values()].sort(groupOrder);
+    }
+    /** The fleet as a remote agent is told of it. */
+    private fleetView(agentId: string): FleetView {
+        return { roster: () => this.peers(agentId), groups: () => this.groupsOf(agentId) };
     }
     /**
      * The group as its file describes it.
@@ -454,7 +516,8 @@ class Supervisor {
                 if (member !== undefined) {
                     this.put(member, body);
                 }
-            }
+            },
+            mayWrite: (from, to) => this.mayWrite(from, to)
         };
     }
     /**
@@ -510,6 +573,7 @@ class Supervisor {
     private adminFleet(): AdminFleet {
         return {
             agents: () => this.agents(),
+            mayWrite: (from, to) => this.mayWrite(from, to),
             restart: (agentId) => this.restart(agentId),
             clearContext: (agentId) => this.clearContext(agentId),
             note: (agentId, body) => {
@@ -752,29 +816,42 @@ class Supervisor {
      * Sends on what an agent said to another one — a message of its own, or,
      * with `replyTo`, its answer to a message of that one. `turnAnswer` marks
      * the answer flotti sends back at the end of a turn: the receiver owes none
-     * to it. The sender does not wait for the receiver: a message that cannot
-     * be delivered is a line in the tab of the sender, saying why.
+     * to it, and it goes back even when the two no longer share a group — the
+     * exchange was allowed on its way in (docs/groups.md); a message of the
+     * agent's own is checked at this door. The sender does not wait for the
+     * receiver: a message that cannot be delivered is a line in the tab of the
+     * sender, saying why.
      */
     private forward(sender: Member, to: string, text: string, replyTo?: Quote, turnAnswer = false): void {
-        const from = sender.agent.id;
         const receiver = this.members.get(to);
-        const failed = (why: string): void => {
-            // Still in the fleet: it may have been removed while the message went.
-            if (this.members.get(from) === sender) {
-                this.say(sender, `could not deliver the ${replyTo === undefined ? 'message' : 'answer'} to "${to}": ${why}`);
-            }
-        };
         if (receiver === undefined) {
-            failed('there is no such agent in the fleet');
-        } else if (receiver === sender) {
-            failed('an agent does not send messages to itself');
-        } else {
-            void this.handOn(receiver, from, text, replyTo, turnAnswer).then((error) => {
-                if (error !== undefined) {
-                    failed(error);
-                }
-            });
+            this.undelivered(sender, to, replyTo, 'there is no such agent in the fleet');
+            return;
         }
+        const refusal = this.forwardRefusal(sender, receiver, turnAnswer);
+        if (refusal !== undefined) {
+            this.undelivered(sender, to, replyTo, refusal);
+            return;
+        }
+        void this.handOn(receiver, sender.agent.id, text, replyTo, turnAnswer).then((error) => {
+            if (error !== undefined) {
+                this.undelivered(sender, to, replyTo, error);
+            }
+        });
+    }
+    /** A message that did not reach the receiver is a line in the tab of the sender, saying why. */
+    private undelivered(sender: Member, to: string, replyTo: Quote | undefined, why: string): void {
+        // Still in the fleet: it may have been removed while the message went.
+        if (this.members.get(sender.agent.id) === sender) {
+            this.say(sender, `could not deliver the ${replyTo === undefined ? 'message' : 'answer'} to "${to}": ${why}`);
+        }
+    }
+    /** Why the message cannot be sent on to the receiver at all; nothing when it can. */
+    private forwardRefusal(sender: Member, receiver: Member, turnAnswer: boolean): string | undefined {
+        if (receiver === sender) {
+            return 'an agent does not send messages to itself';
+        }
+        return turnAnswer || this.canReach(sender.agent.id, receiver.agent.id) ? undefined : notInAGroup(sender.agent.id, receiver.agent.id);
     }
     /**
      * Hands a message of one agent to another and, once it is taken, tells the

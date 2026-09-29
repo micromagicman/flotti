@@ -120,12 +120,20 @@ function memoryNotes(fleet: string, id: string): void {
     writeFileSync(join(memory, 'index.md'), '# Home\nStart at [[Release process]]; see also [[missing note]].\n\n<b>not bold</b>\n');
     writeFileSync(join(memory, 'process', 'release.md'), '# Release process\n- [x] build\n- [ ] tag it\n\nBack [[Home|home]].\n');
 }
+/** A group of the fleet (docs/groups.md): its members see and reach one another. */
+function groupOf(fleet: string, id: string, members: readonly string[]): void {
+    const directory = join(fleet, 'groups', id);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'group.json'), JSON.stringify({ name: id, members }));
+}
 test.beforeAll(async () => {
     const fleet = join(workspace, 'fleet');
     localAgent(fleet, 'claude', 'claude-code', { mcpHttp: true });
     memoryNotes(fleet, 'claude');
     localAgent(fleet, 'codex', 'codex', { mcpHttp: true });
     await remoteAgent(fleet, 'relay');
+    // Agents write to one another only inside a group: the three are one team.
+    groupOf(fleet, 'team', ['claude', 'codex', 'relay']);
     telegram = await FakeTelegram.start();
     url = await startFlotti(fleet);
 });
