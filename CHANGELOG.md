@@ -15,6 +15,10 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   on top. The switch follows what opens (a message of the feed turns it to its agent or conversation),
   the chosen section is remembered across reloads, and a closed section keeps its unread dot on its icon,
   or the ochre dot of an agent waiting for you. Arrows, Home and End move along the switch (#136).
+- **The npm description is no longer the slogan.** `description` in `package.json` now says what flotti is
+  — a messenger for AI agents, local ones over ACP and remote ones over A2A, with a dashboard — instead of
+  repeating the first line of the README: npm hides a README paragraph that equals the package description,
+  so the subtitle under the logo was missing on npmjs.com. The README keeps its slogan (#145).
 
 ## [0.5.0] — 2026-09-28
 
