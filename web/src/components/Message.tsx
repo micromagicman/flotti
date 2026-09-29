@@ -215,5 +215,5 @@ function Message(props: MessageProps) {
         </div>
     );
 }
-export { Message, MessageBody, ReplyPreview };
+export { Message, MessageBody, MessageToolbar, ReplyPreview };
 export type { MessageActions, MessageProps, QuoteActions };

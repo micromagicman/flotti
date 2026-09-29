@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AgentSummary } from '../../../src/dashboard-protocol.js';
+import type { AgentSummary, GroupSummary } from '../../../src/dashboard-protocol.js';
 import { poorText } from '../health.js';
 import { useT } from '../i18n/I18n.js';
 import { ConnectionHealthView } from './ConnectionHealth.js';
@@ -45,8 +45,24 @@ function RoleFact({ admin }: { readonly admin: boolean | undefined }) {
         ? <><dt>{t.agent.role}</dt><dd><span className="admin-badge" title={t.agent.adminHint}>{t.agent.admin}</span></dd></>
         : null;
 }
-/** The agent itself: what it is for, its type, its harness, its memory, its role. */
-function AboutAgent({ agent }: { readonly agent: AgentSummary }) {
+type GroupsProps = { readonly groups: readonly GroupSummary[]; readonly onOpenGroup: (groupId: string) => void };
+/** The groups the agent is in (docs/groups.md, #152): the agents it sees; none, and it sees no other agent. */
+function GroupsFact({ groups, onOpenGroup }: GroupsProps) {
+    const t = useT();
+    return (
+        <>
+            <dt>{t.agent.groups}</dt>
+            <dd className="agent-groups">
+                {groups.length === 0 ? <span className="muted">{t.agent.noGroups}</span> : null}
+                {groups.map((group) => (
+                    <button key={group.id} type="button" className="btn btn-xs" data-group={group.id} aria-label={t.agent.openGroup(group.name)} onClick={() => onOpenGroup(group.id)}>{group.name}</button>
+                ))}
+            </dd>
+        </>
+    );
+}
+/** The agent itself: what it is for, its type, its harness, its memory, its role, its groups. */
+function AboutAgent({ agent, groups, onOpenGroup }: { readonly agent: AgentSummary } & GroupsProps) {
     const t = useT();
     return (
         <section className="details-section" aria-label={t.agent.about}>
@@ -59,6 +75,7 @@ function AboutAgent({ agent }: { readonly agent: AgentSummary }) {
                 <dd><Harness agent={agent} /></dd>
                 {agent.memory === undefined ? null : <><dt>{t.agent.memory}</dt><dd><Memory memory={agent.memory} /></dd></>}
                 <RoleFact admin={agent.admin} />
+                <GroupsFact groups={groups} onOpenGroup={onOpenGroup} />
             </dl>
         </section>
     );
@@ -82,7 +99,7 @@ function AboutConnection({ agent }: { readonly agent: AgentSummary }) {
  * memory (#101), the role, and the connection of a remote agent. A panel on the right of the
  * chat, over it on a phone; the chat stays in sight and can be written to.
  */
-function AgentDetails({ agent, id, onClose }: { readonly agent: AgentSummary; readonly id: string; readonly onClose: () => void }) {
+function AgentDetails({ agent, id, onClose, groups, onOpenGroup }: { readonly agent: AgentSummary; readonly id: string; readonly onClose: () => void } & GroupsProps) {
     const t = useT();
     const close = useRef<HTMLButtonElement>(null);
     useEffect(() => {
@@ -94,7 +111,7 @@ function AgentDetails({ agent, id, onClose }: { readonly agent: AgentSummary; re
                 <h2>{t.agent.details}</h2>
                 <button ref={close} type="button" className="btn btn-sm btn-ghost" onClick={onClose}>{t.agent.closeDetails}</button>
             </div>
-            <AboutAgent agent={agent} />
+            <AboutAgent agent={agent} groups={groups} onOpenGroup={onOpenGroup} />
             <AboutConnection agent={agent} />
         </aside>
     );

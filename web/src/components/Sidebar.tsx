@@ -1,17 +1,20 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import type { JSX, KeyboardEvent } from 'react';
 import type { AgentStatus } from '../../../src/agent-events.js';
-import type { AgentSummary } from '../../../src/dashboard-protocol.js';
+import type { AgentSummary, GroupSummary } from '../../../src/dashboard-protocol.js';
+import { groupTabId } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import { shownInSidebar } from '../conversations.js';
 import type { Conversation } from '../conversations.js';
 import type { AgentFeed } from '../feed.js';
 import { FLEET_FEED_SIZE } from '../fleet-feed.js';
-import { AgentMark, PairMarks, nameOf } from './AgentMark.js';
+import type { GroupFeed } from '../groups.js';
+import { AgentMark, GroupMarks, PairMarks, nameOf } from './AgentMark.js';
 import { PoorConnectionMark } from './ConnectionHealth.js';
 import { StatusBadge } from './StatusBadge.js';
 import { useT } from '../i18n/I18n.js';
-import { SECTIONS, hasUnread, markerDot, markerOf, sectionForKey, statusOf } from '../sidebar-sections.js';
+import { errorText } from '../i18n/errors.js';
+import { SECTIONS, groupLastSeq, hasUnread, markerDot, markerOf, sectionForKey, statusOf } from '../sidebar-sections.js';
 import type { Marker, Section } from '../sidebar-sections.js';
 /** How many conversations the sidebar lists by name; the rest are in the list of them all. */
 const CONVERSATIONS_SHOWN = 4;
@@ -20,7 +23,12 @@ type SidebarProps = {
     readonly feeds: Readonly<Record<string, AgentFeed>>;
     readonly colors: AgentColors;
     readonly conversations: readonly Conversation[];
-    /** Last event seen of each agent, and how many messages of each conversation: to mark tabs with something new. */
+    /** The groups of the fleet (docs/groups.md, #152) and the history of each, by its id. */
+    readonly groups: readonly GroupSummary[];
+    readonly groupFeeds: Readonly<Record<string, GroupFeed>>;
+    /** Puts every agent of the fleet in one group, when there is none; rejects saying why it did not. */
+    readonly onEveryone: () => Promise<void>;
+    /** Last event seen of each agent, of each group, and how many messages of each conversation: to mark tabs with something new. */
     readonly seenSeq: Readonly<Record<string, number>>;
     readonly selected: string;
     readonly broadcastId: string;
@@ -119,6 +127,74 @@ function PairTab({ conversation, agents, colors, unread, selected, onSelect }: P
 function lastSeqOf(feed: AgentFeed | undefined): number {
     return feed?.lastSeq ?? 0;
 }
+type GroupTabProps = Pick<SidebarProps, 'agents' | 'colors'> & {
+    readonly group: GroupSummary;
+    readonly messages: number;
+    readonly unread: boolean;
+    readonly selected: boolean;
+    readonly onSelect: (tab: string) => void;
+};
+/** The tab of a group (#152): the marks of its members in a row, its name, how many members and messages. */
+function GroupTab({ group, messages, unread, selected, onSelect, agents, colors }: GroupTabProps) {
+    const t = useT();
+    const id = groupTabId(group.id);
+    return (
+        <button type="button" role="tab" className="tab tab-group" aria-selected={selected} data-group={group.id} title={group.name}
+            aria-label={t.sidebar.groupTab(group.name, group.members.length, messages)} onClick={() => onSelect(id)}>
+            <span className="tab-name">
+                <GroupMarks members={group.members} agents={agents} colors={colors} />
+                <span className="tab-label">{group.name}</span>
+                {unread ? <span className="unread" aria-label={t.sidebar.newMessages} /> : null}
+            </span>
+            <span className="tab-hint">{t.sidebar.groupHint(group.members.length, messages)}</span>
+        </button>
+    );
+}
+/** The one click that makes the group: what it is doing, or why it could not. */
+function useEveryone(onEveryone: () => Promise<void>) {
+    const [making, setMaking] = useState(false);
+    const [error, setError] = useState<string>();
+    const t = useT();
+    const make = (): void => {
+        setMaking(true);
+        setError(undefined);
+        onEveryone().catch((reason: unknown) => setError(errorText(reason, t))).finally(() => setMaking(false));
+    };
+    return { making, error, make };
+}
+/**
+ * A fleet with agents but no group (docs/groups.md, open question 2): the
+ * section says the agents do not see each other, and one click puts every
+ * one of them in one group «Everyone». Gone as soon as a group exists.
+ */
+function EveryoneOffer({ onEveryone }: Pick<SidebarProps, 'onEveryone'>) {
+    const { making, error, make } = useEveryone(onEveryone);
+    const t = useT();
+    return (
+        <div className="side-empty" role="note">
+            <p><b>{t.sidebar.noGroups}</b></p>
+            <p className="muted">{t.sidebar.noGroupsWhy}</p>
+            <button type="button" className="btn btn-sm btn-primary" disabled={making} onClick={make}>{making ? t.sidebar.makingEveryone : t.sidebar.everyone}</button>
+            {error === undefined ? null : <p className="error" role="alert">{error}</p>}
+        </div>
+    );
+}
+type GroupTabsProps = Pick<SidebarProps, 'agents' | 'colors' | 'groups' | 'groupFeeds' | 'seenSeq' | 'selected' | 'onSelect' | 'onEveryone'>;
+/** Every group of the fleet; a fleet with agents but no group gets the offer instead. */
+function GroupTabs({ agents, colors, groups, groupFeeds, seenSeq, selected, onSelect, onEveryone }: GroupTabsProps) {
+    if (groups.length === 0 && agents.length > 0) {
+        return <EveryoneOffer onEveryone={onEveryone} />;
+    }
+    return (
+        <>
+            {groups.map((group) => (
+                <GroupTab key={group.id} group={group} messages={groupFeeds[group.id]?.messages.length ?? 0} agents={agents} colors={colors}
+                    selected={groupTabId(group.id) === selected} onSelect={onSelect}
+                    unread={hasUnread(groupTabId(group.id), selected, groupLastSeq(groupFeeds, group), seenSeq)} />
+            ))}
+        </>
+    );
+}
 type ConversationTabsProps = Pick<SidebarProps, 'agents' | 'colors' | 'conversations' | 'seenSeq' | 'selected' | 'conversationsId' | 'onSelect'>;
 /**
  * The newest conversations by name, then the list of them all when there are
@@ -166,11 +242,12 @@ function AgentTabs({ agents, feeds, colors, seenSeq, selected, onSelect }: Pick<
 const ICONS: Readonly<Record<Section, JSX.Element>> = {
     fleet: <><path d="M3 17V11Q6.5 13 7 17Z" /><path d="M9 17V7.5Q13.5 10.5 14 17Z" /><path d="M16 17V3.5Q21 8 21.5 17Z" /><path d="M3 20.5H21.5" /></>,
     agents: <><circle cx="12" cy="8" r="4" /><path d="M4 20.5c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5" /></>,
+    groups: <><circle cx="9" cy="8" r="3.4" /><path d="M2.5 20c0-3.6 2.9-5.6 6.5-5.6s6.5 2 6.5 5.6" /><circle cx="16.5" cy="9" r="2.7" /><path d="M15.8 14.4c3.3.2 5.7 2.1 5.7 5.3" /></>,
     conversations: <><path d="M3 4.5h12v8.5H8l-5 3.5z" /><path d="M11 16h6.5l3.5 3v-10h-3" /></>
 };
 function useSectionLabel(): (section: Section) => string {
     const t = useT();
-    return (section) => ({ fleet: t.sidebar.fleet, agents: t.sidebar.agents, conversations: t.sidebar.conversations })[section];
+    return (section) => ({ fleet: t.sidebar.fleet, agents: t.sidebar.agents, groups: t.sidebar.groups, conversations: t.sidebar.conversations })[section];
 }
 /** In words, what the dot of a closed section says. */
 function markerWords(sidebar: ReturnType<typeof useT>['sidebar'], marker: Marker | undefined): string[] {
@@ -210,7 +287,7 @@ function RailTab({ section, open, marker, onSection, tabRef }: RailTabProps) {
         </button>
     );
 }
-type RailProps = Pick<SidebarProps, 'section' | 'onSection' | 'agents' | 'feeds' | 'conversations' | 'seenSeq' | 'selected'>;
+type RailProps = Pick<SidebarProps, 'section' | 'onSection' | 'agents' | 'feeds' | 'conversations' | 'groups' | 'groupFeeds' | 'seenSeq' | 'selected'>;
 /**
  * The switch of the sections (#136): a rail of icons at the left edge of the
  * sidebar, a row on a phone. One stop of Tab; the arrows, Home and End move
@@ -236,12 +313,14 @@ function Rail({ section, onSection, ...input }: RailProps) {
         </div>
     );
 }
+/** What each section lists. */
+const SECTION_TABS: Readonly<Record<Section, (props: SidebarProps) => JSX.Element>> = {
+    fleet: FleetTabs, agents: AgentTabs, groups: GroupTabs, conversations: ConversationTabs
+};
 /** What the open section lists. */
 function SectionTabs(props: SidebarProps) {
-    if (props.section === 'fleet') {
-        return <FleetTabs {...props} />;
-    }
-    return props.section === 'agents' ? <AgentTabs {...props} /> : <ConversationTabs {...props} />;
+    const Tabs = SECTION_TABS[props.section];
+    return <Tabs {...props} />;
 }
 /** The open section: its tabs, then Add agent at the foot of every one. */
 function SectionList(props: SidebarProps) {

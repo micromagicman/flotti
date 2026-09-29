@@ -123,6 +123,22 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   lane is read-only: **Write to …** opens the tab of either agent. Every agent keeps one mark
   everywhere — a shape in a muted hue by its name in the sidebar, in the header of its tab and in a
   conversation — and a faint tone of that hue on the bar of its envelopes.
+- **Groups**, the third section of the sidebar, lists every group of the fleet
+  ([docs/groups.md](docs/groups.md)): the marks of its members in a row (a member not in the fleet a
+  hollow grey square, more than four «+N»), its name, how many members and messages, and a dot when
+  something was said in it since you last looked; a closed section carries the dot on its icon. The tab
+  of a group is the tab of an agent for a group: a header with the members by mark and name and
+  **Edit**, which opens the group in Settings → Groups, the topic under it; one lane of what was said in
+  it, in the order it was sent — your messages on the right, the agents' as envelopes on the left, an
+  answer a member gave in the turn a message started marked «answer» and quoting the message it
+  answers; under every message, folded, how each member took it («claude, codex got it · tester
+  failed»), and open, the list of the broadcast page; and a field at the foot: Enter sends to every
+  member, **Reply** quotes. In the feed of the fleet a message to a group is one row, not one per
+  member — who wrote it → the marks and the name of the group, tagged `group`, and `answer` on what a
+  member answered — and a click opens the tab of the group at that message; the filter by an agent
+  matches a group message the agent wrote or got. A fleet with agents but no group says in the section
+  that the agents do not see each other yet, and one click **Everyone** puts every agent of the fleet
+  in one group of that name. The details of an agent («i») list its groups.
 - **All agents** sends one message to every agent you leave ticked. Each gets it on its own, so an
   agent that is down or busy holds nobody up; the page shows, agent by agent, whether the message was
   delivered, waits in line or failed, and the answers come in each agent's tab.
@@ -265,7 +281,7 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `GET /api/admin-settings`, `PUT /api/admin-settings` `{confirmActions}` | whether actions of administrators wait for a person |
 | `GET /api/answer-delivery`, `PUT /api/answer-delivery` `{mode}` | how answers reach the tabs: `streamed` piece by piece, `whole` once complete |
 | `POST /api/admin-actions/<action>` `{allow}`  | allows or refuses an action of an administrator waiting for it |
-| `/ws`                                         | `fleet` — the agents and the groups — first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and gets the events after them, then live ones; `health` whenever the health of the SSH connection of an agent changes |
+| `/ws`                                         | `fleet` — the agents and the groups — first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and of each group under `_group:<id>`, and gets the events and the `group-message`s after them, then live ones; `health` whenever the health of the SSH connection of an agent changes |
 
 With no login, the server guards against other web pages rather than against people: it answers only
 to the host names of this machine (a page elsewhere cannot rebind a name of its own to `127.0.0.1`),

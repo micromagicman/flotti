@@ -1,12 +1,13 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { UIEvent } from 'react';
-import type { AgentSummary } from '../../../src/dashboard-protocol.js';
+import type { AgentSummary, GroupSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import type { AgentFeed } from '../feed.js';
 import { FLEET_FEED_SIZE, fleetMessages, messagesOf } from '../fleet-feed.js';
 import type { FleetMessage } from '../fleet-feed.js';
+import type { GroupFeed } from '../groups.js';
 import type { Messages } from '../i18n/en.js';
-import { AgentMark, nameOf } from './AgentMark.js';
+import { AgentMark, GroupMarks, nameOf } from './AgentMark.js';
 import { useT } from '../i18n/I18n.js';
 type Fleet = {
     readonly agents: readonly AgentSummary[];
@@ -14,7 +15,10 @@ type Fleet = {
 };
 type FleetFeedPanelProps = Fleet & {
     readonly feeds: Readonly<Record<string, AgentFeed>>;
-    /** Opens the message where it lives: the tab of its agent, or the conversation of the two. */
+    /** The groups of the fleet and their histories (docs/groups.md, #152): a message to a group is one row. */
+    readonly groups: readonly GroupSummary[];
+    readonly groupFeeds: Readonly<Record<string, GroupFeed>>;
+    /** Opens the message where it lives: the tab of its agent, the conversation of the two, or the tab of the group. */
     readonly onOpen: (message: FleetMessage) => void;
 };
 type RowProps = Fleet & { readonly message: FleetMessage; readonly onOpen: (message: FleetMessage) => void };
@@ -24,10 +28,17 @@ function nameIn(agents: readonly AgentSummary[], id: string | undefined, t: Mess
 }
 /** Where a click on the message leads, in words. */
 function placeName({ agents, message }: Pick<RowProps, 'agents' | 'message'>, t: Messages): string {
-    const { from, to, agentId } = message;
+    const { from, to, tab, group } = message;
+    if (group !== undefined) {
+        return t.fleetFeed.tabOf(group.name);
+    }
     return from === undefined || to === undefined
-        ? t.fleetFeed.tabOf(nameOf(agents, agentId))
+        ? t.fleetFeed.tabOf(nameOf(agents, tab))
         : t.fleetFeed.pairOf(nameOf(agents, from), nameOf(agents, to));
+}
+/** Who got the message, as a row names it: the group by its marks and name, else an agent or You. */
+function receiverName(agents: readonly AgentSummary[], message: FleetMessage, t: Messages): string {
+    return message.group === undefined ? nameIn(agents, message.to, t) : message.group.name;
 }
 function isToday(time: Date): boolean {
     return time.toDateString() === new Date().toDateString();
@@ -41,9 +52,27 @@ function Who({ id, agents, colors }: Fleet & { readonly id: string | undefined }
         </span>
     );
 }
-function KindTag({ message }: { readonly message: FleetMessage }) {
+/** The group the message went to, where the receiver stands: the marks of its members and its name (#152). */
+function WhoGroup({ group, agents, colors }: Fleet & { readonly group: GroupSummary }) {
+    return (
+        <span className="fleet-who fleet-who-group">
+            <GroupMarks members={group.members} agents={agents} colors={colors} small />
+            {group.name}
+        </span>
+    );
+}
+function Receiver({ message, ...fleet }: Omit<RowProps, 'onOpen'>) {
+    return message.group === undefined ? <Who id={message.to} {...fleet} /> : <WhoGroup group={message.group} {...fleet} />;
+}
+/** The tags of the message: what sort it is, `group` when it went to one, `answer` when a member answered a message of the group. */
+function KindTags({ message }: { readonly message: FleetMessage }) {
     const t = useT();
-    return message.kind === 'message' ? null : <span className="fleet-kind">{t.fleetFeed.kind[message.kind]}</span>;
+    const tags = [
+        ...(message.kind === 'message' ? [] : [t.fleetFeed.kind[message.kind]]),
+        ...(message.group === undefined ? [] : [t.fleetFeed.group]),
+        ...(message.answer === undefined ? [] : [t.fleetFeed.answer])
+    ];
+    return <>{tags.map((tag) => <span key={tag} className="fleet-kind">{tag}</span>)}</>;
 }
 /** The top line of a row: who wrote to whom, what sort of message, where it opens, when. */
 function RowTop({ message, ...fleet }: Omit<RowProps, 'onOpen'>) {
@@ -52,8 +81,8 @@ function RowTop({ message, ...fleet }: Omit<RowProps, 'onOpen'>) {
     return (
         <span className="fleet-top">
             <span className="fleet-route">
-                <Who id={message.from} {...fleet} /><span className="fleet-arrow">→</span><Who id={message.to} {...fleet} />
-                <KindTag message={message} />
+                <Who id={message.from} {...fleet} /><span className="fleet-arrow">→</span><Receiver message={message} {...fleet} />
+                <KindTags message={message} />
             </span>
             <span className="fleet-open"><span className="fleet-open-text">{t.fleetFeed.openIn(placeName({ agents: fleet.agents, message }, t))} </span>›</span>
             <span className="fleet-when" title={t.fleetFeed.whenFull(time)}>{t.fleetFeed.when(time, isToday(time))}</span>
@@ -67,7 +96,7 @@ function Row({ message, onOpen, ...fleet }: RowProps) {
     const when = t.fleetFeed.whenFull(new Date(message.time));
     return (
         <button type="button" className="fleet-row" data-key={message.key} onClick={() => onOpen(message)}
-            aria-label={t.fleetFeed.row(nameIn(fleet.agents, message.from, t), nameIn(fleet.agents, message.to, t), when, place)}>
+            aria-label={t.fleetFeed.row(nameIn(fleet.agents, message.from, t), receiverName(fleet.agents, message, t), when, place)}>
             <RowTop message={message} {...fleet} />
             <span className="fleet-text">{message.text}</span>
         </button>
@@ -139,11 +168,11 @@ function usePicked(agents: readonly AgentSummary[]) {
     return [agents.some((agent) => agent.id === picked) ? picked : undefined, setPicked] as const;
 }
 /** Every message of the fleet in one list (#114): the latest, live, filtered by one agent. */
-function FleetFeedPanel({ agents, colors, feeds, onOpen }: FleetFeedPanelProps) {
+function FleetFeedPanel({ agents, colors, feeds, groups, groupFeeds, onOpen }: FleetFeedPanelProps) {
     const t = useT();
     const [picked, setPicked] = usePicked(agents);
     const ids = agents.map((agent) => agent.id).join('\n');
-    const all = useMemo(() => fleetMessages(ids === '' ? [] : ids.split('\n'), feeds), [ids, feeds]);
+    const all = useMemo(() => fleetMessages({ agentIds: ids === '' ? [] : ids.split('\n'), feeds, groups, groupFeeds }), [ids, feeds, groups, groupFeeds]);
     const shown = messagesOf(all, picked);
     const empty = picked === undefined ? t.fleetFeed.none : t.fleetFeed.noneOf(nameOf(agents, picked));
     return (

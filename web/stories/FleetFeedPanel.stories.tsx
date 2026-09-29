@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { FleetFeedPanel } from '../src/components/FleetFeedPanel.js';
-import { AGENTS, COLORS, FEEDS, LONG_NAME, LONG_TEXT, feed, manyAgents, message } from './fleet.js';
+import { AGENTS, COLORS, FEEDS, GROUPS, GROUP_FEEDS, LONG_NAME, LONG_TEXT, feed, manyAgents, message } from './fleet.js';
 import { MainFrame } from './frame.js';
 const meta = {
     title: 'Dashboard/FleetFeedPanel',
@@ -10,20 +10,26 @@ const meta = {
         agents: AGENTS,
         colors: COLORS,
         feeds: FEEDS,
+        groups: GROUPS,
+        groupFeeds: GROUP_FEEDS,
         onOpen: () => undefined
     }
 } satisfies Meta<typeof FleetFeedPanel>;
 export default meta;
 type Story = StoryObj<typeof meta>;
-/** Every message of the fleet: a person to an agent, an agent to a person, one agent to another; tasks and forwards tagged. */
+/** Every message of the fleet: a person to an agent, an agent to a person, one agent to another, anyone to a group — tasks, forwards, groups and answers tagged. */
 export const Messages: Story = {};
+/** A fleet without groups: no row goes to one. */
+export const NoGroups: Story = {
+    args: { groups: [], groupFeeds: {} }
+};
 /** No agent has written yet. */
 export const Empty: Story = {
-    args: { feeds: {} }
+    args: { feeds: {}, groups: [], groupFeeds: {} }
 };
 /** A fleet with agents but no messages: the chips are there, the list says so. */
 export const NoMessages: Story = {
-    args: { feeds: Object.fromEntries(AGENTS.map((agent) => [agent.id, feed([], agent.status)])) }
+    args: { feeds: Object.fromEntries(AGENTS.map((agent) => [agent.id, feed([], agent.status)])), groupFeeds: {} }
 };
 /** Long names and a long message: the row cuts the text, the chips grow. */
 export const LongNames: Story = {
@@ -34,7 +40,7 @@ export const LongNames: Story = {
 };
 /** Twenty agents with a talk each: forty messages, a row of chips that wraps. */
 export const ManyAgents: Story = {
-    args: manyAgents(20)
+    args: { ...manyAgents(20), groups: [], groupFeeds: {} }
 };
 /** More messages than the feed keeps: only the latest 200 stay, and the cap says so. */
 export const AtTheCap: Story = {
