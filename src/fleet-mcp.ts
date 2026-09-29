@@ -5,9 +5,10 @@ import type { AddressInfo } from 'node:net';
 import type { AdminAction, Delegation, Forwarded, SendOptions } from './agent-events.js';
 import type { AgentSummary, Delivery } from './dashboard-protocol.js';
 import type { DelegationCancel, DelegationStart } from './delegations.js';
+import type { GroupSendOptions } from './supervisor.js';
 import { describeError } from './describe-error.js';
 import type { AdminOutcome } from './fleet-admin.js';
-import { noSuchAgent } from './groups.js';
+import { noSuchAgent, noSuchGroup } from './groups.js';
 import type { GroupView, PeerSummary } from './groups.js';
 import { MEMORY_TOOLS, callMemoryTool, isMemoryTool } from './memory-tools.js';
 import { present } from './present.js';
@@ -42,8 +43,12 @@ interface FleetDirectory {
     groupsOf(agentId: string): GroupView[];
     /** Whether `from` may write to `to` — the two share a group; the tab of `from` says why not. */
     mayWrite(from: string, to: string): boolean;
+    /** Whether `from` may post to the group — it is a member; the tab of `from` says why not. */
+    mayPost(from: string, groupId: string): boolean;
     /** Sends a message on behalf of an agent of the fleet: `from` is its id. */
     send(agentId: string, text: string, options?: SendOptions): Promise<Delivery>;
+    /** Posts a message to a group on behalf of an agent of the fleet: `from` is its id; how each other member took it. */
+    sendToGroup(groupId: string, text: string, options?: GroupSendOptions): Promise<{ readonly deliveries: readonly Delivery[] }>;
     /** Gives a task on behalf of an agent of the fleet: `from` is its id; `deadline` an ISO 8601 time. */
     delegate(from: string, to: string, text: string, deadline?: string): Promise<DelegationStart>;
     /** Takes back a task the agent `from` gave; throws when it gave no such task. */
@@ -88,6 +93,8 @@ type Received = {
     readonly messageId: string;
     readonly text: string;
     readonly forwarded?: Forwarded;
+    /** Id of the group it was posted to, when it came through one: a reply goes back there. */
+    readonly group?: string;
 };
 /**
  * A message of one agent the supervisor handed to another past the tools — a
@@ -100,6 +107,13 @@ type DeliveredMessage = Received & {
 };
 /** What one call of a tool sends, besides the receiver and the text. */
 type Extras = Pick<SendOptions, 'replyTo' | 'forwarded'>;
+/** Where a tool sends: to an agent, or to a group — one of the two (docs/groups.md). */
+type Address = { readonly to: string } | { readonly group: string };
+/** A tool with `to` and `group`: the schema of the two, and the sentence for a call that names both or neither. */
+const ADDRESS_PROPERTIES = {
+    to: { type: 'string', description: 'Id of the agent, as list_agents gives it. One of "to" and "group".' },
+    group: { type: 'string', description: 'Id of a group you are in, as list_groups gives it: every other member gets it. One of "to" and "group".' }
+} as const;
 class RpcError extends Error {
     constructor(readonly code: number, message: string) {
         super(message);
@@ -123,24 +137,26 @@ const TOOLS = [
     },
     {
         name: 'send_message',
-        description: 'Sends a message to another agent of the fleet. It arrives as a message from you, and what the '
-            + 'agent answers comes back to you as a message from it. A message another agent sent you is answered '
-            + 'the same way: just answer it, no tool needed. Do not answer acknowledgements: a thank-you needs no '
-            + 'thank-you back.',
+        description: 'Sends a message to another agent of the fleet ("to"), or to every other member of a group you '
+            + 'are in ("group"). It arrives as a message from you, and what an agent answers comes back to you as a '
+            + 'message from it — an answer to a group message reaches every member. A message another agent or a '
+            + 'group sent you is answered the same way: just answer it, no tool needed. Do not answer '
+            + 'acknowledgements: a thank-you needs no thank-you back.',
         inputSchema: {
             type: 'object',
             properties: {
-                to: { type: 'string', description: 'Id of the agent, as list_agents gives it.' },
+                ...ADDRESS_PROPERTIES,
                 text: { type: 'string', description: 'The message.' }
             },
-            required: ['to', 'text'],
+            required: ['text'],
             additionalProperties: false
         }
     },
     {
         name: 'reply',
-        description: 'Writes again to the agent whose message came to you last, quoting that message. Your answer '
-            + 'in the turn of its message already reaches it: this is for writing to it later.',
+        description: 'Writes again where the last message to you came from — to the agent, or to the group it was '
+            + 'posted to — quoting that message. Your answer in the turn of the message already reaches it: this '
+            + 'is for writing later.',
         inputSchema: {
             type: 'object',
             properties: { text: { type: 'string', description: 'The answer.' } },
@@ -153,7 +169,8 @@ const TOOLS = [
         description: 'Gives another agent of the fleet a task and returns its id at once. The agent works on it in a '
             + 'turn of its own; when it is done, the outcome comes to you as a message from it: completed with what '
             + 'it answered, failed or canceled with why. A task that cannot be given — no such agent, the agent is '
-            + 'stopped — fails at once. Use it for work you want done and reported back; send_message is for a word.',
+            + 'stopped — fails at once. Use it for work you want done and reported back; send_message is for a word. '
+            + 'A task goes to one agent, never to a group.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -180,14 +197,14 @@ const TOOLS = [
     },
     {
         name: 'forward',
-        description: 'Forwards the last message another agent sent you, as it was, to another agent of the fleet.',
+        description: 'Forwards the last message another agent sent you, as it was, to another agent of the fleet '
+            + '("to") or to a group you are in ("group").',
         inputSchema: {
             type: 'object',
             properties: {
-                to: { type: 'string', description: 'Id of the agent to forward it to.' },
+                ...ADDRESS_PROPERTIES,
                 comment: { type: 'string', description: 'A few words of your own to put before it; optional.' }
             },
-            required: ['to'],
             additionalProperties: false
         }
     }
@@ -242,7 +259,7 @@ class FleetMcpServer {
     private readonly tools: ReadonlyMap<string, Tool> = new Map<string, Tool>([
         ['list_agents', (fleet, caller) => Promise.resolve(listAgents(fleet, caller))],
         ['list_groups', (fleet, caller) => Promise.resolve(listGroups(fleet, caller))],
-        ['send_message', (fleet, caller, args) => this.send(fleet, caller, stringArgument(args, 'to'), stringArgument(args, 'text'))],
+        ['send_message', (fleet, caller, args) => this.sendTo(fleet, caller, addressOf(args), stringArgument(args, 'text'))],
         ['reply', (fleet, caller, args) => this.reply(fleet, caller, args)],
         ['forward', (fleet, caller, args) => this.forward(fleet, caller, args)],
         ['delegate', (fleet, caller, args) => this.delegate(fleet, caller, args)],
@@ -426,13 +443,16 @@ class FleetMcpServer {
         const outcome = await fleet.administer(caller, action, stringArgument(args, 'id'));
         return outcome.ok ? text(outcome.text) : failure(outcome.text);
     }
-    /** The `reply` tool: to the agent whose message came last, quoting it — as a reply of a person does. */
+    /**
+     * The `reply` tool: where the last message came from — the group it was
+     * posted to, or the agent that sent it — quoting it, as a reply of a person does.
+     */
     private async reply(fleet: FleetDirectory, caller: string, args: ToolArguments): Promise<ToolResult> {
         const last = this.received.get(caller);
         if (last === undefined) {
-            return failure('no agent has written to you yet; use send_message and name the agent');
+            return failure('no agent has written to you yet; use send_message and name the agent or the group');
         }
-        return this.send(fleet, caller, last.from, stringArgument(args, 'text'), {
+        return this.sendTo(fleet, caller, cameFrom(last), stringArgument(args, 'text'), {
             replyTo: { agentId: caller, messageId: last.messageId, author: last.from, text: original(last).text }
         });
     }
@@ -446,7 +466,11 @@ class FleetMcpServer {
             return failure('no agent has written to you yet: there is nothing to forward');
         }
         const comment = optionalText(args, 'comment');
-        return this.send(fleet, caller, stringArgument(args, 'to'), comment, { forwarded: original(last) });
+        return this.sendTo(fleet, caller, addressOf(args), comment, { forwarded: original(last) });
+    }
+    /** Sends where the address says: to the agent, or to the group. */
+    private sendTo(fleet: FleetDirectory, from: string, address: Address, message: string, extras: Extras = {}): Promise<ToolResult> {
+        return 'to' in address ? this.send(fleet, from, address.to, message, extras) : this.post(fleet, from, address.group, message, extras);
     }
     /** The `delegate` tool: the id of the task, or why it failed at once. */
     private async delegate(fleet: FleetDirectory, caller: string, args: ToolArguments): Promise<ToolResult> {
@@ -479,6 +503,60 @@ class FleetMcpServer {
         }
         this.delivered({ to, from, messageId, text: message, ...present('forwarded', extras.forwarded) });
         return sent(to, delivery);
+    }
+    /**
+     * A message to a group the caller is in: every other member gets it, and
+     * the result says how each took it. The supervisor tells `delivered` of
+     * each member that took it, so their `reply` answers the group.
+     */
+    private async post(fleet: FleetDirectory, from: string, groupId: string, message: string, extras: Extras = {}): Promise<ToolResult> {
+        if (!fleet.mayPost(from, groupId)) {
+            return failure(noSuchGroup(groupId));
+        }
+        try {
+            const { deliveries } = await fleet.sendToGroup(groupId, message, { from, ...extras });
+            return text(posted(groupId, deliveries));
+        } catch (error) {
+            // The fleet changed under the call: the group or the sender is gone.
+            return failure(`the message was not posted to group "${groupId}": ${describeError(error)}`);
+        }
+    }
+}
+/** Where the last message came from: the group it was posted to, or the agent that sent it. */
+function cameFrom(last: Received): Address {
+    return last.group === undefined ? { to: last.from } : { group: last.group };
+}
+/** The address a tool call names: `to` or `group`, exactly one of them. */
+function addressOf(args: ToolArguments): Address {
+    const to = optionalText(args, 'to');
+    const group = optionalText(args, 'group');
+    if ((to === '') === (group === '')) {
+        throw new ArgumentError(misaddressed(to));
+    }
+    return to === '' ? { group } : { to };
+}
+/** Why a call with both `to` and `group`, or neither, cannot go: `to` tells which of the two it is. */
+function misaddressed(to: string): string {
+    return to === ''
+        ? '"to" or "group" is missing: name an agent in "to" or a group in "group"'
+        : 'name either "to" (an agent) or "group" (a group), not both';
+}
+/** The result of a message posted to a group: how each other member took it. */
+function posted(groupId: string, deliveries: readonly Delivery[]): string {
+    if (deliveries.length === 0) {
+        return `Posted to group "${groupId}"; nobody else is in it yet.`;
+    }
+    return `Posted to group "${groupId}": ${deliveries.map(took).join('; ')}. What the members answer comes to you as messages from them.`;
+}
+/** How one member took a message of the group, in a few words. */
+function took(delivery: Delivery): string {
+    switch (delivery.result) {
+        case 'taken':
+            return `"${delivery.agentId}" has it`;
+        case 'queued':
+            return `"${delivery.agentId}" is busy, it waits in line`;
+        default:
+            return `"${delivery.agentId}" did not get it: ${delivery.error ?? 'no reason given'}`;
     }
 }
 /**

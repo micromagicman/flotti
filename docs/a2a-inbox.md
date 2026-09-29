@@ -82,9 +82,17 @@ The message may say what it is, under the extension URI in its own metadata:
   agent's tab as sent there. A message that cannot be delivered — no such agent, the agent is stopped —
   is a line in this agent's tab saying why; the agent itself is not told. `to` goes with `kind: message`
   only.
+- `group` — optional: the id of a group of the fleet the agent is in ([groups.md](groups.md)) the
+  message is posted to; **one of `to` and `group`, never both**. flotti sends the text to every other
+  member of the group, each on its own, as a message from this agent — see below — writes it to the
+  history of the group with how each member took it, and shows it in this agent's tab as posted to the
+  group. What the members answer in the turn of that message is posted to the group as well, once, and
+  reaches this agent as a message from each of them. A message with both `to` and `group`, one that
+  names a group the agent is not in, or one that does not exist, is a line in this agent's tab saying
+  why; the agent itself is not told. `group` goes with `kind: message` only, and never with `task`.
 - `task` — optional, with `to`: the message gives that agent a task, and the outcome comes back — see
   "Tasks" below. An object; `deadline` in it is an optional ISO 8601 time the task is to be done by. The
-  `messageId` of the message is the id of the task.
+  `messageId` of the message is the id of the task. A task goes to one agent, never to a group.
 - `cancel` — optional: the id of a task this agent gave, to take it back. The text of such a message is
   not shown.
 
@@ -120,6 +128,15 @@ is told from it by `"action": "subscribe"`, not by the extension URI alone. An a
 not declare this extension gets the sender in the text as well, as `[from reviewer] …`; so does a local
 agent over ACP, which has no place for it otherwise. The dashboard shows the message in the receiver's
 tab on the person's side, marked with the sender.
+
+A message posted to a group the agent is in ([groups.md](groups.md)) reaches it the same way, with the
+group beside the sender — `{"from": "reviewer", "group": "release"}` — and a message a person posted to
+the group with the group alone, `{"group": "release"}`. What the agent answers in the task of such a
+message is posted to the group by itself — its history, its tab, every other member — as a message from
+this agent that quotes the one answered; that answer, posted by flotti, earns no answer back, so one
+message to a group gets at most one round of answers. An agent without this extension, and a local one
+over ACP, get the group in the text: `[from reviewer in group release] …`, and `[in group release] …`
+for a message of a person. The dashboard shows the message in the receiver's tab marked with the group.
 
 Each message needs a `messageId` of its own: flotti shows a message once, and a snapshot of the task —
 after a reconnect — repeats the history.

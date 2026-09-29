@@ -20,7 +20,7 @@ import type {
 import { AcpMessages, acpPermissionEvent, acpUpdateEvents } from './acp-events.js';
 import { prepareHandover } from './acp-adapters.js';
 import type { Handover, MemoryHandover } from './acp-adapters.js';
-import { AgentEvents, WITHDRAWN, composeText, messageFields } from './agent-events.js';
+import { AgentEvents, WITHDRAWN, composeText, markedText, messageFields } from './agent-events.js';
 import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
 import { commandToSpawn } from './command-line.js';
 import type { MemoryStatus } from './dashboard-protocol.js';
@@ -118,10 +118,9 @@ type Turn = {
     /** The message never got to the agent: {@link LocalAgentProcess.send} rejects. */
     readonly refused: (error: Error) => void;
 };
-/** What the agent reads for the message of the turn. */
+/** What the agent reads for the message of the turn: the sender and the group in front, when there are any. */
 function promptText(turn: Turn, agentId: string): string {
-    const text = composeText(turn.text, turn.options, agentId);
-    return turn.options.from === undefined ? text : `[from ${turn.options.from}] ${text}`;
+    return markedText(composeText(turn.text, turn.options, agentId), turn.options);
 }
 /** The status line of a start: which try it is, after failed ones. */
 function startingDetail(retries: number): string {
@@ -335,8 +334,10 @@ class LocalAgentProcess implements FleetAgent {
      * `end_turn`, `cancelled`, … Rejects when the message never went: the
      * agent is not running, or stopped before its turn.
      *
-     * A message from another agent reaches the agent as `[from <id>] <text>`:
-     * ACP has no place for a sender, and the id is what the agent answers to.
+     * A message from another agent reaches the agent as `[from <id>] <text>`,
+     * one posted to a group as `[from <id> in group <group>] <text>` (`[in group
+     * <group>] <text>` when a person posted it): ACP has no place for a sender,
+     * and the id is what the agent answers to.
      * A reply and a forward reach it as text too, the quoted or forwarded
      * message written out.
      */

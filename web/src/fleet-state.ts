@@ -48,11 +48,14 @@ function fromServer(state: FleetState, message: ServerMessage): FleetState {
             return withFleet(state, message.agents);
         case 'event':
             return withEvent(state, message.event);
+        case 'group-message':
+            // The tab of a group comes with #152: until then the page keeps nothing of it.
+            return state;
         default:
             return fromServerNotice(state, message);
     }
 }
-function fromServerNotice(state: FleetState, message: Exclude<ServerMessage, { type: 'fleet' | 'event' }>): FleetState {
+function fromServerNotice(state: FleetState, message: Exclude<ServerMessage, { type: 'fleet' | 'event' | 'group-message' }>): FleetState {
     switch (message.type) {
         case 'delivery':
             return { ...state, deliveries: [...state.deliveries, message.delivery] };

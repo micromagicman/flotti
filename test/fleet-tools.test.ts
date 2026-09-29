@@ -33,21 +33,29 @@ const noDelegations: Pick<FleetDirectory, 'delegate' | 'cancelDelegation'> = {
         throw new Error('no tasks here');
     }
 };
-/** The fleet, as the tools see it; `sent` is what each receiver reads, `options` what came with it. */
+/**
+ * The fleet, as the tools see it; `sent` is what each receiver reads, `options`
+ * what came with it. Every agent is in the one group `everyone`: a message
+ * posted to it reaches every other agent, as through the supervisor.
+ */
 function directory(ids: readonly string[]): FleetDirectory & { sent: string[]; options: SendOptions[] } {
     const sent: string[] = [];
     const options: SendOptions[] = [];
     const agents = (): AgentSummary[] => ids.map((id) => ({ id, name: id, kind: 'local', status: 'idle' }));
+    const send = async (agentId: string, text: string, given: SendOptions = {}): Promise<Delivery> => {
+        sent.push(`${given.from ?? '-'} -> ${agentId}: ${composeText(text, given, agentId)}`);
+        options.push(given);
+        return { agentId, result: 'taken' };
+    };
     return {
         sent,
         options,
         agents,
         ...seeingEachOther(ids, agents),
-        send: async (agentId: string, text: string, given: SendOptions = {}): Promise<Delivery> => {
-            sent.push(`${given.from ?? '-'} -> ${agentId}: ${composeText(text, given, agentId)}`);
-            options.push(given);
-            return { agentId, result: 'taken' };
-        },
+        send,
+        sendToGroup: async (groupId, text, given = {}) => ({
+            deliveries: await Promise.all(ids.filter((id) => id !== given.from).map((id) => send(id, text, { ...given, group: groupId })))
+        }),
         ...noDelegations
     };
 }
@@ -424,5 +432,67 @@ describe('local manifest: ssh', () => {
     });
     it('refuses what is not an SSH address', () => {
         match(rejected('local', { command: 'npx', ssh: '-oProxyCommand=x' }).message, /ssh: "-oProxyCommand=x" is not an SSH address/);
+    });
+});
+describe('fleet tools: messages to a group (docs/groups.md)', () => {
+    it('posts to every other member of a group the caller is in, and says how each took it', async () => {
+        const server = await toolsServer();
+        const fleet = directory(['alice', 'bob', 'carol']);
+        server.serve(fleet);
+        const posted = await callTool(server, server.access('alice').token, 'send_message', { group: 'everyone', text: 'ship it' });
+        strictEqual(posted.isError, false, posted.text);
+        strictEqual(posted.text, 'Posted to group "everyone": "bob" has it; "carol" has it. What the members answer comes to you as messages from them.');
+        deepStrictEqual(fleet.sent, ['alice -> bob: ship it', 'alice -> carol: ship it']);
+        deepStrictEqual(fleet.options.map((options) => [options.from, options.group]), [['alice', 'everyone'], ['alice', 'everyone']]);
+    });
+    it('refuses a call that names both an agent and a group, or neither, and a group the caller is not in', async () => {
+        const server = await toolsServer();
+        const fleet = directory(['alice', 'bob']);
+        server.serve(fleet);
+        const alice = server.access('alice').token;
+        const both = await callTool(server, alice, 'send_message', { to: 'bob', group: 'everyone', text: 'hi' });
+        deepStrictEqual([both.isError, both.text], [true, 'name either "to" (an agent) or "group" (a group), not both']);
+        const neither = await callTool(server, alice, 'send_message', { text: 'hi' });
+        deepStrictEqual([neither.isError, neither.text], [true, '"to" or "group" is missing: name an agent in "to" or a group in "group"']);
+        const outside = await callTool(server, alice, 'send_message', { group: 'secret', text: 'hi' });
+        deepStrictEqual([outside.isError, outside.text], [true, 'there is no group "secret" among the groups you are in; list_groups names them']);
+        server.delivered({ to: 'alice', from: 'bob', messageId: 'm-1', text: 'the build is red' });
+        match((await callTool(server, alice, 'forward', { to: 'bob', group: 'everyone' })).text, /not both/);
+        match((await callTool(server, alice, 'forward', {})).text, /is missing/);
+        deepStrictEqual(fleet.sent, [], 'nothing went anywhere');
+    });
+    it('replies to the group when the last message came through one, and forwards to a group', async () => {
+        const server = await toolsServer();
+        const fleet = directory(['alice', 'bob', 'carol']);
+        server.serve(fleet);
+        server.delivered({ to: 'bob', from: 'alice', messageId: 'm-1', text: 'ship it', group: 'everyone' });
+        const reply = await callTool(server, server.access('bob').token, 'reply', { text: 'aye' });
+        strictEqual(reply.isError, false, reply.text);
+        await callTool(server, server.access('bob').token, 'forward', { group: 'everyone', comment: 'FYI' });
+        deepStrictEqual(fleet.sent, [
+            'bob -> alice: In reply to a message from you:\n> ship it\n\naye',
+            'bob -> carol: In reply to a message from agent "alice":\n> ship it\n\naye',
+            'bob -> alice: FYI\n\nForwarded from you:\n\nship it',
+            'bob -> carol: FYI\n\nForwarded from agent "alice":\n\nship it'
+        ]);
+        deepStrictEqual(fleet.options[0], { from: 'bob', group: 'everyone', replyTo: { agentId: 'bob', messageId: 'm-1', author: 'alice', text: 'ship it' } });
+        deepStrictEqual(fleet.options[3], { from: 'bob', group: 'everyone', forwarded: { author: 'alice', text: 'ship it' } });
+    });
+});
+describe('fleet tools: a message to a group through the supervisor (docs/groups.md)', () => {
+    it('reaches the members, and a member\'s reply answers the group', async () => {
+        const { supervisor, fakes, call, lines } = await fleetWithGroups(['a', 'b', 'c'], [['release', ['a', 'b', 'c']]]);
+        const posted = await call('a', 'send_message', { group: 'release', text: 'ship it' });
+        strictEqual(posted.isError, false, posted.text);
+        await eventually(() => supervisor.groupHistory('release').length === 3, 2_000);
+        deepStrictEqual(supervisor.groupHistory('release').map((message) => [message.from, message.text]), [['a', 'ship it'], ['b', 'you said: ship it'], ['c', 'you said: ship it']]);
+        const later = await call('b', 'reply', { text: 'later' });
+        strictEqual(later.isError, false, later.text);
+        await eventually(() => supervisor.groupHistory('release').length >= 4, 2_000);
+        const quoted = supervisor.groupHistory('release')[3]?.replyTo;
+        deepStrictEqual([quoted?.author, quoted?.text], ['c', 'you said: ship it'], 'the last message b got was the answer of c, posted to the group');
+        deepStrictEqual(fakes.get('c')?.calls.filter((line) => line === 'send later from b'), ['send later from b'], 'the reply reaches the other members once');
+        deepStrictEqual(lines('a'), []);
+        await supervisor.stop();
     });
 });

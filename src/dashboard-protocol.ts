@@ -48,8 +48,9 @@ type MemoryStatus =
     | { readonly state: 'unsupported' | 'unavailable'; readonly reason: string };
 /**
  * What the page sends over the socket: the last `seq` it has seen of each
- * agent. The server answers with what came after it, then keeps the socket
- * going live. A page that has seen nothing sends an empty map.
+ * agent, by its id, and of each group, by its tab id ({@link groupTabId}). The
+ * server answers with what came after it, then keeps the socket going live. A
+ * page that has seen nothing sends an empty map.
  */
 type ClientMessage = {
     readonly type: 'subscribe';
@@ -78,27 +79,64 @@ type GroupConfig = {
     readonly topic?: string;
     readonly members: readonly string[];
 };
+/**
+ * One message of a group (docs/groups.md), as its history keeps it and the
+ * page shows it in the tab of the group: who wrote it, what it says, what it
+ * answers, and how each other member took it. It reached each of them as a
+ * `message` event of their tab with `group`; this is the one line of the group.
+ */
+type GroupMessage = {
+    readonly groupId: string;
+    /** Grows by one with every message of this group, so a page can ask for "everything after N". */
+    readonly seq: number;
+    /** Id of the message in the group; each member got it under a `messageId` of its own tab. */
+    readonly messageId: string;
+    /** ISO 8601 time it was posted. */
+    readonly time: string;
+    /** Id of the agent that wrote it; absent when a person did. */
+    readonly from?: string;
+    readonly text: string;
+    readonly replyTo?: Quote;
+    readonly forwarded?: Forwarded;
+    /**
+     * The message is what a member answered in the turn a message of the group
+     * started, posted back by flotti on its own: the members owe it no answer.
+     */
+    readonly turnAnswer?: true;
+    /** How each member but the writer took it, in the order of the members; a member not in the fleet `failed`. */
+    readonly deliveries: readonly Delivery[];
+};
+/**
+ * The tab id of a group: what the page asks the history of the group under on
+ * `subscribe`, as it asks the events of an agent under its id. `:` is in no
+ * agent id, so a group tab and an agent tab never meet.
+ */
+function groupTabId(groupId: string): string {
+    return `_group:${groupId}`;
+}
 /** What the server sends over the socket. */
 type ServerMessage =
     /** First message of every connection, and again whenever an agent or a group is added, changed or removed. */
     | { readonly type: 'fleet'; readonly agents: readonly AgentSummary[]; readonly groups: readonly GroupSummary[] }
     /** One event of one agent, from history or live; `seq` tells which. */
     | { readonly type: 'event'; readonly event: AgentEvent }
+    /** One message of a group, from its history or live; `seq` tells which. */
+    | { readonly type: 'group-message'; readonly message: GroupMessage }
     /** How a message that had to wait in line ended up: taken at last, or dropped. */
     | { readonly type: 'delivery'; readonly delivery: Delivery }
     /** The health of the connection of an agent changed: it came up or dropped, a round trip was measured, the agent was heard from. */
     | { readonly type: 'health'; readonly agentId: string; readonly health: ConnectionHealth }
     /** The server is going away: `flotti stop`, or Ctrl+C. */
     | { readonly type: 'shutdown' };
-/** Body of `POST /api/agents/<id>/messages` and of `POST /api/broadcast`. */
+/** Body of `POST /api/agents/<id>/messages`, of `POST /api/broadcast` and of `POST /api/groups/<id>/messages`. */
 type SendRequest = {
     /** May be empty only when a message is forwarded: nothing written above it. */
     readonly text: string;
     /** Broadcast only: which agents get it; every agent of the fleet when absent. */
     readonly agents?: readonly string[];
-    /** One agent only: the message this one answers. */
+    /** One agent or a group: the message this one answers. */
     readonly replyTo?: Quote;
-    /** One agent only: a message of this or another tab, sent on as it was. */
+    /** One agent or a group: a message of this or another tab, sent on as it was. */
     readonly forwarded?: Forwarded;
     /** One agent only: the `messageId` of a message that was not delivered, sent again with this one. */
     readonly retryOf?: string;
@@ -134,7 +172,11 @@ type Delivery = {
     /** Why it failed. */
     readonly error?: string;
 };
-/** Answer to a broadcast: one delivery per agent it went to, in fleet order. */
+/**
+ * Answer to a broadcast: one delivery per agent it went to, in fleet order.
+ * A message to a group (`POST /api/groups/<id>/messages`) is answered the
+ * same way, one delivery per member, in the order of the members.
+ */
 type BroadcastResponse = {
     readonly deliveries: readonly Delivery[];
 };
@@ -317,6 +359,7 @@ type MemoryNote = {
 type ErrorResponse = {
     readonly error: string;
 };
+export { groupTabId };
 export type {
     AdminAnswer,
     AdminSettings,
@@ -330,6 +373,7 @@ export type {
     FleetInfo,
     FleetSwitch,
     GroupConfig,
+    GroupMessage,
     GroupSummary,
     Harness,
     LocalAgentConfig,

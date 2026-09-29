@@ -393,3 +393,23 @@ test('shows the memory bank of a local agent, read-only, and nothing outside it'
     const far = await call(dashboard.port, 'GET', '/api/agents/codex/memory');
     deepStrictEqual([far.status, (far.body as { available: boolean }).available], [200, false]);
 });
+test('a message to a group is answered like a broadcast, and is one message of the group on the socket, replayed after a number', async () => {
+    const { dashboard, fake, sockets } = await serve('a', 'b');
+    fake('b').busy = true;
+    const { messages } = await page(dashboard.port, sockets, {});
+    const posted = await call(dashboard.port, 'POST', '/api/groups/everyone/messages', { text: 'hello' });
+    deepStrictEqual([posted.status, posted.body], [200, { deliveries: [{ agentId: 'a', result: 'taken' }, { agentId: 'b', result: 'queued' }] }]);
+    const lines = () => messages.flatMap((message) => (message.type === 'group-message' ? [message.message] : []));
+    await eventually(() => lines().length === 2);
+    deepStrictEqual(lines().map((line) => [line.groupId, line.seq, line.from, line.text, line.turnAnswer]), [
+        ['everyone', 1, undefined, 'hello', undefined],
+        ['everyone', 2, 'a', 'you said: hello', true]
+    ]);
+    deepStrictEqual(lines()[0]?.deliveries, posted.body === undefined ? [] : (posted.body as { deliveries: unknown }).deliveries);
+    strictEqual((await call(dashboard.port, 'POST', '/api/groups/nowhere/messages', { text: 'hello' })).status, 404);
+    strictEqual((await call(dashboard.port, 'POST', '/api/groups/everyone/messages', { text: '' })).status, 400);
+    const later = await page(dashboard.port, sockets, { a: 100, b: 100, '_group:everyone': 1 });
+    await eventually(() => later.messages.some((message) => message.type === 'group-message'));
+    deepStrictEqual(later.messages.flatMap((message) => (message.type === 'group-message' ? [message.message.seq] : [])), [2]);
+    deepStrictEqual(events(later.messages), [], 'the page asked for nothing else');
+});

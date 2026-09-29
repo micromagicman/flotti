@@ -138,6 +138,14 @@ function canReach(groups: readonly Group[], from: string, to: string): boolean {
 function noSuchAgent(agentId: string): string {
     return `there is no agent "${agentId}" among the agents you can write to; list_agents names them`;
 }
+/**
+ * The refusal an agent gets for a group it cannot post to — the same words
+ * whether it is not a member or there is no such group, so that an agent
+ * outside a group learns nothing of it.
+ */
+function noSuchGroup(groupId: string): string {
+    return `there is no group "${groupId}" among the groups you are in; list_groups names them`;
+}
 /** The ids of the groups both agents are in, in the order of the groups. */
 function sharedGroups(groups: readonly Group[], left: string, right: string): string[] {
     return groupsOf(groups, left).filter((group: Group) => group.members.includes(right)).map((group: Group) => group.id);
@@ -158,5 +166,5 @@ function groupView(group: Group, nameOf: (agentId: string) => string | undefined
         })
     };
 }
-export { GROUPS_DIRECTORY, GROUP_FILE, SAMPLE_GROUP, canReach, groupView, groupsOf, noSuchAgent, parseGroup, peersOf, sharedGroups };
+export { GROUPS_DIRECTORY, GROUP_FILE, SAMPLE_GROUP, canReach, groupView, groupsOf, noSuchAgent, noSuchGroup, parseGroup, peersOf, sharedGroups };
 export type { GroupContext, GroupMember, GroupView, PeerSummary };
