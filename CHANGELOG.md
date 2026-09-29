@@ -6,6 +6,10 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Changed
 
+- **The license is now PolyForm Noncommercial 1.0.0 — noncommercial use only.** flotti was under ISC,
+  which allows commercial use; from 0.6.0 it is licensed under the
+  [PolyForm Noncommercial License 1.0.0](LICENSE) (SPDX `PolyForm-Noncommercial-1.0.0`), and the package
+  ships a `LICENSE` file. Versions up to and including 0.5.0 stay under ISC (#141).
 - **The sidebar as three tabs: Fleet, Agents and Conversations.** A rail of icons at the left edge of the
   sidebar switches between the sections, and only the chosen one is listed; on a phone the rail is a row
   on top. The switch follows what opens (a message of the feed turns it to its agent or conversation),
