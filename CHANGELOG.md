@@ -33,6 +33,19 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   from an exchange that was allowed — the answer of a turn, the outcome of a task — still reaches the
   agent that started it after a membership change. A person's messages are not bound. A fleet without
   groups is a fleet where no agent sees another. Messages to a group and the dashboard come next (#150).
+- **Messages to a group** — the third step of the groups of #144. `POST /api/groups/<id>/messages`
+  takes the `SendRequest` of a broadcast and answers member by member; `send_message` and `forward` take
+  `group` instead of `to` (one of the two, never both), `reply` answers the group when the last message
+  came through one, and the inbox of a remote agent takes `group` beside `to` (with `kind: message`
+  only; a task goes to one agent). The message reaches every member but the sender on its own, as a
+  broadcast does, and is one line of the group's history, `groups/<id>/.flotti-history.jsonl`, with how
+  each member took it — a `group-message` on the socket, asked for on `subscribe` under `_group:<id>`.
+  A member gets it as a `message` event with `group` beside `from`: `[from eva in group release] …` in
+  the text of a local agent and of a remote one without the inbox, `group` in the inbox metadata. What a
+  member answers in that turn is posted to the group as its own answer, marked `turnAnswer`, and gets no
+  answer back: one message, one round of answers. A group the sender is not in is refused with the words
+  for one that does not exist; the tab of the sender says the real reason. The tab of a group and the
+  Groups section come with the dashboard steps (#151).
 - **A Storybook of the components of the dashboard.** `npm run storybook` opens the sidebar with its
   rail, the feed of the fleet, a message and the tab of an agent on their own, in every state they
   have — empty, waiting, in error, with long names, with many agents, on a phone, light and dark —

@@ -233,6 +233,7 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `POST /api/agents/<id>/messages` `{text, replyTo?, forwarded?, retryOf?}` | a message to one agent: `taken`, `queued` or `failed`; `replyTo` quotes a message, `forwarded` sends one on (`text` may then be empty), `retryOf` names the undelivered message it sends again |
 | `DELETE /api/agents/<id>/queue/<messageId>`   | takes a message that waits in line back out of it; 404 once the agent took it |
 | `POST /api/broadcast` `{text, agents?}`       | one message to these agents, or to all; a result each  |
+| `POST /api/groups/<id>/messages` `{text, replyTo?, forwarded?}` | a message to a group: every member gets it on its own, a result each in the order of the members; it is one message of the group, with the deliveries, on the socket and in the group's history |
 | `POST /api/agents/<id>/restart`               | restarts the agent; answers at once, the status follows |
 | `POST /api/agents/<id>/cancel`                | drops the message in work                              |
 | `POST /api/agents/<id>/start`, `…/stop`       | starts or stops the agent; start answers at once        |
@@ -294,7 +295,8 @@ Every agent is a directory, and the directory name is the agent id:
   an optional `name` and `topic`, and `members`, the ids of the agents in it, which may be empty. It is
   read with the fleet and checked like a manifest, naming the file when something is wrong; a member
   that is not in the fleet is kept and shown so; fields flotti does not know are kept. A fleet has no
-  `groups/` until a person makes a group — none is made for it. What a group does is in
+  `groups/` until a person makes a group — none is made for it. The messages of a group are in its
+  `.flotti-history.jsonl`, written by flotti and bounded like an agent's. What a group does is in
   [docs/groups.md](docs/groups.md).
 - `skills/` and `memory/` belong to the agent: flotti creates them when they are missing, and writes
   there only what [memory](#memory) needs — the built-in skill `skills/flotti-memory`, never over a skill
@@ -469,10 +471,10 @@ and `session/load`. A bare Claude Code or Codex sees them as `mcp__flotti__…`:
 |----------------|---------------------------------------------------------------------------------------|
 | `list_agents`  | the agents the caller can write to — those in a group with it — id, name, description, harness, status, `groups` it shares with each; the caller is marked `you`, administrators `admin`; an agent in no group with anyone gets an empty list and a sentence saying so |
 | `list_groups`  | the groups the caller is in: `id`, `name`, `topic`, `members` — id and name of each member that is in the fleet |
-| `send_message` | sends a message to another agent: `to` — its id, `text`                                |
-| `reply`        | answers the agent whose message came last, quoting it                                  |
-| `forward`      | forwards the last message another agent sent, as it was, to another agent; `comment` goes before it |
-| `delegate`     | gives another agent a task: `to`, `text`, optional `deadline_minutes`; returns the id of the task |
+| `send_message` | sends a message to another agent — `to`, its id — or to every other member of a group the caller is in — `group`, its id; one of the two, never both — and `text` |
+| `reply`        | answers where the last message came from — the agent, or the group it was posted to — quoting it |
+| `forward`      | forwards the last message another agent sent, as it was, to another agent (`to`) or to a group (`group`); `comment` goes before it |
+| `delegate`     | gives another agent a task: `to`, `text`, optional `deadline_minutes`; returns the id of the task; a task goes to one agent, never to a group |
 | `cancel_delegation` | takes back a task the caller gave: `id` — as `delegate` returned it                |
 
 A message sent so reaches the other agent like one from a person, but from that agent: its `message`
@@ -511,6 +513,19 @@ that was allowed — the answer at the end of a turn, the outcome of a task — 
 started it even when the two no longer share a group by then. A person is bound by nothing: the message
 of a tab and the broadcast go to any agent. A fleet without groups is a fleet where no agent sees
 another; a person makes groups in the settings or by hand (`groups/` in [The fleet](#the-fleet)).
+
+**A message to a group** (#151) reaches every member but the sender, each on its own, as a broadcast
+does — a member that is down or busy holds nobody up — and is one line of the group's history,
+`groups/<id>/.flotti-history.jsonl`, with how each member took it; the socket carries it as a
+`group-message`, and a page asks for the messages of a group on `subscribe` under `_group:<id>`. A
+member gets it in its tab as a `message` event with `group` beside `from`; a local agent over ACP, and a
+remote one without the inbox, read `[from eva in group release] …` (`[in group release] …` for a
+person's message), a remote one with the inbox gets `group` beside `from` in the metadata. What a
+member answers in that turn is posted to the group — history, tab, the other members — as its own
+answer, marked `turnAnswer` as an answer flotti sends back today; such an answer earns no answer back,
+so one message gets at most one round of answers. An agent posts with `send_message` and `group`, or
+with `group` of the inbox; `reply` goes back to the group when the last message came through one. A
+direct message between two agents of a group (`to`) stays in the conversation of the pair.
 
 The server speaks MCP over HTTP (the streamable transport, with plain JSON answers) on a free port of
 `127.0.0.1`, and every agent gets a token of its own in the `Authorization` header: the token tells who

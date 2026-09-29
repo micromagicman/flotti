@@ -25,7 +25,9 @@ async function tools(): Promise<{ server: FleetMcpServer; bank: string; keeper: 
         peers: () => [],
         groupsOf: () => [],
         mayWrite: () => false,
+        mayPost: () => false,
         send: () => Promise.reject(new Error('no messages here')),
+        sendToGroup: () => Promise.reject(new Error('no messages here')),
         delegate: () => Promise.reject(new Error('no tasks here')),
         cancelDelegation: () => {
             throw new Error('no tasks here');

@@ -1162,3 +1162,52 @@ describe('cardLocation', () => {
         });
     });
 });
+describe('A2AAgent: messages to a group through the inbox (docs/groups.md)', () => {
+    it('says which group a message of its own is for, and does not send one addressed both ways or giving a group a task', async () => {
+        const { agent, post, isOpen } = await inboxAgent();
+        const { client, events } = connect(agent);
+        await client.start();
+        await eventually(isOpen);
+        post('ship it', 'g-1', { [INBOX_EXTENSION]: { group: 'release' } });
+        post('both', 'g-2', { [INBOX_EXTENSION]: { to: 'builder', group: 'release' } });
+        post('a task', 'g-3', { [INBOX_EXTENSION]: { group: 'release', task: {} } });
+        const logs = () => events.flatMap(event => event.type === 'log' && event.source === 'flotti' ? [event.text] : []);
+        await eventually(() => logs().length === 2);
+        deepStrictEqual(events.flatMap(event => event.type === 'message' ? [[event.role, event.text, event.to, event.group]] : []), [
+            ['agent', 'ship it', undefined, 'release']
+        ]);
+        deepStrictEqual(logs(), [
+            'the message was not sent: it names both "to" ("builder") and "group" ("release"); a message goes to an agent or to a group, not both',
+            'the message was not sent: a task goes to one agent: "task" goes with "to", not with "group" ("release")'
+        ]);
+    });
+    it('tells the agent which group a message was posted to, in the metadata beside the sender', async () => {
+        const { agent, isOpen } = await inboxAgent();
+        const { client, events } = connect(agent);
+        await client.start();
+        await eventually(isOpen);
+        await client.send('ship it', { from: 'reviewer', group: 'release' });
+        await eventually(() => turnEnds(events).length === 1);
+        const metadata = () => (agent.received.at(-1)?.params['message'] as { metadata?: Record<string, unknown> }).metadata?.[INBOX_EXTENSION];
+        deepStrictEqual(metadata(), { from: 'reviewer', group: 'release' });
+        await client.send('all hands', { group: 'release' });
+        await eventually(() => turnEnds(events).length === 2);
+        deepStrictEqual(metadata(), { group: 'release' }, 'a message of a person to the group names no sender');
+        deepStrictEqual(events.flatMap(event => event.type === 'message' && event.role === 'user' ? [[event.text, event.from, event.group]] : []), [
+            ['ship it', 'reviewer', 'release'],
+            ['all hands', undefined, 'release']
+        ]);
+    });
+    it('names the sender and the group in the text to an agent without the inbox', async () => {
+        const agent = await fake({ script: echo });
+        const { client, events } = connect(agent);
+        await client.start();
+        await client.send('ship it', { from: 'reviewer', group: 'release' });
+        await client.send('all hands', { group: 'release' });
+        await eventually(() => turnEnds(events).length === 2);
+        deepStrictEqual(events.flatMap(event => event.type === 'message' && event.role === 'agent' ? [event.text] : []), [
+            'echo: [from reviewer in group release] ship it',
+            'echo: [in group release] all hands'
+        ]);
+    });
+});

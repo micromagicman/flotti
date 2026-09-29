@@ -75,6 +75,15 @@ type AgentEventBody =
          * sender shows it as sent there. Absent for an answer to a person.
          */
         readonly to?: string;
+        /**
+         * Id of the group of the fleet (docs/groups.md) the message went through.
+         * On a message to the agent (`role: 'user'`): it was posted to the group,
+         * by the agent `from` names or by a person, and the tab shows the group.
+         * On a message of the agent (`role: 'agent'`): the agent posts it to the
+         * group, and flotti sends it on to every other member; one of `to` and
+         * `group`, never both.
+         */
+        readonly group?: string;
         /** The message this one answers: a reply, from a person or from an agent. */
         readonly replyTo?: Quote;
         /**
@@ -108,8 +117,9 @@ type AgentEventBody =
         readonly type: 'queued';
         readonly messageId: string;
         readonly text: string;
-        /** As in a `message` event: the agent of the fleet that sent it, what it answers, sends on or sends again, and the task it is about. */
+        /** As in a `message` event: the agent of the fleet that sent it, the group it came through, what it answers, sends on or sends again, and the task it is about. */
         readonly from?: string;
+        readonly group?: string;
         readonly replyTo?: Quote;
         readonly turnAnswer?: true;
         readonly forwarded?: Forwarded;
@@ -265,6 +275,8 @@ type SendOptions = {
     readonly from?: string;
     /** The `messageId` the message gets in the tab of the receiver; a new one when absent. */
     readonly messageId?: string;
+    /** Id of the group the message was posted to (docs/groups.md); see the `group` of a `message` event. */
+    readonly group?: string;
     readonly replyTo?: Quote;
     /** The answer flotti sends back at the end of a turn; see the `turnAnswer` of a `message` event. */
     readonly turnAnswer?: true;
@@ -275,15 +287,35 @@ type SendOptions = {
     readonly delegation?: DelegationMark;
 };
 /** The fields of a `message` or `queued` event a sent message carries on, beyond its text. */
-function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message' }, 'from' | 'replyTo' | 'turnAnswer' | 'forwarded' | 'retryOf' | 'delegation'> {
+function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message' }, 'from' | 'group' | 'replyTo' | 'turnAnswer' | 'forwarded' | 'retryOf' | 'delegation'> {
     return {
         ...present('from', options.from),
+        ...present('group', options.group),
         ...present('replyTo', options.replyTo),
         ...present('turnAnswer', options.turnAnswer === true ? true as const : undefined),
         ...present('forwarded', options.forwarded),
         ...present('retryOf', options.retryOf),
         ...present('delegation', options.delegation)
     };
+}
+/**
+ * The mark in front of a message that says who sent it and through which
+ * group, for an agent that has no other place for it — a local agent over ACP,
+ * a remote one without the inbox: `[from eva in group release]`, `[from eva]`,
+ * `[in group release]` for a message a person posted to the group; nothing for
+ * a message of a person to the agent itself.
+ */
+function senderMark(options: SendOptions): string | undefined {
+    const parts = [
+        ...(options.from === undefined ? [] : [`from ${options.from}`]),
+        ...(options.group === undefined ? [] : [`in group ${options.group}`])
+    ];
+    return parts.length === 0 ? undefined : `[${parts.join(' ')}]`;
+}
+/** The text with the sender mark in front of it, when there is one to put. */
+function markedText(text: string, options: SendOptions): string {
+    const mark = senderMark(options);
+    return mark === undefined ? text : `${mark} ${text}`;
 }
 /** Why a message taken back out of the line never reached the agent: its `send` rejects with it. */
 const WITHDRAWN = 'the message was taken out of the line';
@@ -458,7 +490,7 @@ class AgentEvents {
         this.listeners.clear();
     }
 }
-export { AgentEvents, WITHDRAWN, composeText, messageFields, waitingInLine };
+export { AgentEvents, WITHDRAWN, composeText, markedText, messageFields, senderMark, waitingInLine };
 export type {
     AdminAction,
     AdminActionState,

@@ -48,6 +48,7 @@ function directory(withAdmin = true): FleetDirectory & { asked: string[] } {
         agents,
         ...seeingEachOther(['boss', 'worker'], agents),
         send: async (agentId: string): Promise<Delivery> => ({ agentId, result: 'taken' }),
+        sendToGroup: () => Promise.reject(new Error('no groups here')),
         delegate: () => Promise.reject(new Error('no tasks here')),
         cancelDelegation: () => {
             throw new Error('no tasks here');

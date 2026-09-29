@@ -3,12 +3,13 @@
 URI: `https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md`
 
 An agent of the fleet can write to another one through its inbox ([a2a-inbox.md](a2a-inbox.md)): `to`
-names the agent. A local agent learns the names with the `list_agents` tool of the fleet MCP server; a
-remote one has no such server and, without this extension, learns the id of another agent only when that
-one writes to it first. With this extension flotti tells it who it can write to — the agents in a group
-with it ([groups.md](groups.md)) — and which groups it is in: when it opens the inbox, and again whenever
-that changes. Nothing new to reach, no new secret: it goes the way every other request goes, down the
-same SSH tunnel for an agent reached over SSH.
+names the agent, `group` a group it is in. A local agent learns the names with the `list_agents` and
+`list_groups` tools of the fleet MCP server; a remote one has no such server and, without this
+extension, learns the id of another agent only when that one writes to it first. With this extension
+flotti tells it who it can write to — the agents in a group with it ([groups.md](groups.md)) — and which
+groups it is in, with their ids to put in `group`: when it opens the inbox, and again whenever that
+changes. Nothing new to reach, no new secret: it goes the way every other request goes, down the same
+SSH tunnel for an agent reached over SSH.
 
 ## The agent declares it
 
@@ -52,7 +53,8 @@ not sent the roster:
   the fleet — as `list_agents` marks them for a local agent.
 - `groups` — the groups the agent is in, as `list_groups` gives them to a local agent: `id`, `name`,
   `topic` when the group has one, and `members` — the id and the name of each member that is in the
-  fleet. An adapter written before groups ignores the field and sees a shorter `agents`.
+  fleet. `id` is what goes in `group` of the inbox to post to the group. An adapter written before groups
+  ignores the field and sees a shorter `agents`.
 - `version` — grows with every roster flotti sends the agent. The roster is whole every time: the agent
   keeps the one with the greatest version and drops the one before.
 - `text` — the same as text, ready to be handed to a model as it is.

@@ -16,6 +16,7 @@ import type {
     SendRequest,
     ServerMessage
 } from './dashboard-protocol.js';
+import { groupTabId } from './dashboard-protocol.js';
 import type { Forwarded, Quote, SendOptions } from './agent-events.js';
 import { describeError } from './describe-error.js';
 import { ConfigurationError } from './errors.js';
@@ -23,6 +24,7 @@ import { MemoryError, readMemoryBank, readMemoryNote } from './memory-bank.js';
 import type { FleetSettings } from './fleet-settings.js';
 import type { NotificationService } from './notifications.js';
 import { UnknownAgentError, UnknownGroupError } from './supervisor.js';
+import type { GroupSendOptions } from './supervisor.js';
 import type { Supervisor, SupervisorNotice } from './supervisor.js';
 /** Port the dashboard listens on unless told otherwise. */
 const DEFAULT_PORT = 4870;
@@ -265,6 +267,15 @@ const ROUTES: readonly Route[] = [
     },
     {
         method: 'POST',
+        pattern: /^\/api\/groups\/([^/]+)\/messages$/,
+        handle: async ({ supervisor }, [id], body) => {
+            const options = groupMessageOptions(body);
+            const { deliveries } = await supervisor.sendToGroup(id ?? '', messageText(body, options.forwarded !== undefined), options);
+            return [200, { deliveries } satisfies BroadcastResponse];
+        }
+    },
+    {
+        method: 'POST',
         pattern: /^\/api\/agents\/([^/]+)\/cancel$/,
         handle: async ({ supervisor }, [id]) => {
             await supervisor.cancel(id ?? '');
@@ -396,6 +407,11 @@ function messageOptions(body: unknown): SendOptions {
         ...present('forwarded', unlessAbsent(request.forwarded, forwardedOf)),
         ...present('retryOf', optionalString(request.retryOf, 'retryOf'))
     };
+}
+/** What a message of a person to a group answers or sends on: as to one agent, but nothing is sent again this way. */
+function groupMessageOptions(body: unknown): GroupSendOptions {
+    const { replyTo, forwarded } = messageOptions(body);
+    return { ...present('replyTo', replyTo), ...present('forwarded', forwarded) };
 }
 function broadcastTargets(body: unknown): string[] | undefined {
     return unlessAbsent(fieldsOf<SendRequest>(body).agents, targetsOf);
@@ -639,13 +655,26 @@ function parseClientMessage(data: string): ClientMessage | undefined {
  */
 function replayMissed(supervisor: Supervisor, socket: WebSocket, message: ClientMessage): Map<string, number> {
     const last = new Map<string, number>();
+    replayAgents(supervisor, socket, message, last);
+    replayGroups(supervisor, socket, message, last);
+    return last;
+}
+function replayAgents(supervisor: Supervisor, socket: WebSocket, message: ClientMessage, last: Map<string, number>): void {
     for (const agent of supervisor.agents()) {
         for (const event of supervisor.history(agent.id, sinceOf(message, agent.id))) {
             post(socket, { type: 'event', event });
             last.set(agent.id, event.seq);
         }
     }
-    return last;
+}
+/** The messages of each group the page has not seen yet, asked for under the tab id of the group. */
+function replayGroups(supervisor: Supervisor, socket: WebSocket, message: ClientMessage, last: Map<string, number>): void {
+    for (const group of supervisor.groups()) {
+        for (const kept of supervisor.groupHistory(group.id, sinceOf(message, groupTabId(group.id)))) {
+            post(socket, { type: 'group-message', message: kept });
+            last.set(groupTabId(group.id), kept.seq);
+        }
+    }
 }
 /** The number of the last event of the agent the page has seen; 0 when it has seen none. */
 function sinceOf(message: ClientMessage, agentId: string): number {
@@ -663,9 +692,21 @@ function deliverHeld(
         }
     }
 }
-/** Whether the page has not been sent this notice yet: any notice but an event it got replayed. */
+/** Whether the page has not been sent this notice yet: any notice but an event or a group message it got replayed. */
 function isUnseen(notice: SupervisorNotice, last: ReadonlyMap<string, number>): boolean {
-    return notice.type !== 'event' || notice.event.seq > (last.get(notice.event.agentId) ?? 0);
+    const place = numberedAt(notice);
+    return place === undefined || place.seq > (last.get(place.id) ?? 0);
+}
+/** Where a notice that is replayed is numbered — the agent id, or the tab id of the group — and its number; nothing for any other. */
+function numberedAt(notice: SupervisorNotice): { readonly id: string; readonly seq: number } | undefined {
+    switch (notice.type) {
+        case 'event':
+            return { id: notice.event.agentId, seq: notice.event.seq };
+        case 'group-message':
+            return { id: groupTabId(notice.message.groupId), seq: notice.message.seq };
+        default:
+            return undefined;
+    }
 }
 function hostOf(origin: string): string {
     try {

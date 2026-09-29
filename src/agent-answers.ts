@@ -1,22 +1,28 @@
 import type { AgentEvent, Quote } from './agent-events.js';
+import { present } from './present.js';
 /**
- * An answer an agent owes another one: the text it said in the turn of a
- * message from that agent, and the message it answers.
+ * An answer an agent owes: the text it said in the turn of a message from
+ * another agent, or of one posted to a group (docs/groups.md), and the message
+ * it answers. It goes to the group when the message came through one, to the
+ * agent that sent it otherwise.
  */
 type Answer = {
-    /** Id of the agent that sent the message: the answer goes to it. */
-    readonly to: string;
+    /** Id of the agent that sent the message: the answer goes to it, unless it came through a group. */
+    readonly to?: string;
+    /** Id of the group the message was posted to: the answer is posted there. */
+    readonly group?: string;
     readonly text: string;
     /** The message answered, as the one that gets the answer reads it. */
     readonly replyTo: Quote;
 };
-/** The message of the turn when it came from another agent and wants an answer back. */
-type Asked = { readonly from: string; readonly quote: Quote };
+/** The message of the turn when it wants an answer back: where it came from, and what it said. */
+type Asked = Pick<Answer, 'to' | 'group'> & { readonly quote: Quote };
 /**
  * Follows the events of one agent and tells when a turn ends that answers a
- * message of another agent: what the agent said in that turn goes back to the
- * sender. Only the answer goes back — what the agent says in its messages;
- * progress lines, thoughts and tool calls stay in its own tab.
+ * message of another agent, or one posted to a group: what the agent said in
+ * that turn goes back to the sender, or to the group. Only the answer goes
+ * back — what the agent says in its messages; progress lines, thoughts, tool
+ * calls and what it sent elsewhere on purpose stay in its own tab.
  *
  * An answer flotti sent back this way — it carries `turnAnswer` — gets no
  * answer back: otherwise two agents would answer each other for ever. A reply
@@ -40,7 +46,7 @@ class AgentAnswers {
     private message(event: AgentEvent & { type: 'message' }): void {
         if (event.role === 'user') {
             this.begin(event);
-        } else if (this.asked !== undefined && event.to === undefined) {
+        } else if (this.asked !== undefined && saidHere(event)) {
             this.remember(event);
         }
     }
@@ -50,10 +56,7 @@ class AgentAnswers {
     }
     private begin(event: AgentEvent & { type: 'message' }): void {
         this.said.clear();
-        // A task has an outcome of its own, sent back as such: see Delegations.
-        this.asked = event.from === undefined || event.turnAnswer === true || event.delegation !== undefined
-            ? undefined
-            : { from: event.from, quote: quoteOf(event, event.from) };
+        this.asked = wantsAnswer(event) ? { ...present('to', event.from), ...present('group', event.group), quote: quoteOf(event) } : undefined;
     }
     /** A cancelled turn, or one that said nothing, owes no answer. */
     private finish(reason: string): Answer | undefined {
@@ -64,13 +67,28 @@ class AgentAnswers {
         if (asked === undefined || reason === 'cancelled' || text === '') {
             return undefined;
         }
-        return { to: asked.from, text, replyTo: asked.quote };
+        const { quote, ...where } = asked;
+        return { ...where, text, replyTo: quote };
     }
 }
-/** The message the answer quotes: in the tab of the agent that answers it, written by the sender. */
-function quoteOf(event: AgentEvent & { type: 'message' }, author: string): Quote {
+/** A message of the agent said in its own tab: not sent to an agent or posted to a group on purpose. */
+function saidHere(event: AgentEvent & { type: 'message' }): boolean {
+    return event.to === undefined && event.group === undefined;
+}
+/**
+ * Whether the message wants an answer back: it came from another agent, or
+ * through a group, and is not itself an answer flotti sent back. A message of
+ * a person to the agent itself is answered in the tab; a task has an outcome
+ * of its own, sent back as such: see Delegations.
+ */
+function wantsAnswer(event: AgentEvent & { type: 'message' }): boolean {
+    const fromElsewhere = event.from !== undefined || event.group !== undefined;
+    return fromElsewhere && event.turnAnswer !== true && event.delegation === undefined;
+}
+/** The message the answer quotes: in the tab of the agent that answers it, written by the sender — an agent, or a person. */
+function quoteOf(event: AgentEvent & { type: 'message' }): Quote {
     const text = event.text.trim() === '' && event.forwarded !== undefined ? event.forwarded.text : event.text;
-    return { agentId: event.agentId, messageId: event.messageId, author, text };
+    return { agentId: event.agentId, messageId: event.messageId, ...present('author', event.from), text };
 }
 export { AgentAnswers };
 export type { Answer };

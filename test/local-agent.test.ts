@@ -453,3 +453,23 @@ describe('LocalAgentProcess: answering another agent of the fleet', { timeout: 2
         await supervisor.stop();
     });
 });
+describe('LocalAgentProcess: messages of a group (docs/groups.md)', () => {
+    it('tells the agent the sender and the group in front of the text, and the group alone for a message of a person', async () => {
+        const harness = new Harness();
+        await harness.agent.start();
+        const from = harness.lastSeq;
+        await harness.agent.send('ship it', { from: 'reviewer', group: 'release' });
+        await harness.next((event) => event.seq > from && event.type === 'turn-end');
+        const second = harness.lastSeq;
+        await harness.agent.send('all hands', { group: 'release' });
+        await harness.next((event) => event.seq > second && event.type === 'turn-end');
+        deepStrictEqual(harness.events.filter((event) => event.seq > from).flatMap((event) =>
+            (event.type === 'message' ? [[event.role, event.text, event.from, event.group]] : [])), [
+            ['user', 'ship it', 'reviewer', 'release'],
+            ['agent', 'you said: [from reviewer in group release] ship it', undefined, undefined],
+            ['user', 'all hands', undefined, 'release'],
+            ['agent', 'you said: [in group release] all hands', undefined, undefined]
+        ]);
+        await harness.agent.stop();
+    });
+});
