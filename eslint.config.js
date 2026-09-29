@@ -4,7 +4,7 @@ import flotti from './eslint-rules/ui-text.js';
 export default tseslint.config(
     ...tseslint.configs.recommended,
     {
-        ignores: [ 'build/', 'build-test/' ]
+        ignores: [ 'build/', 'build-test/', 'storybook-static/' ]
     },
     {
         plugins: {
@@ -57,6 +57,19 @@ export default tseslint.config(
         },
         rules: {
             'flotti/ui-text': 'error'
+        },
+    },
+    {
+        // The stories and the Storybook setup (#139): a story of many states is one long object.
+        files: [ 'web/stories/**', '.storybook/**' ],
+        rules: {
+            'max-lines-per-function': [
+                'error',
+                {
+                    max: 50,
+                    skipComments: true
+                }
+            ],
         },
     },
     {

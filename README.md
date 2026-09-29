@@ -788,6 +788,21 @@ points it at another Chromium instead.
 The `checks` workflow runs lint, types, the build, `npm test` and `test:e2e` on every pull request
 and on pushes to `main` and `develop`.
 
+### Storybook
+
+The components of the dashboard, each on its own and in every state it has — empty, waiting, in
+error, with long names, on a phone, in the dark — with no fleet running:
+
+```bash
+npm run storybook        # http://localhost:6006, with hot reload
+npm run build-storybook  # static pages in storybook-static/
+```
+
+The stories are in `web/stories/`, one file per component, with a pretend fleet in `fleet.ts`; the
+setup is in `.storybook/`. The toolbar switches the colour scheme, the language and the width of
+the page. A story runs without a server: what calls `/api` — the actions of an agent, its memory —
+gets an error back, which is a state of its own.
+
 ### Releasing
 
 Bump `version` in `package.json`, merge, then push a tag `v<version>` — the `publish` workflow
