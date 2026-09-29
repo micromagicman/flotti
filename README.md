@@ -132,8 +132,9 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   it, in the order it was sent — your messages on the right, the agents' as envelopes on the left, an
   answer a member gave in the turn a message started marked «answer» and quoting the message it
   answers; under every message, folded, how each member took it («claude, codex got it · tester
-  failed»), and open, the list of the broadcast page; and a field at the foot: Enter sends to every
-  member, **Reply** quotes. In the feed of the fleet a message to a group is one row, not one per
+  failed»), and open, the list of the broadcast page — a member that was busy is «in line» until it
+  takes the message or fails it, and then the fold says so, as does the history a page opened later
+  reads; and a field at the foot: Enter sends to every member, **Reply** quotes. In the feed of the fleet a message to a group is one row, not one per
   member — who wrote it → the marks and the name of the group, tagged `group`, and `answer` on what a
   member answered — and a click opens the tab of the group at that message; the filter by an agent
   matches a group message the agent wrote or got. A fleet with agents but no group says in the section
@@ -257,7 +258,7 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `POST /api/agents/<id>/messages` `{text, replyTo?, forwarded?, retryOf?}` | a message to one agent: `taken`, `queued` or `failed`; `replyTo` quotes a message, `forwarded` sends one on (`text` may then be empty), `retryOf` names the undelivered message it sends again |
 | `DELETE /api/agents/<id>/queue/<messageId>`   | takes a message that waits in line back out of it; 404 once the agent took it |
 | `POST /api/broadcast` `{text, agents?}`       | one message to these agents, or to all; a result each  |
-| `POST /api/groups/<id>/messages` `{text, replyTo?, forwarded?}` | a message to a group: every member gets it on its own, a result each in the order of the members; it is one message of the group, with the deliveries, on the socket and in the group's history |
+| `POST /api/groups/<id>/messages` `{text, replyTo?, forwarded?}` | a message to a group: every member gets it on its own, a result each in the order of the members; it is one message of the group, with the deliveries, on the socket and in the group's history — a `queued` delivery is written to that message as `taken` or `failed` once it ends, and the message goes out on the socket again |
 | `POST /api/agents/<id>/restart`               | restarts the agent; answers at once, the status follows |
 | `POST /api/agents/<id>/cancel`                | drops the message in work                              |
 | `POST /api/agents/<id>/start`, `…/stop`       | starts or stops the agent; start answers at once        |
@@ -281,7 +282,7 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `GET /api/admin-settings`, `PUT /api/admin-settings` `{confirmActions}` | whether actions of administrators wait for a person |
 | `GET /api/answer-delivery`, `PUT /api/answer-delivery` `{mode}` | how answers reach the tabs: `streamed` piece by piece, `whole` once complete |
 | `POST /api/admin-actions/<action>` `{allow}`  | allows or refuses an action of an administrator waiting for it |
-| `/ws`                                         | `fleet` — the agents and the groups — first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and of each group under `_group:<id>`, and gets the events and the `group-message`s after them, then live ones; `health` whenever the health of the SSH connection of an agent changes |
+| `/ws`                                         | `fleet` — the agents and the groups — first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and of each group under `_group:<id>`, and gets the events and the `group-message`s after them, then live ones — a `group-message` with a `seq` the page has is that message with a delivery that was in line settled; `health` whenever the health of the SSH connection of an agent changes |
 
 With no login, the server guards against other web pages rather than against people: it answers only
 to the host names of this machine (a page elsewhere cannot rebind a name of its own to `127.0.0.1`),
@@ -442,8 +443,9 @@ quoting the message. Such
   task — is what it was: it lands in the conversation of the pair, not in the group.
 
 The tab of a group shows, under every message, how each member took it. A member that was busy is
-recorded as `queued` when the message is posted, and the line of the history is not updated when it
-later takes the message — the fold keeps saying so (#162).
+recorded as `queued` when the message is posted; when it takes the message or fails it, the line of the
+history is written again with `taken` or `failed` and the reason, and goes out on the socket as a
+`group-message` once more — so the fold says the real outcome, as does a page opened later.
 
 ### On the dashboard
 

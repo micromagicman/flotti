@@ -1,5 +1,5 @@
 import { HistoryFile, groupMessages } from './agent-history.js';
-import type { GroupMessage } from './dashboard-protocol.js';
+import type { Delivery, GroupMessage } from './dashboard-protocol.js';
 /** A message of a group before it is numbered and timed: what the one who posts it knows. */
 type GroupMessageBody = Omit<GroupMessage, 'groupId' | 'seq' | 'time'>;
 /** What the history of a group starts with: the messages of its file, and where their numbers go on from. */
@@ -49,10 +49,28 @@ class GroupHistory {
         this.file?.append(message, this.messages);
         return message;
     }
+    /**
+     * Writes down how a delivery that was in line ended (#162): the message
+     * numbered `seq` gets `delivery` in place of the `queued` one of that
+     * member, in memory and as a corrected line of the file. Returns the
+     * message as it is now; nothing when the group has no such message or the
+     * member was not in line for it — a delivery that ended is not told twice.
+     */
+    settle(seq: number, delivery: Delivery): GroupMessage | undefined {
+        const index = this.messages.findIndex((message) => message.seq === seq);
+        const message = this.messages[index];
+        if (message === undefined || !message.deliveries.some((kept) => kept.agentId === delivery.agentId && kept.result === 'queued')) {
+            return undefined;
+        }
+        const settled: GroupMessage = { ...message, deliveries: message.deliveries.map((kept) => (kept.agentId === delivery.agentId ? delivery : kept)) };
+        this.messages[index] = settled;
+        this.file?.append(settled, this.messages);
+        return settled;
+    }
 }
 /** The file of the group, when the history goes to disk. */
 function openFile(groupId: string, directory: string | undefined, limit: number, warn: (text: string) => void): HistoryFile<GroupMessage> | undefined {
-    return directory === undefined ? undefined : new HistoryFile(`group "${groupId}"`, directory, limit, warn, groupMessages(groupId));
+    return directory === undefined ? undefined : new HistoryFile(`group "${groupId}"`, directory, limit, warn, groupMessages(groupId), true);
 }
 /**
  * What the file kept, when it is newer than anything numbered since flotti

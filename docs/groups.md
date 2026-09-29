@@ -1,8 +1,7 @@
 # Groups: agents see and write to each other only inside a group
 
-Spec of #144, the main feature of 0.6.0. Status: **for review** — the decisions below are proposed, the
-[open questions](#open-questions) wait for the owner, and the [sub-issues](#sub-issues) are the plan of
-the code. Nothing here is built yet.
+Spec of #144, the main feature of 0.6.0. Status: **built in 0.6.0** — the [sub-issues](#sub-issues)
+#149–#154 are the code, as reviewed here; the [open questions](#open-questions) keep the decisions taken.
 
 Today every agent of the fleet sees every other one — `list_agents` for a local agent, the roster of
 [the fleet extension](a2a-fleet.md) for a remote one — and can write to any of them: `send_message`,

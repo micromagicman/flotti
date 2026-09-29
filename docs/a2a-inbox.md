@@ -85,7 +85,8 @@ The message may say what it is, under the extension URI in its own metadata:
 - `group` — optional: the id of a group of the fleet the agent is in ([groups.md](groups.md)) the
   message is posted to; **one of `to` and `group`, never both**. flotti sends the text to every other
   member of the group, each on its own, as a message from this agent — see below — writes it to the
-  history of the group with how each member took it, and shows it in this agent's tab as posted to the
+  history of the group with how each member took it — a member that was busy as `queued`, corrected to
+  `taken` or `failed` once that delivery ends — and shows it in this agent's tab as posted to the
   group. What the members answer in the turn of that message is posted to the group as well, once, and
   reaches this agent as a message from each of them. A message with both `to` and `group`, one that
   names a group the agent is not in, or one that does not exist, is a line in this agent's tab saying

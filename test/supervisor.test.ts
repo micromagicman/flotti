@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { Supervisor, UnknownAgentError, UnknownGroupError } from '../src/supervisor.js';
 import type { SupervisorNotice } from '../src/supervisor.js';
 import type { ConnectionHealth } from '../src/connection-health.js';
+import type { Delivery } from '../src/dashboard-protocol.js';
 import type { Agent, RemoteAgent } from '../src/types.js';
 import { FakeFleetAgent, fakeFleet, group } from './fake-fleet-agent.js';
 function supervised(...ids: string[]) {
@@ -444,6 +445,34 @@ test('a message of a person to a group reaches every member on its own, and is o
     deepStrictEqual(notices.find((notice) => notice.type === 'group-message'), { type: 'group-message', message: posted });
     throws(() => supervisor.groupHistory('nowhere'), UnknownGroupError);
     await rejects(supervisor.sendToGroup('nowhere', 'hi'), UnknownGroupError);
+});
+/** The deliveries of the line numbered `seq` as every `group-message` notice of the socket showed them, in order. */
+function noticedDeliveries(notices: readonly SupervisorNotice[], seq: number): Delivery[][] {
+    return notices.flatMap((notice) => (notice.type === 'group-message' && notice.message.seq === seq ? [[...notice.message.deliveries]] : []));
+}
+test('a member in line for a group message: the line of the history and the socket learn how it ended — taken, or failed with why (#162)', async () => {
+    const { supervisor, fakes, notices } = supervised('a', 'b', 'c');
+    await supervisor.start();
+    const b = fake(fakes.get('b'));
+    const c = fake(fakes.get('c'));
+    b.busy = true;
+    c.busy = true;
+    const posted = await supervisor.sendToGroup('everyone', 'hello');
+    deepStrictEqual(posted.deliveries, [{ agentId: 'a', result: 'taken' }, { agentId: 'b', result: 'queued' }, { agentId: 'c', result: 'queued' }]);
+    b.release();
+    await until(() => supervisor.groupHistory('everyone')[0]?.deliveries[1]?.result === 'taken');
+    const taken: Delivery[] = [{ agentId: 'a', result: 'taken' }, { agentId: 'b', result: 'taken' }, { agentId: 'c', result: 'queued' }];
+    deepStrictEqual(supervisor.groupHistory('everyone')[0]?.deliveries, taken, 'the line says b took it; a, taken at once, is as it was');
+    deepStrictEqual(noticedDeliveries(notices, 1), [posted.deliveries, taken], 'the line went out again with the outcome');
+    deepStrictEqual(notices.filter((notice) => notice.type === 'delivery').map((notice) => notice.delivery), [{ agentId: 'b', result: 'taken' }], 'the notice of the agent is as before');
+    const inLineForC = c.options[0]?.messageId ?? '';
+    strictEqual(supervisor.withdraw('c', inLineForC), true);
+    await until(() => supervisor.groupHistory('everyone')[0]?.deliveries[2]?.result === 'failed');
+    const failedC: Delivery = { agentId: 'c', result: 'failed', error: 'the message was taken out of the line' };
+    deepStrictEqual(supervisor.groupHistory('everyone')[0]?.deliveries[2], failedC, 'the line says why c never got it');
+    deepStrictEqual(noticedDeliveries(notices, 1).at(-1), [taken[0], taken[1], failedC]);
+    strictEqual(noticedDeliveries(notices, 1).length, 3, 'one notice per outcome, and none for the member that took it at once');
+    ok(supervisor.groupHistory('everyone').every((message) => message.seq !== 1 || message.messageId === posted.messageId), 'the line is corrected, not added');
 });
 test('what a member answers to a group message is posted to the group once, as an answer, and the turns on it post nothing back', async () => {
     const { supervisor, fakes } = supervised('a', 'b', 'c');

@@ -1,6 +1,6 @@
 import { deepStrictEqual, strictEqual } from 'node:assert/strict';
 import { test } from 'node:test';
-import type { AgentSummary, GroupMessage, ServerMessage } from '../src/dashboard-protocol.js';
+import type { AgentSummary, Delivery, GroupMessage, ServerMessage } from '../src/dashboard-protocol.js';
 import { groupTabId } from '../src/dashboard-protocol.js';
 import { fleetReducer, initialState, seen } from '../web/src/fleet-state.js';
 import { EMPTY_GROUP_FEED, everyoneGroup, groupMessageKey, groupOf, laneItem, quotedInLane, tookNames, withGroupMessage } from '../web/src/groups.js';
@@ -23,6 +23,20 @@ test('the history of a group grows with its messages, each once: a replay after 
     strictEqual(withGroupMessage(two, message(1, 'first')), two);
     deepStrictEqual(two.messages.map((found) => found.text), ['first', 'second']);
     strictEqual(two.lastSeq, 2);
+});
+test('a message the page has, sent again with how a member in line took it, takes the place of the one the page had (#162)', () => {
+    const queued: Delivery[] = [{ agentId: 'a', result: 'taken' }, { agentId: 'b', result: 'queued' }];
+    const taken: Delivery[] = [{ agentId: 'a', result: 'taken' }, { agentId: 'b', result: 'taken' }];
+    const feed = withGroupMessage(withGroupMessage(EMPTY_GROUP_FEED, message(1, 'first', { deliveries: queued })), message(2, 'second'));
+    const settled = withGroupMessage(feed, message(1, 'first', { deliveries: taken }));
+    deepStrictEqual(settled.messages.map((found) => [found.seq, found.text, found.deliveries]), [[1, 'first', taken], [2, 'second', []]]);
+    strictEqual(settled.lastSeq, 2, 'what the page has seen does not change');
+    strictEqual(withGroupMessage(settled, message(1, 'first', { deliveries: taken })), settled, 'the same line again changes nothing');
+    const failed: Delivery[] = [{ agentId: 'a', result: 'taken' }, { agentId: 'b', result: 'failed', error: 'gone' }];
+    deepStrictEqual(withGroupMessage(settled, message(1, 'first', { deliveries: failed })).messages[0]?.deliveries, failed, 'a failure with its reason is taken as well');
+    strictEqual(withGroupMessage(settled, message(0, 'lost', { deliveries: taken })), settled, 'a line the page does not hold is dropped');
+    const fleet = fleetReducer(fleetReducer(initialState, server({ type: 'fleet', agents: [agent('a'), agent('b')], groups: [{ id: 'team', name: 'Team', members: ['a', 'b'] }] })), server({ type: 'group-message', message: message(1, 'first', { deliveries: queued }) }));
+    deepStrictEqual(fleetReducer(fleet, server({ type: 'group-message', message: message(1, 'first', { deliveries: taken }) })).groupFeeds['team']?.messages[0]?.deliveries, taken);
 });
 test('the page keeps the groups of the fleet and their histories, and says what it has seen of each under the tab id of the group', () => {
     const fleet = server({ type: 'fleet', agents: [agent('scout')], groups: [{ id: 'team', name: 'Team', members: ['scout'] }] });
