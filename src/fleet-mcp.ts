@@ -7,6 +7,8 @@ import type { AgentSummary, Delivery } from './dashboard-protocol.js';
 import type { DelegationCancel, DelegationStart } from './delegations.js';
 import { describeError } from './describe-error.js';
 import type { AdminOutcome } from './fleet-admin.js';
+import { noSuchAgent } from './groups.js';
+import type { GroupView, PeerSummary } from './groups.js';
 import { MEMORY_TOOLS, callMemoryTool, isMemoryTool } from './memory-tools.js';
 import { present } from './present.js';
 /**
@@ -31,6 +33,15 @@ const MAX_BODY_BYTES = 1_000_000;
 /** What the tools need of the fleet: the supervisor is one. */
 interface FleetDirectory {
     agents(): AgentSummary[];
+    /**
+     * The agents this one sees (docs/groups.md): the members of every group it
+     * is in, and itself; none when it is in no group with anyone.
+     */
+    peers(agentId: string): PeerSummary[];
+    /** The groups the agent is in, as it sees them. */
+    groupsOf(agentId: string): GroupView[];
+    /** Whether `from` may write to `to` — the two share a group; the tab of `from` says why not. */
+    mayWrite(from: string, to: string): boolean;
     /** Sends a message on behalf of an agent of the fleet: `from` is its id. */
     send(agentId: string, text: string, options?: SendOptions): Promise<Delivery>;
     /** Gives a task on behalf of an agent of the fleet: `from` is its id; `deadline` an ISO 8601 time. */
@@ -99,8 +110,15 @@ class ArgumentError extends Error {}
 const TOOLS = [
     {
         name: 'list_agents',
-        description: 'Lists the agents of your flotti fleet: id, name, what they are for and what they are doing now. '
-            + 'Your own entry is marked "you", administrators of the fleet "admin".',
+        description: 'Lists the agents of your flotti fleet you can write to — those in a group with you: id, name, '
+            + 'what they are for, what they are doing now, and "groups" — the groups you share. Your own entry is '
+            + 'marked "you", administrators of the fleet "admin".',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+    },
+    {
+        name: 'list_groups',
+        description: 'Lists the groups you are in: id, name, topic — what the group is for — and members, by id and '
+            + 'name. A person puts agents in groups; you cannot join or leave one.',
         inputSchema: { type: 'object', properties: {}, additionalProperties: false }
     },
     {
@@ -223,6 +241,7 @@ class FleetMcpServer {
     /** The tools every agent is listed, by name; the memory tools and those of an administrator are apart. */
     private readonly tools: ReadonlyMap<string, Tool> = new Map<string, Tool>([
         ['list_agents', (fleet, caller) => Promise.resolve(listAgents(fleet, caller))],
+        ['list_groups', (fleet, caller) => Promise.resolve(listGroups(fleet, caller))],
         ['send_message', (fleet, caller, args) => this.send(fleet, caller, stringArgument(args, 'to'), stringArgument(args, 'text'))],
         ['reply', (fleet, caller, args) => this.reply(fleet, caller, args)],
         ['forward', (fleet, caller, args) => this.forward(fleet, caller, args)],
@@ -462,13 +481,17 @@ class FleetMcpServer {
         return sent(to, delivery);
     }
 }
-/** Why a message cannot be sent at all; nothing when it can. */
+/**
+ * Why a message cannot be sent at all; nothing when it can. An agent the
+ * caller cannot write to — in no group with it (docs/groups.md) — is refused
+ * with the words for one that does not exist.
+ */
 function sendRefusal(fleet: FleetDirectory, from: string, to: string): string | undefined {
     if (to === from) {
         return 'that is you: name another agent';
     }
-    if (!fleet.agents().some((agent) => agent.id === to)) {
-        return `there is no agent "${to}" in the fleet; list_agents names them`;
+    if (!fleet.agents().some((agent) => agent.id === to) || !fleet.mayWrite(from, to)) {
+        return noSuchAgent(to);
     }
     return undefined;
 }
@@ -482,10 +505,20 @@ function sent(to: string, delivery: Delivery): ToolResult {
         ? `"${to}" has it. Its answer comes to you as a message from "${to}".`
         : `"${to}" is busy: the message waits in line and reaches it once it is done.`);
 }
-/** The `list_agents` tool: the fleet, with the caller's own entry marked. */
+/** What `list_agents` says to an agent in no group with anyone: the fleet is not empty, it is out of sight. */
+const NO_PEERS = 'You are not in a group with anyone yet, so there is no agent you can write to: a person puts '
+    + 'agents in groups in the settings of flotti.';
+/** The `list_agents` tool: the agents the caller sees, with its own entry marked. */
 function listAgents(fleet: FleetDirectory, caller: string): ToolResult {
-    return text(JSON.stringify(fleet.agents().map((agent) =>
-        agent.id === caller ? { ...agent, you: true } : agent), null, 2));
+    const peers = fleet.peers(caller);
+    const listed = JSON.stringify(peers.map((agent) => agent.id === caller ? { ...agent, you: true } : agent), null, 2);
+    return text(peers.length === 0 ? `${listed}\n${NO_PEERS}` : listed);
+}
+/** The `list_groups` tool: the groups the caller is in. */
+function listGroups(fleet: FleetDirectory, caller: string): ToolResult {
+    const groups = fleet.groupsOf(caller);
+    const listed = JSON.stringify(groups, null, 2);
+    return text(groups.length === 0 ? `${listed}\nYou are in no group yet: a person puts agents in groups in the settings of flotti.` : listed);
 }
 /**
  * The message a reply quotes and a forward carries: the one forwarded to the
@@ -538,8 +571,8 @@ function initializeResult(caller: string, fields: Record<string, unknown>, admin
             ?? PROTOCOL_VERSIONS[0],
         capabilities: { tools: {} },
         serverInfo: { name: MCP_SERVER_NAME, version: '1' },
-        instructions: `You are "${caller}", one agent of a flotti fleet. These tools let you see the other `
-            + 'agents and write to them' + (memory ? ', and keep your own memory across conversations with the memory_* tools.' : '.')
+        instructions: `You are "${caller}", one agent of a flotti fleet. These tools let you see the agents in a `
+            + 'group with you and write to them' + (memory ? ', and keep your own memory across conversations with the memory_* tools.' : '.')
             + (admin ? ' You are an administrator of the fleet: you may also restart agents and clear their context.' : '')
     };
 }

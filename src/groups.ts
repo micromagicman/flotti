@@ -1,3 +1,4 @@
+import type { AgentSummary } from './dashboard-protocol.js';
 import { isObject, optionalString, reject, shown, typeName } from './manifest.js';
 import type { Place } from './manifest.js';
 import type { Group } from './types.js';
@@ -14,6 +15,24 @@ const SAMPLE_GROUP = `{
     "members": ["eva", "reviewer"]
 }`;
 type Fields = Record<string, unknown>;
+/**
+ * An agent as a peer of another sees it — in `list_agents`, in the roster of
+ * a remote agent: the summary, with the ids of the groups the two share; for
+ * the agent's own entry, the groups it is in.
+ */
+type PeerSummary = AgentSummary & { readonly groups: readonly string[] };
+/** A member of a group as an agent sees it: the id, and the name of the agent. */
+type GroupMember = { readonly id: string; readonly name: string };
+/**
+ * A group as an agent sees it in `list_groups` and in the roster of a remote
+ * agent (docs/groups.md): the members that are in the fleet, by id and name.
+ */
+type GroupView = {
+    readonly id: string;
+    readonly name: string;
+    readonly topic?: string;
+    readonly members: readonly GroupMember[];
+};
 /** Where a group file lives. */
 type GroupContext = {
     /** Directory name of the group. */
@@ -111,5 +130,33 @@ function peersOf(groups: readonly Group[], agentId: string): string[] {
 function canReach(groups: readonly Group[], from: string, to: string): boolean {
     return peersOf(groups, from).includes(to);
 }
-export { GROUPS_DIRECTORY, GROUP_FILE, SAMPLE_GROUP, canReach, groupsOf, parseGroup, peersOf };
-export type { GroupContext };
+/**
+ * The refusal an agent gets for one it cannot write to — the same words
+ * whether that agent is in no group with it or does not exist at all, so
+ * that an agent outside a group learns nothing of the members.
+ */
+function noSuchAgent(agentId: string): string {
+    return `there is no agent "${agentId}" among the agents you can write to; list_agents names them`;
+}
+/** The ids of the groups both agents are in, in the order of the groups. */
+function sharedGroups(groups: readonly Group[], left: string, right: string): string[] {
+    return groupsOf(groups, left).filter((group: Group) => group.members.includes(right)).map((group: Group) => group.id);
+}
+/**
+ * The group as an agent sees it: `nameOf` gives the name of an agent of the
+ * fleet, and nothing for a member that is not in it — that one is left out,
+ * since no agent can write to it.
+ */
+function groupView(group: Group, nameOf: (agentId: string) => string | undefined): GroupView {
+    return {
+        id: group.id,
+        name: group.name,
+        ...(group.topic === undefined ? {} : { topic: group.topic }),
+        members: group.members.flatMap((id: string) => {
+            const name = nameOf(id);
+            return name === undefined ? [] : [{ id, name }];
+        })
+    };
+}
+export { GROUPS_DIRECTORY, GROUP_FILE, SAMPLE_GROUP, canReach, groupView, groupsOf, noSuchAgent, parseGroup, peersOf, sharedGroups };
+export type { GroupContext, GroupMember, GroupView, PeerSummary };

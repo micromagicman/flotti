@@ -1,6 +1,8 @@
 import { AgentEvents, WITHDRAWN, messageFields } from '../src/agent-events.js';
 import type { AgentEventBody, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from '../src/agent-events.js';
-import type { Agent, Fleet, LocalAgent } from '../src/types.js';
+import type { AgentSummary } from '../src/dashboard-protocol.js';
+import type { FleetDirectory } from '../src/fleet-mcp.js';
+import type { Agent, Fleet, Group, LocalAgent } from '../src/types.js';
 /** A message held while the agent is busy. */
 type Held = { readonly messageId: string; readonly resolve: () => void; readonly reject: (error: Error) => void };
 /**
@@ -143,10 +145,35 @@ function localAgent(id: string): LocalAgent {
         memoryDirectory: `/fleet/local/${id}/memory`
     };
 }
-/** A fleet of fake agents with these ids, and the way to reach each fake. */
+/** A group of the fleet in memory with these members; the paths do not matter. */
+function group(id: string, members: readonly string[], fields: { name?: string; topic?: string } = {}): Group {
+    return { id, name: fields.name ?? id, ...(fields.topic === undefined ? {} : { topic: fields.topic }), members, directory: `/fleet/groups/${id}`, filePath: `/fleet/groups/${id}/group.json` };
+}
+/** The one group every agent of the fleet is in, so that they see one another (docs/groups.md). */
+function everyone(ids: readonly string[]): Group {
+    return group('everyone', ids);
+}
+/**
+ * The fleet as the tools see who sees whom, where every agent is in one group
+ * with every other: what {@link fakeFleet} gives a supervisor, for a fake
+ * directory of the tools.
+ */
+function seeingEachOther(ids: readonly string[], summaries: () => AgentSummary[]): Pick<FleetDirectory, 'peers' | 'groupsOf' | 'mayWrite'> {
+    const view = { id: 'everyone', name: 'everyone', members: ids.map((id) => ({ id, name: id })) };
+    return {
+        peers: (agentId) => ids.includes(agentId) && ids.length > 1 ? summaries().map((agent) => ({ ...agent, groups: ['everyone'] })) : [],
+        groupsOf: (agentId) => ids.includes(agentId) ? [view] : [],
+        mayWrite: (from, to) => from !== to && ids.includes(from) && ids.includes(to)
+    };
+}
+/**
+ * A fleet of fake agents with these ids, and the way to reach each fake. They
+ * are all in one group, `everyone`, so they see and reach one another; a test
+ * of the groups themselves puts its own groups in.
+ */
 function fakeFleet(...ids: string[]): { fleet: Fleet; fakes: Map<string, FakeFleetAgent>; createAgent: (agent: Agent) => FleetAgent } {
     const fakes = new Map(ids.map((id) => [id, new FakeFleetAgent(id)]));
-    const fleet: Fleet = { location: { path: '/fleet', source: 'argument' }, exists: true, agents: ids.map(localAgent), groups: [] };
+    const fleet: Fleet = { location: { path: '/fleet', source: 'argument' }, exists: true, agents: ids.map(localAgent), groups: [everyone(ids)] };
     const createAgent = (agent: Agent): FleetAgent => {
         const fake = fakes.get(agent.id);
         if (fake === undefined) {
@@ -156,4 +183,4 @@ function fakeFleet(...ids: string[]): { fleet: Fleet; fakes: Map<string, FakeFle
     };
     return { fleet, fakes, createAgent };
 }
-export { FakeFleetAgent, fakeFleet };
+export { FakeFleetAgent, everyone, fakeFleet, group, seeingEachOther };

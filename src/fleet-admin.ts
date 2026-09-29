@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AdminAction, AdminActionState, AgentEventBody } from './agent-events.js';
 import type { AgentSummary } from './dashboard-protocol.js';
+import { noSuchAgent } from './groups.js';
 /**
  * Administrators of the fleet: agents a person made administrators — `admin`
  * in the manifest, or the checkbox in Settings — may restart the other agents
@@ -12,10 +13,16 @@ import type { AgentSummary } from './dashboard-protocol.js';
  * Every action is shown, by one `admin-action` event per state, in the tab of
  * the administrator and in the tab of the agent it acts on. With confirmation
  * on in the settings, it waits for a person to allow it in the dashboard.
+ *
+ * An administrator acts on the agents it sees — those in a group with it
+ * (docs/groups.md) — and on itself; an administrator for the whole fleet is
+ * put in every group.
  */
 /** What the administrators need of the fleet: the supervisor is one. */
 interface AdminFleet {
     agents(): AgentSummary[];
+    /** Whether `from` may write to `to` — the two share a group (docs/groups.md); the tab of `from` says why not. */
+    mayWrite(from: string, to: string): boolean;
     restart(agentId: string): Promise<void>;
     clearContext(agentId: string): Promise<void>;
     /** Puts an event of flotti's own into the tab of the agent, if it is still in the fleet. */
@@ -95,17 +102,18 @@ class FleetAdmin {
         resolve(allow);
         return true;
     }
-    /** Why the caller may not do it: it is not an administrator, or there is no such agent. */
+    /** Why the caller may not do it: it is not an administrator, or there is no such agent among those it sees. */
     private refusal(admin: string, target: string): string | undefined {
         const agents = this.fleet.agents();
         if (agents.find((agent) => agent.id === admin)?.admin !== true) {
             return 'Refused: only an administrator of the fleet may restart agents or clear their context, '
                 + 'and you are not one. A person makes an agent an administrator in the settings of flotti.';
         }
-        if (!agents.some((agent) => agent.id === target)) {
-            return `There is no agent "${target}" in the fleet; list_agents names them.`;
-        }
-        return undefined;
+        return this.sees(agents, admin, target) ? undefined : `Refused: ${noSuchAgent(target)}.`;
+    }
+    /** Whether the administrator sees the agent: itself, or one of the fleet in a group with it. */
+    private sees(agents: readonly AgentSummary[], admin: string, target: string): boolean {
+        return agents.some((agent) => agent.id === target) && (target === admin || this.fleet.mayWrite(admin, target));
     }
     /** Shows the action as waiting and resolves once a person answered. */
     private allowed(step: Step): Promise<boolean> {

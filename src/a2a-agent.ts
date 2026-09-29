@@ -20,9 +20,9 @@ import type { ConnectionHealth, HealthListener, HealthTrackerOptions } from './c
 import { SshConnection } from './ssh.js';
 import type { RemoteConnection, RemoteEndpoint, SshOptions } from './ssh.js';
 import type { RemoteAgent, RemoteAuth } from './types.js';
-import type { AgentSummary } from './dashboard-protocol.js';
 import { roster, rosterEntries } from './fleet-roster.js';
 import type { Roster } from './fleet-roster.js';
+import type { GroupView, PeerSummary } from './groups.js';
 import { describeError } from './describe-error.js';
 import { cachingCardFetch, cardLocation, cardUrl, describeCard, hearsFleet } from './a2a-card.js';
 import type { A2AAgentInfo } from './a2a-card.js';
@@ -86,14 +86,19 @@ type A2AAgentOptions = {
      */
     readonly onAdminRequest?: (request: AdminRequest) => void;
     /**
-     * The fleet the agent is in, handed to an agent that declares the fleet
+     * The fleet as this agent sees it — the agents in a group with it, and
+     * its groups (docs/groups.md) — handed to an agent that declares the fleet
      * extension (docs/a2a-fleet.md); without it the agent is told nothing of
      * the fleet.
      */
-    readonly fleet?: { readonly roster: () => readonly AgentSummary[] };
+    readonly fleet?: { readonly roster: () => readonly PeerSummary[]; readonly groups: () => readonly GroupView[] };
     /** How long changes of the fleet are gathered before the roster goes out; 1 s by default. */
     readonly rosterDebounceMs?: number;
 };
+/** What the agent is told of the fleet: its peers and its groups; nothing without the fleet hook. */
+function fleetSeen(fleet: A2AAgentOptions['fleet']): { readonly agents: readonly PeerSummary[]; readonly groups: readonly GroupView[] } {
+    return fleet === undefined ? { agents: [], groups: [] } : { agents: fleet.roster(), groups: fleet.groups() };
+}
 /** A round trip that takes longer than this is not measured: the connection says itself when it is gone. */
 const PROBE_TIMEOUT_MS = 10_000;
 /** The task a conversation is at, as far as its last event told. */
@@ -1206,9 +1211,10 @@ class A2AAgent implements FleetAgent {
     // --- the roster of the fleet: who the agent can write to ------------------------------------------------
     /**
      * The fleet changed — an agent came or went, was renamed, changed its
-     * status. The agent is sent the roster once the changes stop for a moment;
-     * nothing is sent before its inbox was asked for, nor when nothing it sees
-     * changed. The roster goes outside the line of messages and starts no turn.
+     * status, a group changed. The agent is sent the roster once the changes
+     * stop for a moment; nothing is sent before its inbox was asked for, nor
+     * when nothing it sees changed. The roster goes outside the line of
+     * messages and starts no turn.
      */
     fleetChanged(): void {
         const client = this.client;
@@ -1229,10 +1235,11 @@ class A2AAgent implements FleetAgent {
     private rosterDue(): boolean {
         return this.rosterSent !== undefined && this.rosterTimer === undefined && this.wantsRoster();
     }
-    /** The roster as it is now, with the next version, and its entries as JSON to tell a change by. */
+    /** The roster as it is now, with the next version, and what it lists as JSON to tell a change by. */
     private nextRoster(): { readonly roster: Roster; readonly key: string } {
-        const entries = rosterEntries(this.hooks.fleet?.roster() ?? [], this.agentId);
-        return { roster: roster(this.rosterVersion + 1, entries), key: JSON.stringify(entries) };
+        const { agents, groups } = fleetSeen(this.hooks.fleet);
+        const entries = rosterEntries(agents, this.agentId);
+        return { roster: roster(this.rosterVersion + 1, entries, groups), key: JSON.stringify({ entries, groups }) };
     }
     /** Sends the roster as a `fleet` request; a failed one is a line in the tab, and the next change tries again. */
     private async sendRoster(client: Client, signal: AbortSignal): Promise<void> {

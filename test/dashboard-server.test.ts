@@ -222,7 +222,7 @@ test('without fleet settings the page cannot change the fleet', async () => {
     const { dashboard } = await serve('a');
     strictEqual((await call(dashboard.port, 'GET', '/api/fleet')).status, 404);
     strictEqual((await call(dashboard.port, 'POST', '/api/agents', { kind: 'local', id: 'b', command: 'x' })).status, 404);
-    deepStrictEqual((await call(dashboard.port, 'GET', '/api/groups')).body, [], 'the groups are listed all the same');
+    deepStrictEqual((await call(dashboard.port, 'GET', '/api/groups')).body, [{ id: 'everyone', name: 'everyone', members: ['a'] }], 'the groups are listed all the same');
     strictEqual((await call(dashboard.port, 'POST', '/api/groups', { id: 'g' })).status, 404);
 });
 test('the settings page lists, adds, reads, changes and removes groups, and the pages learn them with the fleet', async () => {
