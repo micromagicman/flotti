@@ -143,7 +143,14 @@ const ru: Messages = {
         allMessagesHint: (n) => `Последние ${f.number(n)} по флоту`,
         sections: 'Разделы боковой панели',
         waitsForYou: (names, n) => `${names} ${n === 1 ? 'ждёт' : 'ждут'} вас`,
-        withNew: (n) => `новое: ${f.number(n)}`
+        withNew: (n) => `новое: ${f.number(n)}`,
+        groups: 'Группы',
+        groupHint: (members, messages) => `${count(members, 'участник', 'участника', 'участников')} · ${count(messages, 'сообщение', 'сообщения', 'сообщений')}`,
+        groupTab: (name, members, messages) => `Группа ${name}, ${count(members, 'участник', 'участника', 'участников')}, ${count(messages, 'сообщение', 'сообщения', 'сообщений')}`,
+        noGroups: 'Ваши агенты пока не видят друг друга.',
+        noGroupsWhy: 'Агент видит только участников своих групп. Одна группа со всеми даст им говорить; разделить их можно потом в настройках.',
+        everyone: 'Everyone',
+        makingEveryone: 'Создаю группу…'
     },
     health: {
         label: 'SSH-соединение',
@@ -198,7 +205,10 @@ const ru: Messages = {
         role: 'Роль',
         connection: 'Соединение',
         actions: 'Действия',
-        noHarness: 'неизвестен'
+        noHarness: 'неизвестен',
+        groups: 'Группы',
+        noGroups: 'ни в одной: не видит других агентов',
+        openGroup: (name) => `Открыть группу ${name}`
     },
     composer: {
         toSend: '— отправить',
@@ -280,6 +290,8 @@ const ru: Messages = {
         noneOf: (name) => `У ${name} пока нет сообщений.`,
         unseen: (n) => `↓ ${count(n, 'новое', 'новых', 'новых')}`,
         kind: { forwarded: 'пересылка', task: 'задача', result: 'итог задачи' },
+        group: 'группа',
+        answer: 'ответ',
         openIn: (place) => `Открыть: ${place}`,
         opens: (place) => `Откроется ${place}`,
         tabOf: (name) => `вкладка ${name}`,
@@ -287,6 +299,23 @@ const ru: Messages = {
         row: (from, to, when, place) => `${from} → ${to}, ${when}. Откроется ${place}`,
         when: (time, today) => (today ? f.time(time) : f.weekdayTime(time)),
         whenFull: (time) => f.dateTime(time)
+    },
+    group: {
+        of: (name) => `Группа ${name}`,
+        members: (n) => count(n, 'участник', 'участника', 'участников'),
+        notInFleet: 'не во флоте',
+        editHint: 'Участники, имя и тема — в настройках, раздел «Группы»',
+        notYet: (name) => `В группе ${name} пока ничего не сказано. Всё, что вы напишете здесь, получит каждый участник.`,
+        answer: 'ответ',
+        toGroup: (from, name) => `${from} → ${name}`,
+        answerFromTo: (from, name) => `Ответ от ${from} группе ${name}`,
+        took: 'Как участники приняли сообщение',
+        gotIt: (names) => `${names} — получено`,
+        inLine: (names) => `${names} — в очереди`,
+        failed: (names) => `${names} — не доставлено`,
+        nobody: 'других участников нет',
+        messageTo: (name) => `Сообщение группе ${name}`,
+        messagePlaceholder: (name) => `Написать в ${name}…`
     },
     conversation: {
         of: (names) => `Переписка ${names}`,

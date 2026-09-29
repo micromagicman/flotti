@@ -25,6 +25,8 @@ type SettingsPanelProps = {
     readonly notify: BrowserNotify;
     /** Opened by Add agent (#116): at the agents, the first way to add one in focus. */
     readonly atAgents?: boolean;
+    /** Opened by Edit in the tab of a group (#152): at the form of that group. */
+    readonly atGroup?: string | undefined;
 };
 /** What is being edited: nothing, a new agent of a kind, an agent of the fleet, or a group. */
 type AgentEditing =
@@ -323,8 +325,8 @@ function SettingsSections({ agents, groups, onEditing, notify, atAgents }: Secti
  * removed, started and stopped. Everything is written to the agent
  * directories, so the files stay the truth and can still be edited by hand.
  */
-function SettingsPanel({ agents, groups, notify, atAgents = false }: SettingsPanelProps) {
-    const [editing, setEditing] = useState<Editing>();
+function SettingsPanel({ agents, groups, notify, atAgents = false, atGroup }: SettingsPanelProps) {
+    const [editing, setEditing] = useState<Editing | undefined>(atGroup === undefined ? undefined : { mode: 'edit-group', id: atGroup });
     const { settings } = useT();
     return (
         <section className="settings" aria-label={settings.label}>

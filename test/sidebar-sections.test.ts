@@ -1,24 +1,33 @@
 import { deepStrictEqual, strictEqual } from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AgentStatus } from '../src/agent-events.js';
-import type { AgentSummary } from '../src/dashboard-protocol.js';
+import type { AgentSummary, GroupSummary } from '../src/dashboard-protocol.js';
+import { groupTabId } from '../src/dashboard-protocol.js';
 import { pairId } from '../web/src/conversations.js';
 import type { Conversation } from '../web/src/conversations.js';
 import { emptyFeed } from '../web/src/feed.js';
 import type { AgentFeed } from '../web/src/feed.js';
-import { markerDot, markerOf, sectionForKey, sectionOf } from '../web/src/sidebar-sections.js';
+import type { GroupFeed } from '../web/src/groups.js';
+import { SECTIONS, markerDot, markerOf, sectionForKey, sectionOf } from '../web/src/sidebar-sections.js';
 import type { MarkerInput } from '../web/src/sidebar-sections.js';
 const OTHER = { broadcastId: 'all', feedId: '_feed', conversationsId: '_conversations' };
 const agent = (id: string, status: AgentStatus = 'idle'): AgentSummary => ({ id, name: id, kind: 'local', status });
 const feed = (lastSeq: number, status: AgentStatus = 'idle'): AgentFeed => ({ ...emptyFeed(status), lastSeq });
 const conversation = (first: string, second: string, messages: number): Conversation =>
     ({ id: pairId(first, second), first, second, messages: Array.from({ length: messages }) } as unknown as Conversation);
+const group = (id: string, members: readonly string[] = []): GroupSummary => ({ id, name: id, members });
+const groupFeed = (lastSeq: number): GroupFeed => ({ messages: [], lastSeq });
 function input(over: Partial<MarkerInput> = {}): MarkerInput {
-    return { agents: [agent('scout'), agent('builder')], feeds: {}, conversations: [], seenSeq: {}, selected: 'scout', ...over };
+    return { agents: [agent('scout'), agent('builder')], feeds: {}, conversations: [], groups: [], groupFeeds: {}, seenSeq: {}, selected: 'scout', ...over };
 }
-test('a tab of the sidebar is in its section: an agent in Agents, a pair and the list of them in Conversations, the broadcast and the feed in Fleet', () => {
+test('the sidebar has four sections, Groups between Agents and Conversations (#152)', () => {
+    deepStrictEqual([...SECTIONS], ['fleet', 'agents', 'groups', 'conversations']);
+});
+test('a tab of the sidebar is in its section: an agent in Agents, a group in Groups, a pair and the list of them in Conversations, the broadcast and the feed in Fleet', () => {
     const ids = ['scout', 'builder'];
     strictEqual(sectionOf('scout', ids, OTHER), 'agents');
+    strictEqual(sectionOf(groupTabId('release'), ids, OTHER), 'groups');
+    strictEqual(sectionOf('_group:', ids, OTHER), undefined, 'a group tab names its group');
     strictEqual(sectionOf(pairId('scout', 'builder'), ids, OTHER), 'conversations');
     strictEqual(sectionOf('_conversations', ids, OTHER), 'conversations');
     strictEqual(sectionOf('all', ids, OTHER), 'fleet');
@@ -48,11 +57,22 @@ test('closed Conversations counts the pairs with messages not seen, the ones out
     strictEqual(markerDot(marker), 'unread');
     strictEqual(markerDot({ waiting: [], unread: 0 }), undefined, 'nothing new, no dot');
 });
+test('closed Groups counts the groups with messages not seen, by the tab id of the group; no group waits for a person', () => {
+    const groups = [group('release'), group('docs'), group('watch')];
+    const groupFeeds = { release: groupFeed(5), docs: groupFeed(1), watch: groupFeed(0) };
+    const marker = markerOf('groups', 'agents', input({ groups, groupFeeds, seenSeq: { [groupTabId('release')]: 3 } }));
+    deepStrictEqual(marker, { waiting: [], unread: 2 }, 'release has new messages, docs was never opened, watch has none');
+    strictEqual(markerDot(marker), 'unread');
+    const opened = markerOf('groups', 'agents', input({ groups, groupFeeds, seenSeq: { [groupTabId('docs')]: 1 }, selected: groupTabId('release') }));
+    deepStrictEqual(opened, { waiting: [], unread: 0 }, 'the open group has nothing new, docs was read');
+    strictEqual(markerOf('groups', 'groups', input({ groups, groupFeeds })), undefined, 'the open section carries nothing');
+});
 test('the keys of the switch go round with the arrows, both ways, and Home and End go to the ends', () => {
     strictEqual(sectionForKey('fleet', 'ArrowDown'), 'agents');
     strictEqual(sectionForKey('fleet', 'ArrowRight'), 'agents');
     strictEqual(sectionForKey('fleet', 'ArrowUp'), 'conversations');
-    strictEqual(sectionForKey('conversations', 'ArrowLeft'), 'agents');
+    strictEqual(sectionForKey('agents', 'ArrowDown'), 'groups');
+    strictEqual(sectionForKey('conversations', 'ArrowLeft'), 'groups');
     strictEqual(sectionForKey('conversations', 'ArrowDown'), 'fleet');
     strictEqual(sectionForKey('agents', 'Home'), 'fleet');
     strictEqual(sectionForKey('agents', 'End'), 'conversations');

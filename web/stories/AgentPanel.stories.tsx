@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { AgentPanel } from '../src/components/AgentPanel.js';
-import { AGENTS, ARCHIVIST, BUILDER, COLORS, FEEDS, LONG_NAME, QUEUE, REVIEWER, SCOUT, feed, healthOf } from './fleet.js';
+import { AGENTS, ARCHIVIST, BUILDER, COLORS, FEEDS, GROUPS, LONG_NAME, QUEUE, REVIEWER, SCOUT, feed, healthOf } from './fleet.js';
 import { MainFrame } from './frame.js';
 /**
  * The tab of an agent, with no server behind it: the actions of the header
@@ -16,6 +16,8 @@ const meta = {
         feed: FEEDS.scout!,
         agents: AGENTS,
         colors: COLORS,
+        groups: GROUPS.filter((group) => group.members.includes('scout')),
+        onOpenGroup: () => undefined,
         dispatch: () => undefined,
         quotes: { hasQuoted: () => true, onOpenQuote: () => undefined },
         jump: undefined

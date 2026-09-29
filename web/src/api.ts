@@ -47,6 +47,9 @@ const api = {
         post(agentPath(agentId, 'messages'), { text, ...extras }),
     broadcast: (text: string, agents: readonly string[]): Promise<BroadcastResponse> =>
         post('/api/broadcast', { text, agents }),
+    /** A message to every member of a group (docs/groups.md); `extras` make it a reply, or a forward. */
+    sendToGroup: (groupId: string, text: string, extras: Omit<SendRequest, 'text' | 'agents' | 'retryOf'> = {}): Promise<BroadcastResponse> =>
+        post(`/api/groups/${encodeURIComponent(groupId)}/messages`, { text, ...extras }),
     /** Takes a message that waits in line back out of it. */
     withdraw: (agentId: string, messageId: string): Promise<object> =>
         call('DELETE', agentPath(agentId, `queue/${encodeURIComponent(messageId)}`)),

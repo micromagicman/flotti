@@ -32,6 +32,8 @@ type FeedItem =
         readonly from?: string;
         /** Id of the agent this message of the agent went to, when it went to another agent and not to a person. */
         readonly to?: string;
+        /** Id of the group of the fleet the message went through (docs/groups.md): the feed of the fleet takes it from the group, not from here. */
+        readonly group?: string;
         /** The message this one answers. */
         readonly replyTo?: Quote;
         /** A message sent on as it was; `text` is then what was written above it. */
@@ -154,6 +156,7 @@ function newMessage(event: AgentEvent & { type: 'message' }): FeedItem {
         text: event.text,
         ...present('from', event.from),
         ...present('to', event.to),
+        ...present('group', event.group),
         ...present('replyTo', event.replyTo),
         ...present('forwarded', event.forwarded),
         ...present('delegation', event.delegation)

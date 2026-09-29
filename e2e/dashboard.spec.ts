@@ -198,7 +198,7 @@ async function say(page: Page, name: string, text: string): Promise<void> {
 }
 test('every agent has a tab with its status', async ({ page }) => {
     await page.goto(url);
-    await expect(page.getByRole('tablist', { name: 'Sections of the sidebar' }).getByRole('tab')).toHaveText(['Fleet', 'Agents', 'Conversations']);
+    await expect(page.getByRole('tablist', { name: 'Sections of the sidebar' }).getByRole('tab')).toHaveText(['Fleet', 'Agents', 'Groups', 'Conversations']);
     await expect(page.locator('.sidebar').getByRole('tab')).toHaveText([/claude/, /codex/, /relay/, /Add agent/]);
     for (const name of ['claude', 'codex', 'relay']) {
         await expect(tab(page, name).locator('[data-status]')).toHaveAttribute('data-status', 'idle');
@@ -453,9 +453,9 @@ test('on a narrow screen the conversations are one tab away: the pairs have a ro
 });
 const viewButton = (page: Page, name: 'Chat' | 'Memory') => page.getByRole('group', { name: 'View' }).getByRole('button', { name, exact: true });
 const rail = (page: Page) => page.getByRole('tablist', { name: 'Sections of the sidebar' });
-test('the sidebar is three tabs: a click shows its section and hides the other two, what is open stays open, and the pick survives a reload (#136)', async ({ page }) => {
+test('the sidebar is four tabs: a click shows its section and hides the others, what is open stays open, and the pick survives a reload (#136, #152)', async ({ page }) => {
     await page.goto(`${url}#/claude`);
-    await expect(rail(page).getByRole('tab')).toHaveText(['Fleet', 'Agents', 'Conversations']);
+    await expect(rail(page).getByRole('tab')).toHaveText(['Fleet', 'Agents', 'Groups', 'Conversations']);
     await expect(section(page, 'Agents'), 'the first time the sidebar opens on Agents').toHaveAttribute('aria-selected', 'true');
     await expect(tab(page, 'claude')).toBeVisible();
     await section(page, 'Fleet').click();
@@ -478,6 +478,10 @@ test('the switch is one stop of Tab; the arrows, Home and End move along it and 
     await page.goto(`${url}#/claude`);
     await section(page, 'Agents').focus();
     await expect(rail(page).locator('[tabindex="0"]')).toHaveCount(1);
+    await page.keyboard.press('ArrowDown');
+    await expect(section(page, 'Groups')).toBeFocused();
+    await expect(section(page, 'Groups')).toHaveAttribute('aria-selected', 'true');
+    await expect(tab(page, 'Group team')).toBeVisible();
     await page.keyboard.press('ArrowDown');
     await expect(section(page, 'Conversations')).toBeFocused();
     await expect(section(page, 'Conversations')).toHaveAttribute('aria-selected', 'true');
@@ -543,10 +547,10 @@ for (const width of [1280, 390]) {
             await page.addInitScript((code) => window.localStorage.setItem('flotti.language', code), language);
             await page.goto(`${url}#/claude`);
             const labels = rail(page).or(page.getByRole('tablist', { name: 'Разделы боковой панели' })).locator('.rail-label');
-            await expect(labels).toHaveCount(3);
+            await expect(labels).toHaveCount(4);
             const cut = await labels.evaluateAll((spans) => spans.filter((span) => span.scrollWidth > span.clientWidth).map((span) => span.textContent));
             expect(cut, `${language}: labels cut`).toEqual([]);
-            for (const key of ['fleet', 'agents', 'conversations']) {
+            for (const key of ['fleet', 'agents', 'groups', 'conversations']) {
                 await page.locator(`[data-section="${key}"]`).click();
                 expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${language} ${key}`).toBe(true);
             }
@@ -1024,7 +1028,7 @@ test('the language is picked in the settings: the page speaks it at once, and af
     await page.goto(`${url}#/_settings`);
     await page.getByRole('combobox', { name: 'Language of the dashboard' }).selectOption('ru');
     await expect(page.getByRole('heading', { name: 'Настройки флота' })).toBeVisible();
-    await expect(page.getByRole('tablist', { name: 'Разделы боковой панели' }).getByRole('tab')).toHaveText(['Флот', 'Агенты', 'Переписки']);
+    await expect(page.getByRole('tablist', { name: 'Разделы боковой панели' }).getByRole('tab')).toHaveText(['Флот', 'Агенты', 'Группы', 'Переписки']);
     await expect(tab(page, 'claude').locator('[data-status]')).toHaveText(/^(запускается|свободен|работает|ждёт вас|ошибка|остановлен)/);
     expect(await page.evaluate(() => document.documentElement.lang)).toBe('ru');
     await page.reload();

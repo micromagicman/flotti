@@ -55,6 +55,23 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   with the same sentence; Delete moves the directory to `.trash/`; the list follows the fleet message
   of the socket, with no reload. The Groups section of the sidebar and the tab of a group come with
   the next step (#153).
+- **The Groups section and the tab of a group** — the fourth step of the groups of #144. The rail of
+  the sidebar gets a fourth section, **Groups**, between Agents and Conversations: every group of the
+  fleet with the marks of its members in a row (a member not in the fleet a hollow grey square, more
+  than four «+N»), its name, how many members and messages, and the unread dot of a conversation; a
+  closed section carries the dot on its icon. The tab of a group, `_group:<id>`, is the agent's tab for
+  a group: a one-line header with the members by mark and name and Edit, which opens the group in
+  Settings → Groups, the topic under it; one lane in the order the messages were sent — the person's
+  on the right, the agents' as envelopes on the left, an answer of a round marked «answer» and quoting
+  the message it answers, forwards as in a conversation — and under every message, folded, how each
+  member took it, opening into the list of the broadcast page; a composer at the foot, Enter sends to
+  the group, Reply quotes. The feed of the fleet shows a message to a group as one row — who wrote it →
+  the marks and the name of the group, tagged `group`, and `answer` on what a member answered — that
+  opens the tab of the group at the message; the filter by an agent matches a group message it wrote or
+  got. A fleet with agents but no group says in the section that the agents do not see each other yet,
+  and one click **Everyone** makes one group of every agent (docs/groups.md, open question 2). The
+  details of an agent list its groups. The page asks the history of each group on `subscribe` under its
+  tab id, so a reconnect brings only what it has not seen (#152).
 - **A Storybook of the components of the dashboard.** `npm run storybook` opens the sidebar with its
   rail, the feed of the fleet, a message and the tab of an agent on their own, in every state they
   have — empty, waiting, in error, with long names, with many agents, on a phone, light and dark —

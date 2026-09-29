@@ -6,11 +6,12 @@
  */
 import type { AgentStatus, Quote } from '../../src/agent-events.js';
 import type { ConnectionHealth } from '../../src/connection-health.js';
-import type { AgentSummary } from '../../src/dashboard-protocol.js';
+import type { AgentSummary, Delivery, GroupMessage, GroupSummary } from '../../src/dashboard-protocol.js';
 import type { AgentColors } from '../src/agent-colors.js';
 import { conversations } from '../src/conversations.js';
 import type { Conversation } from '../src/conversations.js';
 import type { AgentFeed, FeedItem, MessageItem, QueuedMessage } from '../src/feed.js';
+import type { GroupFeed } from '../src/groups.js';
 /** The ids of the tabs that are not an agent's, as App.tsx names them. */
 const TABS = { broadcastId: 'all', feedId: '_feed', addAgentId: '_add-agent', conversationsId: '_conversations' } as const;
 const SCOUT: AgentSummary = { id: 'scout', name: 'Scout', kind: 'local', harness: 'claude', status: 'idle', description: 'Reads the code and answers questions about it.', memory: { state: 'on', policy: 1, skill: 'builtin' } };
@@ -102,6 +103,39 @@ const QUEUE: readonly QueuedMessage[] = [
     { messageId: 'q-1', seq: 10, time: ago(3), text: 'When the push is done, bump the version to 0.6.0.' },
     { messageId: 'q-2', seq: 11, time: ago(1), text: 'Builder, please also update the changelog.', from: 'scout' }
 ];
+/** The groups of the fleet (docs/groups.md, #152): a release team with a member gone, a pair for the docs, a watch of four. */
+const RELEASE: GroupSummary = { id: 'release', name: 'Release 0.6.0', topic: 'Ship 0.6.0: the groups feature, its docs and the release notes.', members: ['builder', 'reviewer', 'tester'] };
+const GROUPS: readonly GroupSummary[] = [
+    RELEASE,
+    { id: 'docs', name: 'Docs', topic: 'Keep the README true to the code.', members: ['scout', 'archivist'] },
+    { id: 'watch', name: 'Night watch', members: ['scout', 'builder', 'reviewer', 'archivist', 'tester'] }
+];
+const took = (...results: [string, Delivery['result'], string?][]): Delivery[] =>
+    results.map(([agentId, result, error]) => ({ agentId, result, ...(error === undefined ? {} : { error }) }));
+type GroupMessageInput = Omit<GroupMessage, 'groupId' | 'messageId' | 'time'> & { readonly minutesAgo: number };
+function groupMessage(groupId: string, { minutesAgo, ...rest }: GroupMessageInput): GroupMessage {
+    return { groupId, messageId: `g-${rest.seq}`, time: ago(minutesAgo), ...rest };
+}
+const RELEASE_TEXT = 'Release 0.6.0 is due Friday. Builder: run the release suite; Reviewer: check #142 once it\'s green.';
+/** What was said in the release group: a person's message, the answers of the round, a reply, a forward; Tester never gets anything. */
+const RELEASE_MESSAGES: readonly GroupMessage[] = [
+    groupMessage('release', { seq: 1, minutesAgo: 50, text: RELEASE_TEXT, deliveries: took(['builder', 'taken'], ['reviewer', 'taken'], ['tester', 'failed', 'not in the fleet']) }),
+    groupMessage('release', { seq: 2, minutesAgo: 47, from: 'builder', turnAnswer: true, text: 'Suite is green on release/0.6.0 except two notifier tests: the push payload lost its `tag`. The fix is in #142.',
+        replyTo: { agentId: 'builder', messageId: 'tab-1', text: RELEASE_TEXT }, deliveries: took(['reviewer', 'taken'], ['tester', 'failed', 'not in the fleet']) }),
+    groupMessage('release', { seq: 3, minutesAgo: 32, from: 'reviewer', turnAnswer: true, text: 'Reviewed #142: the fix is right, and the test now names the tag it expects.',
+        replyTo: { agentId: 'reviewer', messageId: 'tab-1', text: RELEASE_TEXT }, deliveries: took(['builder', 'queued'], ['tester', 'failed', 'not in the fleet']) }),
+    groupMessage('release', { seq: 4, minutesAgo: 11, from: 'builder', text: 'Thanks — merging once the checks are green.',
+        replyTo: { agentId: '_group:release', messageId: 'g-3', seq: 3, author: 'reviewer', text: 'Reviewed #142: the fix is right, and the test now names the tag it expects.' },
+        deliveries: took(['reviewer', 'taken'], ['tester', 'failed', 'not in the fleet']) }),
+    groupMessage('release', { seq: 5, minutesAgo: 4, text: 'Scout found this while reading the README — one of you take it.',
+        forwarded: { author: 'scout', text: 'The README still says every agent sees every other one; the Groups section of 0.6.0 is not there yet.' },
+        deliveries: took(['builder', 'taken'], ['reviewer', 'queued'], ['tester', 'failed', 'not in the fleet']) })
+];
+const GROUP_FEEDS: Readonly<Record<string, GroupFeed>> = {
+    release: { messages: RELEASE_MESSAGES, lastSeq: 5 },
+    docs: { messages: [groupMessage('docs', { seq: 1, minutesAgo: 1_440, text: 'The README still says every agent sees every other one.', deliveries: took(['scout', 'taken'], ['archivist', 'failed', 'the agent is stopped']) })], lastSeq: 1 },
+    watch: { messages: [], lastSeq: 0 }
+};
 /** A word that goes on: names of agents, texts of messages, too long for one line. */
 const LONG_NAME = 'An agent with a name so long that no tab, chip or header of the dashboard can show all of it';
 const LONG_TEXT = 'A message that goes on for a while, to see where the row cuts it and how a long word like https://example.invalid/a/path/that/does/not/end/and/keeps/going/until/the/edge/of/the/row wraps or is cut in the feed of the fleet and in the tab of an agent.';
@@ -118,5 +152,5 @@ function manyAgents(n: number): { readonly agents: readonly AgentSummary[]; read
     const colors = Object.fromEntries(agents.map((agent, i) => [agent.id, i % 6]));
     return { agents, feeds, colors };
 }
-export { AGENTS, ARCHIVIST, BUILDER, COLORS, CONVERSATIONS, FEEDS, LONG_NAME, LONG_TEXT, QUEUE, REVIEWER, SCOUT, SEEN_SEQ, TABS, ago, feed, healthOf, manyAgents, message };
+export { AGENTS, ARCHIVIST, BUILDER, COLORS, CONVERSATIONS, FEEDS, GROUPS, GROUP_FEEDS, LONG_NAME, LONG_TEXT, QUEUE, RELEASE, REVIEWER, SCOUT, SEEN_SEQ, TABS, ago, feed, groupMessage, healthOf, manyAgents, message, took };
 export type { MessageInput };

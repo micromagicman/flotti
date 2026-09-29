@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Dispatch } from 'react';
 import type { Quote } from '../../../src/agent-events.js';
-import type { AgentSummary, SendRequest } from '../../../src/dashboard-protocol.js';
+import type { AgentSummary, GroupSummary, SendRequest } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import { api } from '../api.js';
 import type { AgentFeed } from '../feed.js';
@@ -28,6 +28,9 @@ type AgentPanelProps = {
     /** The whole fleet, and the colour of each agent: for the messages agents send one another. */
     readonly agents: readonly AgentSummary[];
     readonly colors: AgentColors;
+    /** The groups the agent is in (docs/groups.md), for its details, and the way to the tab of one. */
+    readonly groups: readonly GroupSummary[];
+    readonly onOpenGroup: (groupId: string) => void;
     readonly dispatch: Dispatch<FleetAction>;
     /** Where a quote leads: this tab or another one. */
     readonly quotes: Pick<MessageActions, 'hasQuoted' | 'onOpenQuote'>;
@@ -217,7 +220,7 @@ function AgentBody({ agent, feed, agents, colors, dispatch, quotes, jump, view }
     );
 }
 function AgentPanel(props: AgentPanelProps) {
-    const { agent, feed, colors } = props;
+    const { agent, feed, colors, groups, onOpenGroup } = props;
     const [view, setView] = useState<AgentView>('chat');
     const details = useDetails();
     const detailsId = `agent-details-${agent.id}`;
@@ -229,7 +232,7 @@ function AgentPanel(props: AgentPanelProps) {
                 <ConnectionAlarm health={agent.health} onDetails={details.show} />
                 <AgentBody {...props} view={view} />
             </section>
-            {details.open ? <AgentDetails agent={agent} id={detailsId} onClose={details.hide} /> : null}
+            {details.open ? <AgentDetails agent={agent} id={detailsId} onClose={details.hide} groups={groups} onOpenGroup={onOpenGroup} /> : null}
         </>
     );
 }

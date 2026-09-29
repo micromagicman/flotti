@@ -132,7 +132,14 @@ const en = {
         allMessagesHint: (n: number) => `The latest ${f.number(n)} of the fleet`,
         sections: 'Sections of the sidebar',
         waitsForYou: (names: string, n: number) => `${names} wait${n === 1 ? 's' : ''} for you`,
-        withNew: (n: number) => `${f.number(n)} with something new`
+        withNew: (n: number) => `${f.number(n)} with something new`,
+        groups: 'Groups',
+        groupHint: (members: number, messages: number) => `${f.number(members)} member${s(members)} · ${f.number(messages)} message${s(messages)}`,
+        groupTab: (name: string, members: number, messages: number) => `Group ${name}, ${f.number(members)} member${s(members)}, ${f.number(messages)} message${s(messages)}`,
+        noGroups: 'Your agents don\'t see each other yet.',
+        noGroupsWhy: 'An agent reaches only the members of its groups. One group of everyone lets them talk; split them later in Settings.',
+        everyone: 'Everyone',
+        makingEveryone: 'Making the group…'
     },
     health: {
         label: 'SSH connection',
@@ -187,7 +194,10 @@ const en = {
         role: 'Role',
         connection: 'Connection',
         actions: 'Actions',
-        noHarness: 'not known'
+        noHarness: 'not known',
+        groups: 'Groups',
+        noGroups: 'in no group: it sees no other agent',
+        openGroup: (name: string) => `Open the group ${name}`
     },
     composer: {
         toSend: 'to send',
@@ -269,6 +279,8 @@ const en = {
         noneOf: (name: string) => `No messages of ${name} yet.`,
         unseen: (n: number) => `↓ ${f.number(n)} new`,
         kind: { forwarded: 'forwarded', task: 'task', result: 'task result' },
+        group: 'group',
+        answer: 'answer',
         openIn: (place: string) => `Open in ${place}`,
         opens: (place: string) => `Opens ${place}`,
         tabOf: (name: string) => `the tab of ${name}`,
@@ -276,6 +288,23 @@ const en = {
         row: (from: string, to: string, when: string, place: string) => `${from} to ${to}, ${when}. Opens ${place}`,
         when: (time: Date, today: boolean) => (today ? f.time(time) : f.weekdayTime(time)),
         whenFull: (time: Date) => f.dateTime(time)
+    },
+    group: {
+        of: (name: string) => `Group ${name}`,
+        members: (n: number) => `${f.number(n)} member${s(n)}`,
+        notInFleet: 'not in the fleet',
+        editHint: 'Members, name and topic — in Settings → Groups',
+        notYet: (name: string) => `Nothing said in ${name} yet. Every member gets what you write here.`,
+        answer: 'answer',
+        toGroup: (from: string, name: string) => `${from} → ${name}`,
+        answerFromTo: (from: string, name: string) => `Answer from ${from} to ${name}`,
+        took: 'How the members took it',
+        gotIt: (names: string) => `${names} got it`,
+        inLine: (names: string) => `${names} in line`,
+        failed: (names: string) => `${names} failed`,
+        nobody: 'no other member',
+        messageTo: (name: string) => `Message to ${name}`,
+        messagePlaceholder: (name: string) => `Message ${name}…`
     },
     conversation: {
         of: (names: string) => `Conversation of ${names}`,
