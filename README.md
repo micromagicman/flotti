@@ -1,9 +1,4 @@
-<h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/flotti-logo-dark.svg">
-    <img src="assets/logo/flotti-logo.svg" alt="flotti" height="56">
-  </picture>
-</h1>
+<h1><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/micromagicman/flotti/main/assets/logo/flotti-logo-dark.svg"><img src="https://raw.githubusercontent.com/micromagicman/flotti/main/assets/logo/flotti-logo.svg" alt="flotti" height="56"></picture></h1>
 
 Let your AI agents talk — to you and to each other.
 
@@ -87,7 +82,7 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   `waiting for you` — a permission to grant, an answer the agent asked for — stands out the most.
 - **The header of the tab** names the harness that runs the agent — `claude` or `codex`, from the
   `adapter` of its manifest; a remote agent names its own in its published file or its card
-  ([docs/a2a-ssh.md](docs/a2a-ssh.md#which-harness-runs-the-agent)), and a name flotti does not know
+  ([docs/a2a-ssh.md](https://github.com/micromagicman/flotti/blob/main/docs/a2a-ssh.md#which-harness-runs-the-agent)), and a name flotti does not know
   is shown as it is. A local agent with no `adapter` and a remote agent that says nothing do not tell
   which harness runs them, and the header says `harness unknown` rather than guess.
 - **Inside the tab**: the agent's output as it comes — messages, collapsed reasoning, tool calls with
@@ -473,8 +468,8 @@ message fails at once, and the tool says why. `cancel_delegation` takes the task
 cancels the turn working on it; the giver gets no outcome for a task it took back. A task not done by its
 deadline fails, and the agent working on it is told to stop. Both tabs show the task as a card — who gave
 it to whom, where it stands, and the result or the reason once it is over (#51). An A2A agent gives and
-takes back tasks through its inbox: see [docs/a2a-inbox.md](docs/a2a-inbox.md); who is in the fleet it
-learns through [the fleet extension](docs/a2a-fleet.md).
+takes back tasks through its inbox: see [docs/a2a-inbox.md](https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md); who is in the fleet it
+learns through [the fleet extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md).
 
 The server speaks MCP over HTTP (the streamable transport, with plain JSON answers) on a free port of
 `127.0.0.1`, and every agent gets a token of its own in the `Authorization` header: the token tells who
@@ -543,10 +538,10 @@ by default there are none. An administrator gets two more tools:
 
 | Tool             | What it does                                                                        |
 |------------------|-------------------------------------------------------------------------------------|
-| `restart_agent`  | restarts an agent: `id` — its id; a local agent as a process, a remote one through [the restart extension](docs/a2a-restart.md), or with a new conversation when it has none |
+| `restart_agent`  | restarts an agent: `id` — its id; a local agent as a process, a remote one through [the restart extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-restart.md), or with a new conversation when it has none |
 | `clear_context`  | starts the conversation of an agent anew: a local agent gets a new ACP session, a remote one a new `contextId`; what it is doing now is cancelled |
 
-A remote administrator asks the same through [the inbox](docs/a2a-inbox.md#requests-of-an-administrator).
+A remote administrator asks the same through [the inbox](https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md#requests-of-an-administrator).
 An administrator may name itself; the action is then done once the turn it asked in is over.
 Whether the caller may is decided by flotti: an agent that is not an administrator is refused, with
 the reason, and nothing happens. No tool gives or takes the role — only a person does, in the manifest
@@ -655,15 +650,15 @@ agent: the dashboard gets the same events and drives it the same way.
   agent as waiting, and the next message answers that task. A message sent while the agent is busy waits
   until it is done.
 - **Cancel** cancels the task the agent is working on.
-- **Restart.** An agent that declares the [restart extension](docs/a2a-restart.md) is asked to restart
+- **Restart.** An agent that declares the [restart extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-restart.md) is asked to restart
   itself, and flotti reconnects once it is back. Any other agent cannot be restarted from here, so
   for it restart means a new conversation.
-- **What the agent says of its own.** An agent that declares the [inbox extension](docs/a2a-inbox.md)
+- **What the agent says of its own.** An agent that declares the [inbox extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md)
   gets a stream that flotti opens once and keeps open: through it the agent sends messages nobody asked
   for — "the merge request is ready" — and lines about what it is busy with, and they show in its tab
   like any other. A broken inbox is reconnected to for as long as the agent is connected. Without the
   extension an A2A agent has no way to speak first: its tab shows only its answers.
-- **Who is in the fleet.** An agent that declares the [fleet extension](docs/a2a-fleet.md) next to the
+- **Who is in the fleet.** An agent that declares the [fleet extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md) next to the
   inbox gets the roster of the fleet — the same entries `list_agents` gives a local agent, its own marked
   `you` and administrators `admin` — with the inbox request, and again whenever the fleet changes. So it
   can write to any agent without waiting for that one to write first.
@@ -675,7 +670,7 @@ says `"ssh": "user@host"`, and flotti does the rest with nothing but the user's 
 
 - **Asks the host** over SSH where the agent listens and which token it expects: the agent's A2A
   adapter publishes both in `~/.flotti/a2a/<id>.json` on its host — the contract is in
-  [docs/a2a-ssh.md](docs/a2a-ssh.md). The token stays in memory: it is never written to the manifest,
+  [docs/a2a-ssh.md](https://github.com/micromagicman/flotti/blob/main/docs/a2a-ssh.md). The token stays in memory: it is never written to the manifest,
   a log or the dashboard.
 - **Opens the tunnel**: `ssh -N -L` from a free port on `127.0.0.1` to the published address, and sends
   every request to that address — the one the card names too — down the tunnel.
@@ -740,7 +735,7 @@ for everything after N — and its time:
 
 Events do not have to answer a message: what an agent says or does on its own, between the messages of a
 person, comes the same way. A local agent does so with any ACP `session/update` it sends outside a
-prompt; a remote one through the [inbox extension](docs/a2a-inbox.md).
+prompt; a remote one through the [inbox extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md).
 
 A kind of event one protocol has not got simply does not come from it: A2A has no thoughts, tool calls
 or permission requests — an A2A agent asks a person by pausing its task, and the next message answers.
