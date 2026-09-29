@@ -20,7 +20,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.test.json && tsc -p web/tsconfig.json",
     "test": "tsc -p tsconfig.test.json && node --test build-test/test/*.test.js",
     "test:e2e": "npm run build && tsc -p tsconfig.test.json && playwright test -c e2e/playwright.config.ts",
-    "smoke:memory": "tsc -p tsconfig.test.json && node build-test/test/smoke/memory-smoke.js"
+    "smoke:memory": "tsc -p tsconfig.test.json && node build-test/test/smoke/memory-smoke.js",
+    "storybook": "storybook dev -p 6006 --no-open",
+    "build-storybook": "storybook build"
   },
   "repository": {
     "type": "git",
@@ -41,6 +43,7 @@
   "description": "A messenger for AI agents: local agents over ACP, remote agents over A2A, and a dashboard with a tab per agent, tasks between agents and a broadcast to all of them.",
   "devDependencies": {
     "@playwright/test": "^1.63.0",
+    "@storybook/react-vite": "^10.6.0",
     "@stylistic/eslint-plugin": "^5.10.0",
     "@types/node": "^26.5.1",
     "@types/react": "^19.3.0",
@@ -50,6 +53,7 @@
     "eslint": "^10.10.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "storybook": "^10.6.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.0",
     "vite": "^8.3.0"

@@ -4,6 +4,13 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ## [Unreleased]
 
+### Added
+
+- **A Storybook of the components of the dashboard.** `npm run storybook` opens the sidebar with its
+  rail, the feed of the fleet, a message and the tab of an agent on their own, in every state they
+  have — empty, waiting, in error, with long names, with many agents, on a phone, light and dark —
+  with no fleet running; `npm run build-storybook` writes the static pages (#139).
+
 ### Changed
 
 - **The license is now PolyForm Noncommercial 1.0.0 — noncommercial use only.** flotti was under ISC,
