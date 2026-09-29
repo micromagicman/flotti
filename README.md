@@ -155,6 +155,14 @@ same files: the fleet stays directories a person can read and edit by hand.
 - **Delete** stops the agent and moves its directory — memory bank and skills with it — to `.trash/`
   in the fleet directory, as `<local|remote>-<id>-<time>`. The fleet does not read `.trash/`; to bring
   an agent back, move its directory back and run flotti again.
+- **Groups.** The groups of the fleet ([docs/groups.md](docs/groups.md)) — each with its id, name,
+  topic and members — with **Edit** and **Delete**, and **Add group**. The form is the agent form's:
+  the id names the directory `groups/<id>/` and is picked once; the name, the topic the agents get as
+  it is, and the members as ticks over the agents of the fleet, plus ids typed by hand for agents that
+  are not in it yet. A member the fleet does not have — deleted, or typed by hand — is kept and shown
+  as *not in the fleet*. The group is checked the way `flotti run` checks it before `group.json` is
+  written, and refused with the same sentence; the agents in it see each other on their next
+  `list_agents`. **Delete** moves the directory to `.trash/` as `group-<id>-<time>`.
 - **Fleet directory.** Shows the directory the run works with and where it came from. **Switch** points
   the run at another one: the agents of the old fleet stop, those of the new one start, and
   `.flotti-run.json` moves along so `flotti stop` still finds the run. A directory that is not there

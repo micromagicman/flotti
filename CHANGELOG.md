@@ -46,6 +46,15 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   answer back: one message, one round of answers. A group the sender is not in is refused with the words
   for one that does not exist; the tab of the sender says the real reason. The tab of a group and the
   Groups section come with the dashboard steps (#151).
+- **Settings → Groups** — the fifth step of the groups of #144. The settings page lists the groups of
+  the fleet next to the agents — id, name, topic, members — with **Add group**, **Edit** and
+  **Delete**. The form follows the agent form: the id, picked once, names `groups/<id>/`; the name;
+  the topic; the members as ticks over the agents of the fleet, and ids typed by hand for agents that
+  are not in it yet — a member the fleet does not have is kept and shown as *not in the fleet*. A new
+  or changed group is checked the way `flotti run` checks it before the file is written and refused
+  with the same sentence; Delete moves the directory to `.trash/`; the list follows the fleet message
+  of the socket, with no reload. The Groups section of the sidebar and the tab of a group come with
+  the next step (#153).
 - **A Storybook of the components of the dashboard.** `npm run storybook` opens the sidebar with its
   rail, the feed of the fleet, a message and the tab of an agent on their own, in every state they
   have — empty, waiting, in error, with long names, with many agents, on a phone, light and dark —

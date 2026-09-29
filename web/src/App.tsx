@@ -193,9 +193,9 @@ function ConversationMain({ model }: { readonly model: AppModel }) {
 }
 type Panel = (props: { readonly model: AppModel }) => JSX.Element;
 function SettingsMain({ model }: { readonly model: AppModel }) {
-    const { tab, attention, live } = model;
+    const { state, tab, attention, live } = model;
     const notify = { permission: attention.permission, onAsk: attention.askPermission };
-    return <SettingsPanel key={tab} agents={live} notify={notify} atAgents={tab === ADD_AGENT} />;
+    return <SettingsPanel key={tab} agents={live} groups={state.groups} notify={notify} atAgents={tab === ADD_AGENT} />;
 }
 function FeedMain({ model }: { readonly model: AppModel }) {
     const { state, colors, feedOpen } = model;

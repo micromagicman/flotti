@@ -2,7 +2,7 @@
  * State of the whole page and how server messages change it. Pure, like
  * feed.ts: the hook in connection.ts only feeds it.
  */
-import type { AgentSummary, ConnectionHealth, Delivery, ServerMessage } from '../../src/dashboard-protocol.js';
+import type { AgentSummary, ConnectionHealth, Delivery, GroupSummary, ServerMessage } from '../../src/dashboard-protocol.js';
 import { applyEvent, emptyFeed, settleAdminAction, settlePermission } from './feed.js';
 import type { AgentFeed } from './feed.js';
 /** Where the socket is: `gone` — the server said it stops, and nothing reconnects. */
@@ -10,6 +10,8 @@ type Link = 'connecting' | 'open' | 'closed' | 'gone';
 type FleetState = {
     readonly link: Link;
     readonly agents: readonly AgentSummary[];
+    /** The groups of the fleet (docs/groups.md), as the server lists them. */
+    readonly groups: readonly GroupSummary[];
     readonly feeds: Readonly<Record<string, AgentFeed>>;
     /** Late outcomes of queued messages, newest last. */
     readonly deliveries: readonly Delivery[];
@@ -20,14 +22,14 @@ type FleetAction =
     | { readonly type: 'permission-answered'; readonly agentId: string; readonly requestId: string }
     /** An action of an administrator allowed or refused here: it shows in two tabs, and both settle. */
     | { readonly type: 'admin-answered'; readonly actionId: string };
-const initialState: FleetState = { link: 'connecting', agents: [], feeds: {}, deliveries: [] };
-function withFleet(state: FleetState, agents: readonly AgentSummary[]): FleetState {
+const initialState: FleetState = { link: 'connecting', agents: [], groups: [], feeds: {}, deliveries: [] };
+function withFleet(state: FleetState, agents: readonly AgentSummary[], groups: readonly GroupSummary[]): FleetState {
     const feeds: Record<string, AgentFeed> = {};
     for (const agent of agents) {
         const known = state.feeds[agent.id];
         feeds[agent.id] = known === undefined ? emptyFeed(agent.status) : { ...known, status: agent.status };
     }
-    return { ...state, agents, feeds };
+    return { ...state, agents, groups, feeds };
 }
 /** The agent's connection is as healthy as the server says now. */
 function withHealth(state: FleetState, agentId: string, health: ConnectionHealth): FleetState {
@@ -45,7 +47,7 @@ function withEvent(state: FleetState, event: EventMessage['event']): FleetState 
 function fromServer(state: FleetState, message: ServerMessage): FleetState {
     switch (message.type) {
         case 'fleet':
-            return withFleet(state, message.agents);
+            return withFleet(state, message.agents, message.groups);
         case 'event':
             return withEvent(state, message.event);
         case 'group-message':
