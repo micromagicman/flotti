@@ -31,7 +31,7 @@ and does not narrow delivery (#174, variant a — comment in #174), and **Settin
   the agent tab — they wait for the person.
 - **#173 No feed.** The «All messages» tab, `fleet-feed.ts`, `FleetFeedPanel`, the filter, the jump,
   the i18n keys and the e2e of #114 go; `group` on the `message` event stays (#172 needs it). The
-  broadcast stays; where it sits is open question 3.
+  broadcast stays, the first tab of Agents (decision 3).
 - **#174 Mentions — variant (a), as decided.** `@<id>` in the text, one pure parser
   (`src/mentions.ts`) on every path; a mention of a non-member is refused with one sentence and the
   message is not posted; `mentions: [ids]` on the history line, in the inbox metadata and on the
@@ -43,7 +43,7 @@ and does not narrow delivery (#174, variant a — comment in #174), and **Settin
   at the end of the Groups section like Add agent; the API of groups does not change.
 - **Adapters.** `docs/a2a-inbox.md`: `to` between agents refused from 0.7.0, `mentions` on the way in,
   the mark in the text; `docs/a2a-fleet.md`: `id` is what a mention names. The Tasks section of the
-  inbox waits for open question 1.
+  inbox follows decision 1.
 
 ### What stays in 0.7.0
 
@@ -70,10 +70,21 @@ None: every part of 0.7.0 changes a rule that already exists.
 - `dashboard-rail`: two sections instead of four (assumes open question 3 = two sections), Add group
   as a tab of the Groups section, the unread mark follows what is shown.
 
-## Open questions
+## Decisions
 
-Decisions the owner takes. Each has a recommendation, which is what the deltas assume; a different
-answer changes the task group it names.
+Taken by the owner (Evgeny) on 30.09.2026, in Telegram (the button of message 7280): **every
+recommendation is accepted**, so the deltas and the tasks stand as they were written. They were the open
+questions of this proposal and keep their numbers, so «open question N» in the design, the deltas and
+the tasks names the decision below.
+
+1. **(a)** — a task goes to one member inside a group.
+2. **They stay** — the rows of 0.6.x between two agents stay in sight.
+3. **Two sections**, Agents with «All agents» the first tab and Groups; **the broadcast stays**.
+4. **`@<id>` in the text**; the picker offers the names and inserts the id; the row shows the name.
+5. **No** inbox of mentions in 0.7.0.
+6. **The whole group turn goes** from the tab of the agent, permission requests excepted.
+
+What each question weighed, as it was asked:
 
 1. **What becomes of a task between agents — `delegate`, `cancel_delegation`, `task` and `cancel` of
    the inbox?** A task is a direct exchange, and #171 removes those. Three ways: **(a)** a task to one

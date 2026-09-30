@@ -183,7 +183,7 @@ busy holds nobody up — and is written to the history of the group with how eac
 ### A message to one agent inside a group
 
 *0.7.0:* gone — a message between agents goes through a group, addressed with `@<id>` when it is for
-one of them (#171, #174); what becomes of a task is [open question 1 of 0.7.0](../openspec/changes/groups-only/proposal.md#open-questions).
+one of them (#171, #174); a task goes to one member inside a group — [decision 1 of 0.7.0](../openspec/changes/groups-only/proposal.md#decisions).
 
 Exactly what an agent-to-agent message is today — `send_message` with `to`, `to` of the inbox, a task —
 checked once at the door with `canReach`. It lands in the conversation of the pair, not in a group: a
@@ -210,8 +210,8 @@ writes it for the agents: what the group is for, and what its members are expect
 ## The dashboard
 
 The rail of #136 gets a fourth section — **Groups** — between Agents and Conversations: Fleet, Agents,
-Groups, Conversations. *0.7.0:* Conversations and the feed go (#171, #173); the shape of what is left is
-[open question 3 of 0.7.0](../openspec/changes/groups-only/proposal.md#open-questions). It lists the groups of the fleet with the marks of their
+Groups, Conversations. *0.7.0:* Conversations and the feed go (#171, #173); what is left is two sections, Agents with «All agents» first and Groups —
+[decision 3 of 0.7.0](../openspec/changes/groups-only/proposal.md#decisions). It lists the groups of the fleet with the marks of their
 members; a group with something new carries the dot a conversation carries, and a closed section its
 marker. Where exactly the
 tab sits and how a group is drawn on it are chosen through variants.
@@ -233,7 +233,7 @@ before it is written and refused with the sentence `flotti run` would print. An 
 by hand is allowed and shown as *not in the fleet*. The form follows the agent form and needs no variants.
 
 **Elsewhere:** the details of an agent («i» in the header) list its groups; the feed of the fleet tags a
-group message with the group; the Groups section, when the fleet has agents but no group, says that the
+group message with the group (*0.7.0:* gone with the feed, #173); the Groups section, when the fleet has agents but no group, says that the
 agents do not see each other yet and offers **one click to put every agent in one group** — see
 [open question 2](#open-questions).
 
