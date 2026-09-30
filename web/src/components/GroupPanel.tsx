@@ -26,8 +26,6 @@ type GroupPanelProps = Fleet & {
     readonly quotes: QuoteActions;
     /** Opens the group in Settings → Groups. */
     readonly onEdit: () => void;
-    /** A message to bring into view as the lane opens: one picked in the feed of the fleet (#114). */
-    readonly opened?: Found | undefined;
 };
 /** A message to bring into view in the lane; `n` tells one ask from the next. */
 type Found = { readonly key: string; readonly n: number };
@@ -136,11 +134,10 @@ function LaneRow({ message, group, actions, agents, colors }: RowProps) {
         </div>
     );
 }
-type LaneProps = Fleet & Pick<GroupPanelProps, 'group' | 'opened'> & { readonly messages: readonly GroupMessage[]; readonly actions: MessageActions; readonly found: Found | undefined };
-function Lane({ group, messages, actions, found, opened, ...fleet }: LaneProps) {
+type LaneProps = Fleet & Pick<GroupPanelProps, 'group'> & { readonly messages: readonly GroupMessage[]; readonly actions: MessageActions; readonly found: Found | undefined };
+function Lane({ group, messages, actions, found, ...fleet }: LaneProps) {
     const { list, onScroll } = usePinnedScroll(messages);
     useFound(list, found);
-    useFound(list, opened);
     const t = useT();
     return (
         <div className="feed lane-group" role="log" aria-label={t.group.of(group.name)} ref={list} onScroll={onScroll}>
@@ -224,7 +221,7 @@ function GroupComposer({ group, agents, colors, messaging }: ComposerProps) {
  * said in it — the person's messages, the agents' messages, the answers marked
  * as answers, how the members took each one — and a composer at the foot.
  */
-function GroupPanel({ group, feed, quotes, onEdit, opened, agents, colors }: GroupPanelProps) {
+function GroupPanel({ group, feed, quotes, onEdit, agents, colors }: GroupPanelProps) {
     const t = useT();
     const messages = feed?.messages ?? NO_MESSAGES;
     const messaging = useMessaging(quotes, t);
@@ -233,7 +230,7 @@ function GroupPanel({ group, feed, quotes, onEdit, opened, agents, colors }: Gro
     return (
         <section className="agent-panel group-panel" aria-label={t.group.of(group.name)}>
             <GroupHeader group={group} onEdit={onEdit} {...fleet} />
-            <Lane group={group} messages={messages} actions={{ ...messaging.actions, ...actions }} found={found} opened={opened} {...fleet} />
+            <Lane group={group} messages={messages} actions={{ ...messaging.actions, ...actions }} found={found} {...fleet} />
             <GroupComposer group={group} messaging={messaging} {...fleet} />
         </section>
     );

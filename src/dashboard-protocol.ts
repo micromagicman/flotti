@@ -157,9 +157,9 @@ type AdminSettings = {
 /** `GET /api/answer-delivery`, the body of `PUT /api/answer-delivery` and the answer to it. */
 type AnswerDeliverySettings = {
     /**
-     * How the answer of an agent reaches its tab and the feed of the fleet
-     * (#157): `streamed` — piece by piece as it is written; `whole` — once,
-     * when the message is complete. One rule for every agent.
+     * How the answer of an agent reaches its tab (#157): `streamed` — piece
+     * by piece as it is written; `whole` — once, when the message is
+     * complete. One rule for every agent.
      */
     readonly mode: AnswerDelivery;
 };

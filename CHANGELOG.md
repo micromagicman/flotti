@@ -6,6 +6,11 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Changed
 
+- **No «All messages».** The feed of the whole fleet goes: a group is read in its tab, an agent in its
+  tab. The Fleet section goes with it, and **All agents** — the broadcast — is the first tab of
+  **Agents**; a page that remembered Fleet opens on Agents. Nothing on disk or on the socket changes
+  (#173).
+
 - **The specs live in OpenSpec.** `openspec/specs/` is the record of what is built (groups, direct
   messages, the feed, the rail — the capabilities 0.7.0 touches), `openspec/changes/groups-only/` the
   spec of 0.7.0 (#171–#175) with its open questions; the `openspec` job of `checks` validates them, and

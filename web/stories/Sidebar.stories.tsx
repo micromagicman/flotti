@@ -34,11 +34,11 @@ const meta = {
 } satisfies Meta<typeof SidebarDemo>;
 export default meta;
 type Story = StoryObj<typeof meta>;
-/** The Agents section: four agents, one of each state; Scout has new output, Reviewer waits. */
+/** The Agents section: the broadcast first (#173), then four agents, one of each state; Scout has new output, Reviewer waits. */
 export const Agents: Story = {};
-/** The Fleet section: the broadcast and the feed. Agents, closed, carries the ochre dot: Reviewer waits for a person. */
-export const Fleet: Story = {
-    args: { selected: 'all', section: 'fleet' }
+/** The broadcast open, the first tab of Agents. */
+export const Broadcast: Story = {
+    args: { selected: 'all' }
 };
 /** The conversations of the fleet: one pair so far, the list of them all under it. */
 export const Conversations: Story = {

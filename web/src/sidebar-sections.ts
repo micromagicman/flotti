@@ -1,7 +1,7 @@
 /**
- * The four sections of the sidebar as tabs (#136, Groups with #152): which
- * one a tab of the sidebar belongs to, and what a closed section carries on
- * its tab.
+ * The sections of the sidebar as tabs (#136, Groups with #152, no Fleet
+ * since #173): which one a tab of the sidebar belongs to, and what a closed
+ * section carries on its tab.
  */
 import type { AgentStatus } from '../../src/agent-events.js';
 import type { AgentSummary, GroupSummary } from '../../src/dashboard-protocol.js';
@@ -11,22 +11,25 @@ import type { Conversation } from './conversations.js';
 import type { AgentFeed } from './feed.js';
 import { groupOf } from './groups.js';
 import type { GroupFeed } from './groups.js';
-const SECTIONS = ['fleet', 'agents', 'groups', 'conversations'] as const;
+const SECTIONS = ['agents', 'groups', 'conversations'] as const;
 type Section = typeof SECTIONS[number];
-/** The first time the sidebar opens on the agents. */
-const FIRST_SECTION: Section = 'agents';
+/**
+ * The first time the sidebar opens on the agents, and on a saved pick the
+ * sidebar no longer has — `fleet` of 0.6.x (#173).
+ */
+const FIRST_SECTION: Section = SECTIONS[0];
 function isSection(value: unknown): value is Section {
     return SECTIONS.includes(value as Section);
 }
 /** The ids of the tabs that are not an agent's nor a conversation's. */
-type OtherTabs = { readonly broadcastId: string; readonly feedId: string; readonly conversationsId: string };
+type OtherTabs = { readonly broadcastId: string; readonly conversationsId: string };
 /**
- * The section a tab of the sidebar is in: an agent in Agents, a group in
- * Groups, a conversation or the list of them in Conversations, the broadcast
- * and the feed in Fleet. None for a tab of every section, such as Add agent
- * or the settings.
+ * The section a tab of the sidebar is in: an agent and the broadcast in
+ * Agents, a group in Groups, a conversation or the list of them in
+ * Conversations. None for a tab of every section, such as Add agent or the
+ * settings.
  */
-function sectionOf(tab: string, agentIds: readonly string[], { broadcastId, feedId, conversationsId }: OtherTabs): Section | undefined {
+function sectionOf(tab: string, agentIds: readonly string[], { broadcastId, conversationsId }: OtherTabs): Section | undefined {
     if (agentIds.includes(tab)) {
         return 'agents';
     }
@@ -36,7 +39,7 @@ function sectionOf(tab: string, agentIds: readonly string[], { broadcastId, feed
     if (pairOf(tab) !== undefined) {
         return 'conversations';
     }
-    return new Map<string, Section>([[broadcastId, 'fleet'], [feedId, 'fleet'], [conversationsId, 'conversations']]).get(tab);
+    return new Map<string, Section>([[broadcastId, 'agents'], [conversationsId, 'conversations']]).get(tab);
 }
 /** The live status of the agent: its feed knows it first. */
 function statusOf(agent: AgentSummary, feed: AgentFeed | undefined): AgentStatus {
@@ -83,15 +86,12 @@ function groupsMarker({ groups, groupFeeds, seenSeq, selected }: MarkerInput): M
         unread: groups.filter((group) => hasUnread(groupTabId(group.id), selected, groupLastSeq(groupFeeds, group), seenSeq)).length
     };
 }
-const MARKERS: Readonly<Record<Exclude<Section, 'fleet'>, (input: MarkerInput) => Marker>> = {
+const MARKERS: Readonly<Record<Section, (input: MarkerInput) => Marker>> = {
     agents: agentsMarker, groups: groupsMarker, conversations: conversationsMarker
 };
-/**
- * What the tab of a closed section carries. The open one and Fleet carry
- * nothing: the feed of the fleet takes every message and would always be lit.
- */
+/** What the tab of a closed section carries; the open one carries nothing. */
 function markerOf(section: Section, open: Section, input: MarkerInput): Marker | undefined {
-    if (section === open || section === 'fleet') {
+    if (section === open) {
         return undefined;
     }
     return MARKERS[section](input);

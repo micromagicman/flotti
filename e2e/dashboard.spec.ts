@@ -171,13 +171,10 @@ test.afterAll(async () => {
 });
 /** A tab of the open section of the sidebar. */
 const tab = (page: Page, name: string) => page.locator('.sidebar').getByRole('tab', { name: new RegExp(`^${name}`) });
-/** A tab of the switch of the sections of the sidebar (#136): Fleet, Agents, Conversations. */
+/** A tab of the switch of the sections of the sidebar (#136): Agents, Groups, Conversations. */
 const section = (page: Page, name: string) => page.getByRole('tablist', { name: 'Sections of the sidebar' }).getByRole('tab', { name: new RegExp(`^${name}`) });
-/** The section a tab of the sidebar is in; none for Add agent, which is under every one. */
+/** The section a tab of the sidebar is in: the broadcast and the agents in Agents (#173); none for Add agent, which is under every one. */
 function sectionOfTab(name: string): string | undefined {
-    if (['All agents', 'All messages'].includes(name)) {
-        return 'Fleet';
-    }
     return name.startsWith('Add agent') ? undefined : 'Agents';
 }
 /** Opens the section of a tab when another is in sight, then the tab. */
@@ -198,8 +195,8 @@ async function say(page: Page, name: string, text: string): Promise<void> {
 }
 test('every agent has a tab with its status', async ({ page }) => {
     await page.goto(url);
-    await expect(page.getByRole('tablist', { name: 'Sections of the sidebar' }).getByRole('tab')).toHaveText(['Fleet', 'Agents', 'Groups', 'Conversations']);
-    await expect(page.locator('.sidebar').getByRole('tab')).toHaveText([/claude/, /codex/, /relay/, /Add agent/]);
+    await expect(page.getByRole('tablist', { name: 'Sections of the sidebar' }).getByRole('tab')).toHaveText(['Agents', 'Groups', 'Conversations']);
+    await expect(page.locator('.sidebar').getByRole('tab')).toHaveText([/All agents/, /claude/, /codex/, /relay/, /Add agent/]);
     for (const name of ['claude', 'codex', 'relay']) {
         await expect(tab(page, name).locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     }
@@ -317,65 +314,6 @@ test('the conversation of two agents has a tab of its own: one lane, read-only, 
     await page.getByRole('button', { name: 'Write to claude' }).click();
     await expect(page.getByRole('textbox', { name: 'Message to claude' })).toBeVisible();
 });
-/** The feed of every message of the fleet (#114), and a message in it by who wrote to whom. */
-const fleetFeed = (page: Page) => page.getByRole('log', { name: 'Messages' });
-const fleetRow = (page: Page, from: string, to: string) => fleetFeed(page).getByRole('button', { name: new RegExp(`^${from} to ${to},`) });
-const feedFilter = (page: Page) => page.getByRole('group', { name: 'Show messages of' });
-test('every message of the fleet is in one feed, apart from the agents: who wrote to whom and when, and only messages (#114)', async ({ page }) => {
-    await page.goto(url);
-    await openTab(page, 'All messages');
-    await expect(page.getByRole('heading', { name: 'All messages' })).toBeVisible();
-    await expect(fleetFeed(page)).toContainText('The latest 200 messages of the fleet');
-    await expect(fleetRow(page, 'You', 'relay').filter({ hasText: 'write to claude' })).toHaveCount(1);
-    await expect(fleetRow(page, 'relay', 'claude').filter({ hasText: 'Please rerun the e2e job' })).toHaveCount(1);
-    await expect(fleetRow(page, 'claude', 'relay').filter({ hasText: 'you said: [from relay] Please rerun the e2e job' })).toHaveCount(1);
-    await expect(fleetRow(page, 'claude', 'You').filter({ hasText: 'you said: hello claude' })).toHaveCount(1);
-    await expect(fleetRow(page, 'relay', 'claude').first().locator('.fleet-when')).toHaveText(/^\d{1,2}:\d{2}/);
-    await expect(fleetFeed(page)).not.toContainText('Turn ended');
-});
-test('the feed of the fleet is filtered by one agent, whether it wrote or got the message, and All shows every one again (#114)', async ({ page }) => {
-    await page.goto(`${url}#/_feed`);
-    await feedFilter(page).getByRole('button', { name: 'claude', exact: true }).click();
-    await expect(feedFilter(page).getByRole('button', { name: 'claude', exact: true })).toHaveAttribute('aria-pressed', 'true');
-    await expect(fleetRow(page, 'relay', 'claude')).not.toHaveCount(0);
-    await expect(fleetRow(page, 'claude', 'relay')).not.toHaveCount(0);
-    await expect(fleetRow(page, 'You', 'relay')).toHaveCount(0);
-    const names = await fleetFeed(page).getByRole('button').evaluateAll((rows) => rows.map((row) => row.getAttribute('aria-label') ?? ''));
-    expect(names.every((name) => /^(claude to|.* to claude,)/.test(name))).toBe(true);
-    await feedFilter(page).getByRole('button', { name: 'All', exact: true }).click();
-    await expect(fleetRow(page, 'You', 'relay')).not.toHaveCount(0);
-});
-test('a message of the feed of the fleet opens where it lives: between two agents their conversation, between a person and an agent its tab (#114)', async ({ page }) => {
-    await page.goto(url);
-    await openTab(page, 'All messages');
-    await fleetRow(page, 'relay', 'claude').filter({ hasText: 'Please rerun the e2e job' }).click();
-    await expect(lane(page).locator('.lane-row.message-found')).toContainText('Please rerun the e2e job');
-    await openTab(page, 'All messages');
-    const toRelay = fleetRow(page, 'You', 'relay').filter({ hasText: 'write to claude' });
-    await toRelay.focus();
-    await toRelay.press('Enter');
-    await expect(feed(page, 'relay').locator('.message-found')).toContainText('write to claude');
-});
-test('the feed of the fleet shows a new message as it comes, without a reload (#114)', async ({ page, context }) => {
-    await page.goto(`${url}#/_feed`);
-    await expect(fleetFeed(page)).toBeVisible();
-    const other = await context.newPage();
-    await other.goto(url);
-    await say(other, 'codex', 'live in the feed');
-    await expect(fleetRow(page, 'You', 'codex').filter({ hasText: 'live in the feed' })).toHaveCount(1);
-    await expect(fleetRow(page, 'codex', 'You').filter({ hasText: 'you said: live in the feed' })).toHaveCount(1);
-    await other.close();
-});
-test('on a narrow screen both tabs of the whole fleet are in sight under Fleet, and the feed fits the screen (#114)', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 800 });
-    await page.goto(url);
-    await section(page, 'Fleet').click();
-    await expect(tab(page, 'All agents')).toBeInViewport();
-    await expect(tab(page, 'All messages')).toBeInViewport();
-    await openTab(page, 'All messages');
-    await expect(fleetRow(page, 'relay', 'claude').first()).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-});
 /** The channels of a colour, 0–255: `#rrggbb`, `rgb()`, or the `color(srgb …)` a `color-mix()` computes to. */
 function channels(color: string): number[] {
     const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color.trim());
@@ -453,15 +391,17 @@ test('on a narrow screen the conversations are one tab away: the pairs have a ro
 });
 const viewButton = (page: Page, name: 'Chat' | 'Memory') => page.getByRole('group', { name: 'View' }).getByRole('button', { name, exact: true });
 const rail = (page: Page) => page.getByRole('tablist', { name: 'Sections of the sidebar' });
-test('the sidebar is four tabs: a click shows its section and hides the others, what is open stays open, and the pick survives a reload (#136, #152)', async ({ page }) => {
+test('the sidebar is three tabs, with no Fleet and no All messages: a click shows its section and hides the others, what is open stays open, and the pick survives a reload (#136, #152, #173)', async ({ page }) => {
     await page.goto(`${url}#/claude`);
-    await expect(rail(page).getByRole('tab')).toHaveText(['Fleet', 'Agents', 'Groups', 'Conversations']);
+    await expect(rail(page).getByRole('tab')).toHaveText(['Agents', 'Groups', 'Conversations']);
     await expect(section(page, 'Agents'), 'the first time the sidebar opens on Agents').toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.sidebar').getByRole('tab').first(), 'All agents is the first tab of Agents').toHaveText(/^All agents/);
     await expect(tab(page, 'claude')).toBeVisible();
-    await section(page, 'Fleet').click();
-    await expect(section(page, 'Fleet')).toHaveAttribute('aria-selected', 'true');
-    await expect(tab(page, 'All agents')).toBeVisible();
-    await expect(tab(page, 'All messages')).toBeVisible();
+    await expect(page.getByRole('tab', { name: /^All messages/ })).toHaveCount(0);
+    await section(page, 'Groups').click();
+    await expect(section(page, 'Groups')).toHaveAttribute('aria-selected', 'true');
+    await expect(tab(page, 'Group team')).toBeVisible();
+    await expect(tab(page, 'All agents')).toHaveCount(0);
     await expect(tab(page, 'claude')).toHaveCount(0);
     await expect(pairTab(page)).toHaveCount(0);
     await expect(page.getByRole('textbox', { name: 'Message to claude' }), 'the chat open stays open').toBeVisible();
@@ -473,6 +413,13 @@ test('the sidebar is four tabs: a click shows its section and hides the others, 
     await page.reload();
     await expect(section(page, 'Conversations')).toHaveAttribute('aria-selected', 'true');
     await expect(pairTab(page)).toBeVisible();
+});
+test('a saved pick of the Fleet section of 0.6.x opens the first section, Agents (#173)', async ({ page }) => {
+    await page.addInitScript(() => window.localStorage.setItem('flotti.sidebar-section', 'fleet'));
+    await page.goto(`${url}#/claude`);
+    await expect(rail(page).getByRole('tab')).toHaveText(['Agents', 'Groups', 'Conversations']);
+    await expect(section(page, 'Agents')).toHaveAttribute('aria-selected', 'true');
+    await expect(tab(page, 'All agents')).toBeVisible();
 });
 test('the switch is one stop of Tab; the arrows, Home and End move along it and open what they reach (#136)', async ({ page }) => {
     await page.goto(`${url}#/claude`);
@@ -487,28 +434,27 @@ test('the switch is one stop of Tab; the arrows, Home and End move along it and 
     await expect(section(page, 'Conversations')).toHaveAttribute('aria-selected', 'true');
     await expect(pairTab(page)).toBeVisible();
     await page.keyboard.press('ArrowDown');
-    await expect(section(page, 'Fleet')).toBeFocused();
+    await expect(section(page, 'Agents')).toBeFocused();
     await expect(tab(page, 'All agents')).toBeVisible();
     await page.keyboard.press('End');
     await expect(section(page, 'Conversations')).toBeFocused();
     await page.keyboard.press('Home');
-    await expect(section(page, 'Fleet')).toBeFocused();
-    await page.keyboard.press('ArrowRight');
     await expect(section(page, 'Agents')).toBeFocused();
+    await page.keyboard.press('ArrowRight');
+    await expect(section(page, 'Groups')).toBeFocused();
     await page.keyboard.press('ArrowLeft');
-    await expect(section(page, 'Fleet')).toBeFocused();
+    await expect(section(page, 'Agents')).toBeFocused();
     await expect(rail(page).locator('[tabindex="0"]')).toHaveCount(1);
     await page.keyboard.press('Tab');
     await expect(tab(page, 'All agents'), 'Tab leaves the switch for the section').toBeFocused();
 });
-test('the switch follows what opens: a message of the feed turns it to Conversations or to Agents (#136)', async ({ page }) => {
-    await page.goto(url);
-    await openTab(page, 'All messages');
-    await fleetRow(page, 'relay', 'claude').filter({ hasText: 'Please rerun the e2e job' }).click();
-    await expect(section(page, 'Conversations')).toHaveAttribute('aria-selected', 'true');
-    await expect(pairTab(page)).toHaveAttribute('aria-selected', 'true');
-    await openTab(page, 'All messages');
-    await fleetRow(page, 'You', 'relay').filter({ hasText: 'write to claude' }).click();
+test('the switch follows what opens: a tab of another section turns it to that section (#136)', async ({ page }) => {
+    await page.goto(`${url}#/claude`);
+    await expect(section(page, 'Agents')).toHaveAttribute('aria-selected', 'true');
+    await page.evaluate(() => { window.location.hash = `/${encodeURIComponent('_group:team')}`; });
+    await expect(section(page, 'Groups')).toHaveAttribute('aria-selected', 'true');
+    await expect(tab(page, 'Group team')).toHaveAttribute('aria-selected', 'true');
+    await page.evaluate(() => { window.location.hash = '/relay'; });
     await expect(section(page, 'Agents')).toHaveAttribute('aria-selected', 'true');
     await expect(tab(page, 'relay')).toHaveAttribute('aria-selected', 'true');
 });
@@ -518,10 +464,9 @@ test('a closed section keeps its markers on the switch: new output, an agent wai
         await openTab(page, name);
     }
     await openPair(page);
-    await openTab(page, 'All agents');
+    await openTab(page, 'Group team', 'Groups');
     const agents = section(page, 'Agents');
     await expect(agents.locator('.unread, .rail-wait'), 'every agent seen: nothing new').toHaveCount(0);
-    await expect(section(page, 'Fleet').locator('.unread, .rail-wait')).toHaveCount(0);
     const other = await context.newPage();
     await other.goto(url);
     await say(other, 'codex', 'marked on the switch');
@@ -547,10 +492,10 @@ for (const width of [1280, 390]) {
             await page.addInitScript((code) => window.localStorage.setItem('flotti.language', code), language);
             await page.goto(`${url}#/claude`);
             const labels = rail(page).or(page.getByRole('tablist', { name: 'Разделы боковой панели' })).locator('.rail-label');
-            await expect(labels).toHaveCount(4);
+            await expect(labels).toHaveCount(3);
             const cut = await labels.evaluateAll((spans) => spans.filter((span) => span.scrollWidth > span.clientWidth).map((span) => span.textContent));
             expect(cut, `${language}: labels cut`).toEqual([]);
-            for (const key of ['fleet', 'agents', 'groups', 'conversations']) {
+            for (const key of ['agents', 'groups', 'conversations']) {
                 await page.locator(`[data-section="${key}"]`).click();
                 expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${language} ${key}`).toBe(true);
             }
@@ -1028,7 +973,7 @@ test('the language is picked in the settings: the page speaks it at once, and af
     await page.goto(`${url}#/_settings`);
     await page.getByRole('combobox', { name: 'Language of the dashboard' }).selectOption('ru');
     await expect(page.getByRole('heading', { name: 'Настройки флота' })).toBeVisible();
-    await expect(page.getByRole('tablist', { name: 'Разделы боковой панели' }).getByRole('tab')).toHaveText(['Флот', 'Агенты', 'Группы', 'Переписки']);
+    await expect(page.getByRole('tablist', { name: 'Разделы боковой панели' }).getByRole('tab')).toHaveText(['Агенты', 'Группы', 'Переписки']);
     await expect(tab(page, 'claude').locator('[data-status]')).toHaveText(/^(запускается|свободен|работает|ждёт вас|ошибка|остановлен)/);
     expect(await page.evaluate(() => document.documentElement.lang)).toBe('ru');
     await page.reload();
@@ -1047,7 +992,7 @@ test.describe('in a browser set to Russian', () => {
     test.use({ locale: 'ru-RU' });
     test('the dashboard opens in Russian until another language is picked', async ({ page }) => {
         await page.goto(`${url}#/all`);
-        await expect(page.getByRole('tab', { name: /^Флот/ })).toBeVisible();
+        await expect(page.getByRole('tab', { name: /^Агенты/ })).toBeVisible();
         await expect(page.getByRole('heading', { name: 'Сообщение всем агентам' })).toBeVisible();
         await expect(page.getByRole('combobox', { name: 'Язык дашборда' })).toHaveCount(0);
     });
@@ -1364,7 +1309,7 @@ test('switches the fleet directory, and saves it for the next run', async ({ pag
     await page.goto(`${url}#/_settings`);
     await field(page, 'Fleet directory path').fill(next);
     await page.getByRole('button', { name: 'Switch' }).click();
-    await expect(page.locator('.sidebar').getByRole('tab')).toHaveText([/newcomer/, /Add agent/]);
+    await expect(page.locator('.sidebar').getByRole('tab')).toHaveText([/All agents/, /newcomer/, /Add agent/]);
     await expect(settingsRow(page, 'newcomer').locator('[data-status]')).toHaveAttribute('data-status', 'idle');
     await expect(page.getByRole('form', { name: 'Fleet directory' })).toContainText(`${next} — saved in`);
     const saved = JSON.parse(readFileSync(join(workspace, '.flotti', 'settings.json'), 'utf8')) as { fleet: string };

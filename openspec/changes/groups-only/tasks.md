@@ -2,11 +2,11 @@
 
 Nothing depends on it and it touches the rail first. Assumes open question 3 (two sections).
 
-- [ ] 1.1 Remove `web/src/fleet-feed.ts`, `FleetFeedPanel.tsx`, their story and unit test, the filter by agent, `feedOpen` in `web/src/App.tsx`, the `_feed` id and `feedId` in `sidebar-sections.ts` and `Sidebar.tsx`, the i18n keys `sidebar.allMessages*` and `fleetFeed.*`
-- [ ] 1.2 Settle the sections per open question 3: `SECTIONS`, `sectionOf`, the markers; `useSidebarSection` falls back to the first section on an unknown saved value (`fleet`, `conversations`); «All agents» stays as the first tab of Agents
-- [ ] 1.3 Keep `group` on the `message` event and the `group-message` of the socket (#172 needs them); drop only the `group`/`answer` tags of feed rows
-- [ ] 1.4 Remove the e2e of #114; rewrite the e2e of #136 that counts four tabs; the tests of the sections pass on the new set
-- [ ] 1.5 README («The dashboard», the feed paragraph) and CHANGELOG
+- [x] 1.1 Remove `web/src/fleet-feed.ts`, `FleetFeedPanel.tsx`, their story and unit test, the filter by agent, `feedOpen` in `web/src/App.tsx`, the `_feed` id and `feedId` in `sidebar-sections.ts` and `Sidebar.tsx`, the i18n keys `sidebar.allMessages*` and `fleetFeed.*`
+- [x] 1.2 Settle the sections per open question 3: `SECTIONS`, `sectionOf`, the markers; `useSidebarSection` falls back to the first section on an unknown saved value (`fleet`, `conversations`); «All agents» stays as the first tab of Agents. *Done in #173 without Conversations' part:* the rail is Agents, Groups, Conversations until 3.6 removes Conversations, which is when `conversations` becomes an unknown value too
+- [x] 1.3 Keep `group` on the `message` event and the `group-message` of the socket (#172 needs them); drop only the `group`/`answer` tags of feed rows
+- [x] 1.4 Remove the e2e of #114; rewrite the e2e of #136 that counts four tabs; the tests of the sections pass on the new set
+- [x] 1.5 README («The dashboard», the feed paragraph) and CHANGELOG
 
 ## 2. #175 A group is managed from its tab
 
