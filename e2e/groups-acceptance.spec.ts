@@ -1,12 +1,13 @@
 /**
- * The acceptance of the groups of #144 end to end (docs/groups.md, sub-issue 6):
- * a fleet of four pretend local agents in two groups. An agent of one group
- * does not list a member of the other and is refused writing to it with the
- * words for an agent that does not exist; inside its own group it writes to a
- * member and to the group, the members answer, and the person reads the
- * conversation in the tab of the group. A fleet of its own: the pieces are
- * covered in groups.spec.ts (#152) and dashboard.spec.ts (#153), this is the
- * whole in one run.
+ * The acceptance of the groups of #144 end to end (docs/groups.md, sub-issue 6),
+ * as 0.7.0 has it (#171): a fleet of four pretend local agents in two groups.
+ * An agent of one group does not list a member of the other and is refused a
+ * task for it with the words for an agent that does not exist; `to` between
+ * agents is gone on every tool; inside its own group an agent writes to the
+ * group, mentioning a member, the members answer, and the person reads the
+ * conversation in the tab of the group — there is no conversation of a pair.
+ * A fleet of its own: the pieces are covered in groups.spec.ts (#152) and
+ * dashboard.spec.ts (#153), this is the whole in one run.
  */
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
@@ -92,32 +93,35 @@ async function callTool(page: Page, name: string, tool: string, args: Record<str
     await expect(said).toContainText('mcp: ');
     return said;
 }
-const REFUSED = (id: string) => `mcp: error: there is no agent "${id}" among the agents you can write to; list_agents names them`;
-test('an agent lists the members of its own group only, and a member of the other group is refused with the words for an agent that does not exist (#144)', async ({ page }) => {
+const REFUSED = (id: string) => `there is no agent "${id}" among the agents you can write to; list_agents names them`;
+const TO_IS_GONE = 'mcp: error: "to" is gone: a message to another agent goes through a group — name the group in "group" and the agent with @<id> in the text';
+test('an agent lists the members of its own group only; "to" is gone, and a task for a member of the other group is refused with the words for an agent that does not exist (#144, #171)', async ({ page }) => {
     await page.goto(url);
     const peers = await callTool(page, 'writer', 'list_agents');
     await expect(peers).toContainText(/"id": "editor"[\s\S]*?"groups": \[\s*"docs"\s*\]/);
     await expect(peers).toContainText(/"id": "writer"[\s\S]*?"you": true/);
     await expect(peers).not.toContainText('builder');
     await expect(peers).not.toContainText('reviewer');
-    // The same words for a member of the other group and for an agent that is not in the fleet: nothing says builder exists.
-    await expect(await callTool(page, 'writer', 'send_message', { to: 'builder', text: 'a word across the fence' })).toContainText(REFUSED('builder'));
-    await expect(await callTool(page, 'writer', 'send_message', { to: 'ghost', text: 'anybody there?' })).toContainText(REFUSED('ghost'));
-    // The person reads the real reason in the tab of the sender — once, for the agent that exists.
-    await expect(feed(page, 'writer').locator('.log').filter({ hasText: 'is not in a group with' })).toHaveText(['flotti: "builder" is not in a group with "writer"']);
+    // A message by "to" is refused before anything is asked, to an agent of the other group and to a peer alike.
+    await expect(await callTool(page, 'writer', 'send_message', { to: 'builder', text: 'a word across the fence' })).toContainText(TO_IS_GONE);
+    await expect(await callTool(page, 'writer', 'send_message', { to: 'editor', text: 'a word between us' })).toContainText(TO_IS_GONE);
     await openAgent(page, 'builder');
     await expect(feed(page, 'builder')).not.toContainText('a word across the fence');
-    // A task is a message too: the same door, the same words.
-    await expect(await callTool(page, 'writer', 'delegate', { to: 'reviewer', text: 'review the draft' })).toContainText(REFUSED('reviewer').replace('mcp: error: ', ''));
+    await openAgent(page, 'editor');
+    await expect(feed(page, 'editor')).not.toContainText('a word between us');
+    // A task names its group and its doer; the same words for a member of the other group and for an agent that is not in the fleet.
+    await expect(await callTool(page, 'writer', 'delegate', { group: 'docs', to: 'reviewer', text: 'review the draft' })).toContainText(REFUSED('reviewer'));
+    await expect(await callTool(page, 'writer', 'delegate', { group: 'docs', to: 'ghost', text: 'anybody there?' })).toContainText(REFUSED('ghost'));
+    // The person reads the real reason in the tab of the giver — once, for the agent that exists.
+    await expect(feed(page, 'writer').locator('.log').filter({ hasText: 'is not in a group with' })).toHaveText(['flotti: "reviewer" is not in a group with "writer"']);
 });
-test('inside its group an agent writes to a member and to the group, the members answer, and the person reads the conversation in the tab of the group (#144)', async ({ page }) => {
+test('two agents in a group talk in the tab of the group only: an agent writes to the group mentioning a member, the member answers, and there is no conversation of the pair (#144, #171)', async ({ page }) => {
     await page.goto(url);
-    await expect(await callTool(page, 'writer', 'send_message', { to: 'editor', text: 'a word between us' })).toContainText('mcp: "editor" has it. Its answer comes to you as a message from "editor".');
-    await expect(feed(page, 'writer').locator('.message-peer').filter({ hasText: 'you said: [from writer] a word between us' })).toHaveCount(1);
-    await expect(await callTool(page, 'writer', 'send_message', { group: 'docs', text: 'The draft is ready' }))
+    await expect(page.getByRole('tablist', { name: 'Sections of the sidebar' }).getByRole('tab')).toHaveText(['Agents', 'Groups']);
+    await expect(await callTool(page, 'writer', 'send_message', { group: 'docs', text: '@editor The draft is ready' }))
         .toContainText('mcp: Posted to group "docs": "editor" has it. What the members answer comes to you as messages from them.');
     // The answer of the member comes back to the group, and so to the sender's tab, marked with the group.
-    await expect(feed(page, 'writer').locator('.message-peer').filter({ hasText: 'you said: [from writer in group docs] The draft is ready' })).toHaveCount(1);
+    await expect(feed(page, 'writer').locator('.message-peer').filter({ hasText: 'you said: [from writer in group docs] @editor The draft is ready' })).toHaveCount(1);
     await section(page, 'Groups').click();
     await expect(tab(page, 'Group Docs')).toContainText('2 members · 2 messages');
     await expect(tab(page, 'Group Release')).toContainText('2 members · 0 messages');
@@ -126,19 +130,36 @@ test('inside its group an agent writes to a member and to the group, the members
     await expect(page.locator('.group-header .member')).toHaveText(['writer', 'editor']);
     const row = lane(page, 'Docs').locator('.message-row').filter({ hasText: 'writer → Docs' });
     await expect(row).toHaveCount(1);
-    await expect(row.locator('.message-peer')).toContainText('The draft is ready');
+    await expect(row.locator('.message-peer')).toContainText('@editor The draft is ready');
     await expect(row.locator('.took summary')).toHaveText('editor got it');
     await row.locator('.took summary').click();
     const list = row.getByRole('list', { name: 'How the members took it' });
     await expect(list.locator('.delivery-name')).toHaveText(['editor']);
     await expect(list.locator('.delivery-result')).toHaveText(['delivered']);
-    const answer = lane(page, 'Docs').locator('.message-peer').filter({ hasText: 'you said: [from writer in group docs] The draft is ready' });
+    const answer = lane(page, 'Docs').locator('.message-peer').filter({ hasText: 'you said: [from writer in group docs] @editor The draft is ready' });
     await expect(answer).toHaveCount(1);
     await expect(answer.locator('.envelope-bar')).toContainText('editor → Docs · answer');
     await expect(answer.locator('.quote')).toContainText('The draft is ready');
-    // The direct message between the two stayed in their conversation, not in the group.
+    // The message by "to" went nowhere, and nothing else is in the lane.
     await expect(lane(page, 'Docs')).not.toContainText('a word between us');
+    await expect(lane(page, 'Docs').locator('.message-row')).toHaveCount(2);
     // The other group heard nothing.
     await tab(page, 'Group Release').click();
     await expect(lane(page, 'Release')).not.toContainText('The draft is ready');
+    // No pair tab to read it in: a saved address of 0.6.x opens the first agent.
+    await page.goto(`${url}#/${encodeURIComponent('_pair:editor:writer')}`);
+    await expect(page.getByRole('tab', { name: /^Conversation of/ })).toHaveCount(0);
+    await expect(page.getByRole('log', { name: /^Conversation of/ })).toHaveCount(0);
+});
+test('a task is given inside the group: posted there mentioning the doer, the card follows it, and the outcome is posted from the doer (#171)', async ({ page }) => {
+    await page.goto(url);
+    await expect(await callTool(page, 'builder', 'delegate', { group: 'release', to: 'reviewer', text: 'Review the release notes' }))
+        .toContainText(/mcp: Task \S+ is with "reviewer" in group "release"/);
+    await section(page, 'Groups').click();
+    await tab(page, 'Group Release').click();
+    const card = lane(page, 'Release').getByRole('group', { name: 'Task from builder to reviewer: completed' });
+    await expect(card).toContainText('Review the release notes');
+    const outcome = lane(page, 'Release').locator('.message-peer').filter({ hasText: 'you said: [from builder in group release]' });
+    await expect(outcome.locator('.envelope-bar')).toContainText('reviewer → Release · task completed');
+    await expect(outcome.locator('.quote')).toContainText('@reviewer Review the release notes');
 });

@@ -94,11 +94,8 @@ const ru: Messages = {
         answered: 'ответ дан',
         you: 'Вы',
         youQuoted: 'вы',
-        and: (one, other) => `${one} и ${other}`,
-        andWord: 'и',
         fromTo: (from, to) => `От ${from} к ${to}`,
         inLine: (n) => `${f.number(n)} в очереди`,
-        messages: (n) => count(n, 'сообщение', 'сообщения', 'сообщений'),
         localKind: 'локальный · ACP',
         remoteKind: 'удалённый · A2A'
     },
@@ -133,10 +130,6 @@ const ru: Messages = {
         addAgentHint: 'Локального или удалённого',
         newOutput: 'новый вывод',
         newMessages: 'новые сообщения',
-        conversations: 'Переписки',
-        allConversations: 'Все переписки',
-        pairs: (n) => `${count(n, 'пара', 'пары', 'пар')} агентов`,
-        conversationOf: (names, n) => `Переписка ${names}, ${count(n, 'сообщение', 'сообщения', 'сообщений')}`,
         agents: 'Агенты',
         sections: 'Разделы боковой панели',
         waitsForYou: (names, n) => `${names} ${n === 1 ? 'ждёт' : 'ждут'} вас`,
@@ -292,16 +285,6 @@ const ru: Messages = {
         nobody: 'других участников нет',
         messageTo: (name) => `Сообщение группе ${name}`,
         messagePlaceholder: (name) => `Написать в ${name}…`
-    },
-    conversation: {
-        of: (names) => `Переписка ${names}`,
-        notYet: (names) => `${names} ещё не писали друг другу.`,
-        all: 'Все переписки',
-        onlyTwo: 'Здесь пишут только эти два агента.',
-        writeTo: (name) => `Написать ${name}`,
-        title: 'Переписки',
-        lead: 'Что агенты флота пишут друг другу — по ленте на каждую пару.',
-        none: 'Агенты ещё не писали друг другу.'
     },
     memory: {
         searchLabel: 'Поиск по заметкам',

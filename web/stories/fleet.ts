@@ -1,19 +1,17 @@
 /**
  * A pretend fleet for the stories: agents, their feeds, their colours and
- * their conversations, made without a server. The messages are built the way
- * the page keeps them, so the pure functions of the page (conversations.ts)
- * work on them as on a live fleet.
+ * their groups, made without a server. The messages are built the way the
+ * page keeps them, so the pure functions of the page (groups.ts) work on
+ * them as on a live fleet.
  */
 import type { AgentStatus, Quote } from '../../src/agent-events.js';
 import type { ConnectionHealth } from '../../src/connection-health.js';
 import type { AgentSummary, Delivery, GroupMessage, GroupSummary } from '../../src/dashboard-protocol.js';
 import type { AgentColors } from '../src/agent-colors.js';
-import { conversations } from '../src/conversations.js';
-import type { Conversation } from '../src/conversations.js';
 import type { AgentFeed, FeedItem, MessageItem, QueuedMessage } from '../src/feed.js';
 import type { GroupFeed } from '../src/groups.js';
 /** The ids of the tabs that are not an agent's, as App.tsx names them. */
-const TABS = { broadcastId: 'all', addAgentId: '_add-agent', conversationsId: '_conversations' } as const;
+const TABS = { broadcastId: 'all', addAgentId: '_add-agent' } as const;
 const SCOUT: AgentSummary = { id: 'scout', name: 'Scout', kind: 'local', harness: 'claude', status: 'idle', description: 'Reads the code and answers questions about it.', memory: { state: 'on', policy: 1, skill: 'builtin' } };
 const BUILDER: AgentSummary = { id: 'builder', name: 'Builder', kind: 'local', harness: 'codex', status: 'working', description: 'Writes the code, runs the tests.', admin: true };
 const REVIEWER: AgentSummary = { id: 'reviewer', name: 'Reviewer', kind: 'remote', status: 'waiting', description: 'Reviews pull requests on the build host.', health: healthOf('fine') };
@@ -97,7 +95,6 @@ const FEEDS: Readonly<Record<string, AgentFeed>> = {
 };
 /** What the page had seen of each tab: Scout and Reviewer have something new, the rest not. */
 const SEEN_SEQ: Readonly<Record<string, number>> = { scout: 3, builder: 3, reviewer: 1, archivist: 2 };
-const CONVERSATIONS: readonly Conversation[] = conversations(AGENTS.map((agent) => agent.id), FEEDS);
 /** Messages in line for an agent that is busy. */
 const QUEUE: readonly QueuedMessage[] = [
     { messageId: 'q-1', seq: 10, time: ago(3), text: 'When the push is done, bump the version to 0.6.0.' },
@@ -152,5 +149,5 @@ function manyAgents(n: number): { readonly agents: readonly AgentSummary[]; read
     const colors = Object.fromEntries(agents.map((agent, i) => [agent.id, i % 6]));
     return { agents, feeds, colors };
 }
-export { AGENTS, ARCHIVIST, BUILDER, COLORS, CONVERSATIONS, FEEDS, GROUPS, GROUP_FEEDS, LONG_NAME, LONG_TEXT, QUEUE, RELEASE, REVIEWER, SCOUT, SEEN_SEQ, TABS, ago, feed, groupMessage, healthOf, manyAgents, message, took };
+export { AGENTS, ARCHIVIST, BUILDER, COLORS, FEEDS, GROUPS, GROUP_FEEDS, LONG_NAME, LONG_TEXT, QUEUE, RELEASE, REVIEWER, SCOUT, SEEN_SEQ, TABS, ago, feed, groupMessage, healthOf, manyAgents, message, took };
 export type { MessageInput };

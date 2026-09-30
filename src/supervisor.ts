@@ -6,17 +6,18 @@ import type { Answer } from './agent-answers.js';
 import { waitingInLine } from './agent-events.js';
 import { AnswerDeliveryRule, DEFAULT_ANSWER_DELIVERY } from './answer-delivery.js';
 import type { AnswerDelivery } from './answer-delivery.js';
-import type { AdminAction, AgentEvent, AgentEventBody, FleetAgent, Quote, SendOptions } from './agent-events.js';
+import type { AdminAction, AgentEvent, AgentEventBody, Delegation, FleetAgent, Quote, SendOptions } from './agent-events.js';
 import { HistoryFile, agentEvents } from './agent-history.js';
 import type { ConnectionHealth } from './connection-health.js';
 import { Delegations } from './delegations.js';
 import type { DelegationCancel, DelegationFleet, DelegationStart } from './delegations.js';
 import type { AgentSummary, Delivery, GroupMessage, GroupSummary, Harness, MemoryStatus } from './dashboard-protocol.js';
+import { groupTabId } from './dashboard-protocol.js';
 import { FleetAdmin } from './fleet-admin.js';
 import type { AdminFleet, AdminOutcome } from './fleet-admin.js';
 import type { DeliveredMessage, FleetToolsAccess } from './fleet-mcp.js';
 import { GroupHistory } from './group-history.js';
-import { canReach, groupView, groupsOf, sharedGroups } from './groups.js';
+import { THROUGH_A_GROUP, canReach, groupView, groupsOf, sharedGroups } from './groups.js';
 import type { GroupView, PeerSummary } from './groups.js';
 import { LocalAgentProcess } from './local-agent.js';
 import { present } from './present.js';
@@ -217,6 +218,8 @@ function isGroupMessage(event: AgentEvent): event is AgentEvent & { type: 'messa
 }
 /** A message to a group: who posts it, when it is an agent, and what it answers or sends on. */
 type GroupSendOptions = Pick<SendOptions, 'from' | 'replyTo' | 'forwarded' | 'turnAnswer'>;
+/** A task given inside a group (0.7.0, #171): posted there with the task as it stands. */
+type GroupTask = Delegation & { readonly group: string };
 /** A message handed to a member of a group: what is answered at once, and how the delivery ended in the end. */
 type Handed = { readonly answer: Promise<Delivery>; readonly outcome: Promise<Delivery> };
 /** A member the message did not reach: it is not in the fleet, or it did not take it. */
@@ -229,6 +232,16 @@ function endsTurn(event: AgentEvent): boolean {
 }
 function turnAnswerMark(turnAnswer: boolean): { turnAnswer?: true } {
     return turnAnswer ? { turnAnswer: true } : {};
+}
+/**
+ * The text of the line that gives a task in a group: the doer mentioned in
+ * front of the task, unless the task names it that way already.
+ */
+function taskText({ to, text }: Delegation): string {
+    return new RegExp(`(^|[\\s(,])@${escapeRegExp(to)}(?![\\w-])`).test(text) ? text : `@${to} ${text}`;
+}
+function escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 /** The ids of the groups the agent shares with another one; with itself, the groups it is in. */
 function groupsShared(groups: readonly Group[], agentId: string, other: string): string[] {
@@ -383,6 +396,26 @@ class Supervisor {
             this.tell(from, why);
         }
         return why === undefined;
+    }
+    /**
+     * Whether `from` may give `to` a task in the group: `to` is a member of it
+     * and in the fleet (0.7.0, #171). When it may not, the tab of `from` says
+     * the real reason, for a person to read — the agent itself is told only
+     * that there is no such agent among those it can write to.
+     */
+    mayTask(from: string, groupId: string, to: string): boolean {
+        if (!this.members.has(to)) {
+            return false;
+        }
+        if (this.isMember(groupId, to)) {
+            return true;
+        }
+        this.tell(from, this.canReach(from, to) ? notInGroup(to, groupId) : notInAGroup(from, to));
+        return false;
+    }
+    /** Whether the agent is a member of the group; no member of a group that is not there. */
+    private isMember(groupId: string, agentId: string): boolean {
+        return this.groupList.get(groupId)?.members.includes(agentId) === true;
     }
     /** Why the agent cannot post to the group at all; nothing when it can. */
     private postRefusal(from: string, groupId: string): string | undefined {
@@ -661,8 +694,65 @@ class Supervisor {
                     this.put(member, body);
                 }
             },
-            mayWrite: (from, to) => this.mayWrite(from, to)
+            ...this.taskGroups()
         };
+    }
+    /** The groups as the tasks see them (0.7.0, #171): who may give whom a task in which group, and where it is posted. */
+    private taskGroups(): Pick<DelegationFleet, 'mayPost' | 'mayTask' | 'postTask' | 'postOutcome'> {
+        return {
+            mayPost: (from, groupId) => this.mayPost(from, groupId),
+            mayTask: (from, groupId, to) => this.mayTask(from, groupId, to),
+            postTask: (delegation, taken) => this.postTask(delegation, taken),
+            postOutcome: (delegation) => this.postOutcome(delegation)
+        };
+    }
+    /**
+     * The line of a task given in a group (0.7.0, #171): from the giver, the
+     * doer mentioned in front of the task, with how the doer took it — written
+     * in the order of the other messages of the group, and settled later when
+     * the task had to wait in line (#162). The doer got the task on its own,
+     * the other members do not get it: a task has one doer.
+     */
+    private postTask(delegation: GroupTask, taken: Promise<void>): void {
+        const group = this.groupList.get(delegation.group);
+        if (group === undefined) {
+            return;
+        }
+        const { to } = delegation;
+        const outcome = taken.then((): Delivery => ({ agentId: to, result: 'taken' }), (error: unknown) => failed(to, describeError(error)));
+        this.inOrder(group.id, async () => {
+            const delivery = await this.answerWithin(to, outcome);
+            const message = this.post(group, taskText(delegation), { from: delegation.from, delegation }, [delivery]);
+            if (delivery.result === 'queued') {
+                void outcome.then((settled) => this.settle(group.id, message.seq, settled));
+            }
+        });
+    }
+    /**
+     * The line of the outcome of a task given in a group (0.7.0, #171): from
+     * the doer, answering the line of the task, with the state it ended in; the
+     * giver is told of it on its own, as a message from the doer.
+     */
+    private postOutcome(delegation: GroupTask): void {
+        const group = this.groupList.get(delegation.group);
+        if (group === undefined) {
+            return;
+        }
+        this.inOrder(group.id, () => {
+            const task = this.taskLine(group.id, delegation.delegationId);
+            const replyTo = task === undefined ? {} : { replyTo: { agentId: groupTabId(group.id), messageId: task.messageId, seq: task.seq, author: task.from ?? '', text: task.text } };
+            this.post(group, delegation.result ?? '', { from: delegation.to, ...replyTo, delegation }, []);
+            return Promise.resolve();
+        });
+    }
+    /** The line of the group that gave the task, when the history still has it. */
+    private taskLine(groupId: string, delegationId: string): GroupMessage | undefined {
+        return this.groupHistories.get(groupId)?.since(0).find((message) => message.delegation?.delegationId === delegationId && message.delegation.state === 'working');
+    }
+    /** Runs the posting after every posting of the group that came before it: the lines of a group keep their order. */
+    private inOrder(groupId: string, posting: () => Promise<void>): void {
+        const done = (this.posting.get(groupId) ?? Promise.resolve()).then(posting);
+        this.posting.set(groupId, done.catch(() => undefined));
     }
     /**
      * One agent of the fleet gives another a task: see {@link Delegations}.
@@ -672,9 +762,9 @@ class Supervisor {
      * @param deadline ISO 8601 time the task is to be done by.
      * @throws UnknownAgentError when the agent that gives it is not in the fleet.
      */
-    delegate(from: string, to: string, text: string, deadline?: string): Promise<DelegationStart> {
+    delegate(from: string, group: string, to: string, text: string, deadline?: string): Promise<DelegationStart> {
         this.member(from);
-        return this.delegations.delegate(from, to, text, deadline === undefined ? {} : { deadline });
+        return this.delegations.delegate(from, to, text, { group, ...present('deadline', deadline) });
     }
     /**
      * Takes back a task the agent gave; a task already over stays as it ended.
@@ -821,7 +911,7 @@ class Supervisor {
         if (answer.group !== undefined) {
             this.answerGroup(member, answer.group, answer.text, answer.replyTo);
         } else if (answer.to !== undefined) {
-            this.forward(member, answer.to, answer.text, answer.replyTo, true);
+            this.forward(member, answer.to, answer.text, answer.replyTo);
         }
     }
     /** The answer of a turn posted back to the group as a message of the agent, marked so; a group that is gone is a line in its tab. */
@@ -863,14 +953,24 @@ class Supervisor {
             this.say(member, `could not take back task ${delegationId}: ${describeError(error)}`);
         }
     }
-    /** A message of the agent to another one: passed on, or given as a task. */
+    /**
+     * A message of the agent to another one: given as a task, in the group it
+     * names. A plain message to another agent is refused before the groups are
+     * asked (0.7.0, #171): agents talk inside groups, and the tab of the sender
+     * says so — the inbox has no answer to give the agent.
+     */
     private sendOn(member: Member, event: AgentEvent & { type: 'message'; to: string }): void {
         if (event.delegation === undefined) {
-            this.forward(member, event.to, event.text);
+            this.undelivered(member, event.to, undefined, THROUGH_A_GROUP);
             return;
         }
         const { id, deadline } = event.delegation;
-        void this.delegations.delegate(member.agent.id, event.to, event.text, { id, tellFailure: true, ...present('deadline', deadline) });
+        void this.delegations.delegate(member.agent.id, event.to, event.text, {
+            id,
+            tellFailure: true,
+            ...present('group', event.group),
+            ...present('deadline', deadline)
+        });
     }
     /**
      * Keeps track of whether the agent is in a turn; when the turn is over — or
@@ -1005,27 +1105,26 @@ class Supervisor {
         }
     }
     /**
-     * Sends on what an agent said to another one — a message of its own, or,
-     * with `replyTo`, its answer to a message of that one. `turnAnswer` marks
-     * the answer flotti sends back at the end of a turn: the receiver owes none
-     * to it, and it goes back even when the two no longer share a group — the
-     * exchange was allowed on its way in (docs/groups.md); a message of the
-     * agent's own is checked at this door. The sender does not wait for the
-     * receiver: a message that cannot be delivered is a line in the tab of the
-     * sender, saying why.
+     * Sends back the answer an agent said in the turn of a message of another
+     * one, with `replyTo` the message it answers, marked as the answer flotti
+     * sent back (`turnAnswer`): the receiver owes none to it, and it goes back
+     * even when the two no longer share a group — the exchange was allowed on
+     * its way in (docs/groups.md). A message of an agent's own never comes this
+     * way: agents talk inside groups (0.7.0, #171). The sender does not wait
+     * for the receiver: an answer that cannot be delivered is a line in the tab
+     * of the sender, saying why.
      */
-    private forward(sender: Member, to: string, text: string, replyTo?: Quote, turnAnswer = false): void {
+    private forward(sender: Member, to: string, text: string, replyTo: Quote): void {
         const receiver = this.members.get(to);
         if (receiver === undefined) {
             this.undelivered(sender, to, replyTo, 'there is no such agent in the fleet');
             return;
         }
-        const refusal = this.forwardRefusal(sender, receiver, turnAnswer);
-        if (refusal !== undefined) {
-            this.undelivered(sender, to, replyTo, refusal);
+        if (receiver === sender) {
+            this.undelivered(sender, to, replyTo, 'an agent does not send messages to itself');
             return;
         }
-        void this.handOn(receiver, sender.agent.id, text, replyTo, turnAnswer).then((error) => {
+        void this.handOn(receiver, sender.agent.id, text, replyTo).then((error) => {
             if (error !== undefined) {
                 this.undelivered(sender, to, replyTo, error);
             }
@@ -1038,26 +1137,14 @@ class Supervisor {
             this.say(sender, `could not deliver the ${replyTo === undefined ? 'message' : 'answer'} to "${to}": ${why}`);
         }
     }
-    /** Why the message cannot be sent on to the receiver at all; nothing when it can. */
-    private forwardRefusal(sender: Member, receiver: Member, turnAnswer: boolean): string | undefined {
-        if (receiver === sender) {
-            return 'an agent does not send messages to itself';
-        }
-        return turnAnswer || this.canReach(sender.agent.id, receiver.agent.id) ? undefined : notInAGroup(sender.agent.id, receiver.agent.id);
-    }
     /**
-     * Hands a message of one agent to another and, once it is taken, tells the
+     * Hands the answer of one agent to another and, once it is taken, tells the
      * fleet tools, so `reply` and `forward` of the receiver act on it. Resolves
      * with why it failed, or with nothing.
      */
-    private async handOn(receiver: Member, from: string, text: string, replyTo: Quote | undefined, turnAnswer: boolean): Promise<string | undefined> {
+    private async handOn(receiver: Member, from: string, text: string, replyTo: Quote): Promise<string | undefined> {
         const messageId = randomUUID();
-        const delivery = await this.hand(receiver, text, {
-            from,
-            messageId,
-            ...present('replyTo', replyTo),
-            ...turnAnswerMark(turnAnswer)
-        });
+        const delivery = await this.hand(receiver, text, { from, messageId, replyTo, turnAnswer: true });
         if (delivery.result === 'failed') {
             return delivery.error ?? 'the agent did not take it';
         }
@@ -1105,7 +1192,7 @@ class Supervisor {
         }
     }
     /** Writes the message down as the line of the group and tells the pages. */
-    private post(group: Group, text: string, options: GroupSendOptions, deliveries: readonly Delivery[]): GroupMessage {
+    private post(group: Group, text: string, options: GroupSendOptions & { readonly delegation?: Delegation }, deliveries: readonly Delivery[]): GroupMessage {
         const message = this.historyOf(group).add({
             messageId: randomUUID(),
             ...present('from', options.from),
@@ -1113,6 +1200,7 @@ class Supervisor {
             ...present('replyTo', options.replyTo),
             ...present('forwarded', options.forwarded),
             ...turnAnswerMark(options.turnAnswer === true),
+            ...present('delegation', options.delegation),
             deliveries
         });
         this.notify({ type: 'group-message', message });

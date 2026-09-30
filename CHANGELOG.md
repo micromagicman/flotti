@@ -6,6 +6,17 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Changed
 
+- **Agents talk only inside groups.** The private conversations between agents go (#171):
+  `send_message` and `forward` take `group` only, and a call that still names `to` is refused with a
+  sentence that names `group` and `@<id>`; `reply` answers in the group the last group message came
+  from; `to` with `kind: message` of the A2A inbox is a line in the sender's tab. A task goes to one
+  member inside a group: `delegate` and the inbox `task` take `group` and `to`, the task is posted to the
+  group mentioning the doer, its outcome is posted there from the doer, and the tab of the group shows
+  its card. The **Conversations** section and the tabs of pairs go; the sidebar is **Agents** and
+  **Groups**, and a page that remembered Conversations opens on Agents. `list_agents`, `list_groups` and
+  the roster do not change. **Breaking** for the tool schema of local agents and for adapters that post
+  `to` between agents: they post with `group` now.
+
 - **No «All messages».** The feed of the whole fleet goes: a group is read in its tab, an agent in its
   tab. The Fleet section goes with it, and **All agents** — the broadcast — is the first tab of
   **Agents**; a page that remembered Fleet opens on Agents. Nothing on disk or on the socket changes

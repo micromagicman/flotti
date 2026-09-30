@@ -83,11 +83,8 @@ const en = {
         answered: 'answered',
         you: 'You',
         youQuoted: 'you',
-        and: (one: string, other: string) => `${one} and ${other}`,
-        andWord: 'and',
         fromTo: (from: string, to: string) => `From ${from} to ${to}`,
         inLine: (n: number) => `${f.number(n)} in line`,
-        messages: (n: number) => `${f.number(n)} message${s(n)}`,
         localKind: 'local · ACP',
         remoteKind: 'remote · A2A'
     },
@@ -122,10 +119,6 @@ const en = {
         addAgentHint: 'Local or remote',
         newOutput: 'new output',
         newMessages: 'new messages',
-        conversations: 'Conversations',
-        allConversations: 'All conversations',
-        pairs: (n: number) => `${f.number(n)} pair${s(n)} of agents`,
-        conversationOf: (names: string, n: number) => `Conversation of ${names}, ${f.number(n)} message${s(n)}`,
         agents: 'Agents',
         sections: 'Sections of the sidebar',
         waitsForYou: (names: string, n: number) => `${names} wait${n === 1 ? 's' : ''} for you`,
@@ -281,16 +274,6 @@ const en = {
         nobody: 'no other member',
         messageTo: (name: string) => `Message to ${name}`,
         messagePlaceholder: (name: string) => `Message ${name}…`
-    },
-    conversation: {
-        of: (names: string) => `Conversation of ${names}`,
-        notYet: (names: string) => `${names} have not written to each other yet.`,
-        all: 'All conversations',
-        onlyTwo: 'Only the two agents write here.',
-        writeTo: (name: string) => `Write to ${name}`,
-        title: 'Conversations',
-        lead: 'What the agents of the fleet write to each other, one lane for every two of them.',
-        none: 'No agent has written to another yet.'
     },
     memory: {
         searchLabel: 'Search notes',

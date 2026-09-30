@@ -28,6 +28,7 @@ import { cachingCardFetch, cardLocation, cardUrl, describeCard, hearsFleet } fro
 import type { A2AAgentInfo } from './a2a-card.js';
 import { inboxParams, senderMarks } from './a2a-inbox.js';
 import type { AdminRequest, SaidParams } from './a2a-inbox.js';
+import { present } from './present.js';
 import {
     FINAL_STATES,
     FLEET_EXTENSION,
@@ -1423,31 +1424,35 @@ function inboxOpen(signal: AbortSignal, progress: InboxProgress): boolean {
 function messageIdOf(message: Message): string {
     return message.messageId || randomUUID();
 }
-/** Who a message of the agent is for, when not for a person, and the task it gives that agent. */
-/** Where a message of the agent goes, as the inbox says it: an agent, with the task it gives, or a group. */
+/**
+ * Where a message of the agent goes, as the inbox says it: a group, or a task
+ * to one member of a group (0.7.0, #171). A message with `to` alone goes to
+ * the supervisor as it is, which refuses it with a line in the tab: agents
+ * talk inside groups.
+ */
 type Addressed = Pick<SaidParams, 'to' | 'group' | 'task'>;
 function addressee(id: string, { to, group, task }: Addressed): Pick<AgentEvent & { type: 'message' }, 'to' | 'group' | 'delegation'> {
     if (to === undefined) {
         return group === undefined ? {} : { group };
     }
-    return task === undefined ? { to } : { to, delegation: { id, ...task } };
+    return task === undefined ? { to } : { to, ...present('group', group), delegation: { id, ...task } };
 }
 /**
- * Why a message of the agent's own goes nowhere: it names both an agent and
- * a group, or gives a group a task — a task has one doer (docs/groups.md).
- * Nothing when it is addressed as it should be.
+ * Why a message of the agent's own goes nowhere: a message names both an
+ * agent and a group, or a task names a group and no doer — a task has one
+ * (docs/groups.md). Nothing when it is addressed as it should be.
  */
 function misaddressed(said: Addressed): string | undefined {
     return namesBoth(said) ?? tasksAGroup(said);
 }
-function namesBoth({ to, group }: Addressed): string | undefined {
-    return to !== undefined && group !== undefined
-        ? `it names both "to" ("${to}") and "group" ("${group}"); a message goes to an agent or to a group, not both`
+function namesBoth({ to, group, task }: Addressed): string | undefined {
+    return to !== undefined && group !== undefined && task === undefined
+        ? `it names both "to" ("${to}") and "group" ("${group}"); a message goes to a group — address one member with @<id> in the text`
         : undefined;
 }
-function tasksAGroup({ group, task }: Addressed): string | undefined {
-    return group !== undefined && task !== undefined
-        ? `a task goes to one agent: "task" goes with "to", not with "group" ("${group}")`
+function tasksAGroup({ to, group, task }: Addressed): string | undefined {
+    return group !== undefined && task !== undefined && to === undefined
+        ? `a task names one doer: "task" goes with "group" ("${group}") and "to", the member that does it`
         : undefined;
 }
 /** Waits, or stops waiting as soon as the signal is aborted. */

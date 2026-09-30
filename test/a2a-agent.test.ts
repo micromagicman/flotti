@@ -715,7 +715,7 @@ function conversation(agent: FakeAgent): [string | undefined, unknown][] {
     });
 }
 describe('A2AAgent: answering another agent of the fleet', () => {
-    it('sends what the receiver answers in its task back to the sender, from the receiver, once', async () => {
+    it('posts what the receiver answers in its task to the group, back to the sender, from the receiver, once', async () => {
         const sender = await inboxAgent();
         const receiver = await inboxAgent();
         const agents = [{ ...manifest(sender.agent.url), id: 'a' }, { ...manifest(receiver.agent.url), id: 'b' }];
@@ -726,14 +726,14 @@ describe('A2AAgent: answering another agent of the fleet', () => {
         });
         await supervisor.start();
         await eventually(() => sender.isOpen() && receiver.isOpen());
-        sender.post('Please rerun the e2e job', 'to-1', { [INBOX_EXTENSION]: { to: 'b' } });
+        sender.post('Please rerun the e2e job', 'to-1', { [INBOX_EXTENSION]: { group: 'everyone' } });
         await eventually(() => conversation(sender.agent).length === 1);
         deepStrictEqual(conversation(sender.agent), [
-            ['In reply to a message from you:\n> Please rerun the e2e job\n\necho: Please rerun the e2e job', { from: 'b' }]
+            ['In reply to a message from you:\n> Please rerun the e2e job\n\necho: Please rerun the e2e job', { from: 'b', group: 'everyone' }]
         ]);
         await eventually(() => supervisor.history('a').some(event => event.type === 'turn-end'));
         await new Promise(resolve => setTimeout(resolve, 50));
-        deepStrictEqual(conversation(receiver.agent), [['Please rerun the e2e job', { from: 'a' }]], 'the answer to the answer does not come back');
+        deepStrictEqual(conversation(receiver.agent), [['Please rerun the e2e job', { from: 'a', group: 'everyone' }]], 'the answer to the answer does not come back');
         const answer = supervisor.history('a').find(event => event.type === 'message' && event.role === 'user');
         deepStrictEqual(answer?.type === 'message' ? [answer.from, answer.replyTo?.text] : undefined, ['b', 'Please rerun the e2e job']);
     });
@@ -771,15 +771,20 @@ describe('A2AAgent: tasks agents give one another', { timeout: 20_000 }, () => {
         const receiver = await inboxAgent();
         const supervisor = await fleetOf(new Map([['a', a2a(sender.agent, 'a')], ['b', a2a(receiver.agent, 'b')]]));
         await eventually(() => sender.isOpen() && receiver.isOpen());
-        sender.post('Please rerun the e2e job', 'task-1', { [INBOX_EXTENSION]: { to: 'b', task: {} } });
+        sender.post('Please rerun the e2e job', 'task-1', { [INBOX_EXTENSION]: { to: 'b', group: 'everyone', task: {} } });
         await eventually(() => conversation(sender.agent).length === 1);
         const [[given, givenParams]] = conversation(receiver.agent) as [[string, unknown]];
         match(given, /^Task task-1, given to you\. What you answer in this turn is its result/);
-        deepStrictEqual(givenParams, { from: 'a', task: { id: 'task-1' } });
+        deepStrictEqual(givenParams, { from: 'a', group: 'everyone', task: { id: 'task-1' } });
         const [[outcome, outcomeParams]] = conversation(sender.agent) as [[string, unknown]];
-        deepStrictEqual(outcomeParams, { from: 'b', task: { id: 'task-1', state: 'completed' } });
+        deepStrictEqual(outcomeParams, { from: 'b', group: 'everyone', task: { id: 'task-1', state: 'completed' } });
         match(outcome, /^In reply to a message from you:\n> Please rerun the e2e job\n\nThe task task-1 you gave is completed\.\n\necho: Task task-1/);
         await eventually(() => supervisor.history('b').some(event => event.type === 'delegation' && event.state === 'completed'));
+        await eventually(() => supervisor.groupHistory('everyone').length === 2);
+        deepStrictEqual(supervisor.groupHistory('everyone').map(line => [line.from, line.text.split('\n')[0], line.delegation?.state]), [
+            ['a', '@b Please rerun the e2e job', 'working'],
+            ['b', 'echo: Task task-1, given to you. What you answer in this turn is its result; end the turn when it is done.', 'completed']
+        ], 'the task and its outcome are posted to the group');
         await supervisor.stop();
     });
     it('A2A to A2A: taking the task back through the inbox cancels the task of the other agent', async () => {
@@ -787,7 +792,7 @@ describe('A2AAgent: tasks agents give one another', { timeout: 20_000 }, () => {
         const receiver = await fake({ streaming: true, script: endless });
         const supervisor = await fleetOf(new Map([['a', a2a(sender.agent, 'a')], ['b', a2a(receiver, 'b')]]));
         await eventually(() => sender.isOpen());
-        sender.post('Refactor the parser', 'task-2', { [INBOX_EXTENSION]: { to: 'b', task: {} } });
+        sender.post('Refactor the parser', 'task-2', { [INBOX_EXTENSION]: { to: 'b', group: 'everyone', task: {} } });
         await eventually(() => supervisor.history('b').some(event => event.type === 'message' && event.role === 'user'));
         sender.post('', 'take-back', { [INBOX_EXTENSION]: { cancel: 'task-2' } });
         await eventually(() => receiver.methods().includes('CancelTask'));
@@ -800,7 +805,7 @@ describe('A2AAgent: tasks agents give one another', { timeout: 20_000 }, () => {
         const sender = await inboxAgent();
         const supervisor = await fleetOf(new Map([['a', a2a(sender.agent, 'a')]]));
         await eventually(() => sender.isOpen());
-        sender.post('Hello', 'task-3', { [INBOX_EXTENSION]: { to: 'ghost', task: {} } });
+        sender.post('Hello', 'task-3', { [INBOX_EXTENSION]: { to: 'ghost', group: 'everyone', task: {} } });
         await eventually(() => conversation(sender.agent).length === 1);
         const [[text, params]] = conversation(sender.agent) as [[string, unknown]];
         deepStrictEqual(taskParams(params), { id: 'task-3', state: 'failed' });
@@ -816,13 +821,13 @@ describe('A2AAgent: tasks between an A2A agent and a local one', { timeout: 20_0
             const receiver = await inboxAgent();
             const supervisor = await fleetOf(new Map<string, A2AAgent | Harness>([['a', local], ['b', a2a(receiver.agent, 'b')]]));
             server.serve(supervisor);
-            await local.talk('mcp {"name":"delegate","arguments":{"to":"b","text":"Summarise the release"}}');
+            await local.talk('mcp {"name":"delegate","arguments":{"group":"everyone","to":"b","text":"Summarise the release"}}');
             await eventually(() => local.recorded('session/prompt').length === 2, 5_000);
             const said = local.events.flatMap(event => event.type === 'message' && event.role === 'agent' ? [event.text] : []);
             const id = /mcp: Task (\S+) is with "b"/.exec(said[0] ?? '')?.[1];
             ok(id !== undefined, said[0]);
             const prompt = String(local.recorded('session/prompt')[1]?.['text']);
-            ok(prompt.startsWith(`[from b] In reply to a message from you:\n> Summarise the release\n\nThe task ${id} you gave is completed.\n\necho: `), prompt);
+            ok(prompt.startsWith(`[from b in group everyone] In reply to a message from you:\n> Summarise the release\n\nThe task ${id} you gave is completed.\n\necho: `), prompt);
             await supervisor.stop();
         } finally {
             await server.close();
@@ -833,12 +838,12 @@ describe('A2AAgent: tasks between an A2A agent and a local one', { timeout: 20_0
         const local = new Harness({ manifest: { id: 'b' } });
         const supervisor = await fleetOf(new Map<string, A2AAgent | Harness>([['a', a2a(sender.agent, 'a')], ['b', local]]));
         await eventually(() => sender.isOpen());
-        sender.post('Check the logs', 'task-5', { [INBOX_EXTENSION]: { to: 'b', task: {} } });
+        sender.post('Check the logs', 'task-5', { [INBOX_EXTENSION]: { to: 'b', group: 'everyone', task: {} } });
         await eventually(() => conversation(sender.agent).length === 1, 5_000);
-        match(String(local.recorded('session/prompt')[0]?.['text']), /^\[from a\] Task task-5, given to you\./);
+        match(String(local.recorded('session/prompt')[0]?.['text']), /^\[from a in group everyone\] Task task-5, given to you\./);
         const [[text, params]] = conversation(sender.agent) as [[string, unknown]];
         deepStrictEqual(taskParams(params), { id: 'task-5', state: 'completed' });
-        match(text, /The task task-5 you gave is completed\.\n\nyou said: \[from a\] Task task-5/);
+        match(text, /The task task-5 you gave is completed\.\n\nyou said: \[from a in group everyone\] Task task-5/);
         await supervisor.stop();
     });
 });
@@ -847,16 +852,16 @@ function prompts(local: Harness): string[] {
     return local.recorded('session/prompt').map(entry => String(entry['text']));
 }
 describe('A2AAgent: answering a message of a local agent', { timeout: 20_000 }, () => {
-    it('ACP to A2A: what the A2A agent answers in its task comes back to the local agent, quoting its message', async () => {
+    it('ACP to A2A: what the A2A agent answers in its task comes back to the local agent through the group, quoting its message', async () => {
         const server = await FleetMcpServer.start();
         try {
             const local = new Harness({ fake: { mcpHttp: true }, manifest: { id: 'a' }, options: { fleetTools: server.access('a') } });
             const receiver = await inboxAgent();
             const supervisor = await fleetOf(new Map<string, A2AAgent | Harness>([['a', local], ['b', a2a(receiver.agent, 'b')]]));
             server.serve(supervisor);
-            await local.talk('mcp {"name":"send_message","arguments":{"to":"b","text":"Summarise the release"}}');
+            await local.talk('mcp {"name":"send_message","arguments":{"group":"everyone","text":"Summarise the release"}}');
             await eventually(() => prompts(local).length === 2, 5_000);
-            deepStrictEqual(prompts(local)[1], '[from b] In reply to a message from you:\n> Summarise the release\n\necho: Summarise the release');
+            deepStrictEqual(prompts(local)[1], '[from b in group everyone] In reply to a message from you:\n> Summarise the release\n\necho: Summarise the release');
             await eventually(() => supervisor.history('a').filter(event => event.type === 'turn-end').length === 2, 5_000);
             await new Promise(resolve => setTimeout(resolve, 100));
             deepStrictEqual(conversation(receiver.agent).map(([text]) => text), ['Summarise the release'], 'the answer to the answer does not come back');
@@ -873,14 +878,14 @@ describe('A2AAgent: answering a message of a local agent', { timeout: 20_000 }, 
             const supervisor = await fleetOf(new Map<string, A2AAgent | Harness>([['a', local], ['b', a2a(sender.agent, 'b')]]), { fleetTools: server });
             server.serve(supervisor);
             await eventually(() => sender.isOpen());
-            sender.post('Deploy the release', 'own-1', { [INBOX_EXTENSION]: { to: 'a' } });
+            sender.post('Deploy the release', 'own-1', { [INBOX_EXTENSION]: { group: 'everyone' } });
             // The turn-end answer of the local agent goes back to b; b's answer to it does not come back.
             await eventually(() => conversation(sender.agent).length === 1, 5_000);
             await eventually(() => supervisor.history('b').some(event => event.type === 'turn-end'), 5_000);
             await local.talk('mcp {"name":"reply","arguments":{"text":"Which host?"}}');
             await eventually(() => prompts(local).length === 3, 5_000);
             deepStrictEqual(prompts(local)[2],
-                '[from b] In reply to a message from you:\n> Which host?\n\necho: In reply to a message from you:\n> Deploy the release\n\nWhich host?');
+                '[from b in group everyone] In reply to a message from you:\n> Which host?\n\necho: In reply to a message from you:\n> Deploy the release\n\nWhich host?');
             await eventually(() => supervisor.history('a').filter(event => event.type === 'turn-end').length === 3, 5_000);
             await new Promise(resolve => setTimeout(resolve, 100));
             strictEqual(conversation(sender.agent).length, 2, 'the answer of the local agent to that answer does not go to b again');
@@ -908,7 +913,7 @@ describe('A2AAgent: a message of another agent and the line', { timeout: 20_000 
             const local = new Harness({ fake: { mcpHttp: true }, manifest: { id: 'a' }, options: { fleetTools: server.access('a') } });
             const supervisor = await fleetOf(new Map<string, A2AAgent | Harness>([['a', local], ['b', a2a(receiver, 'b')]]));
             server.serve(supervisor);
-            await local.talk('mcp {"name":"send_message","arguments":{"to":"b","text":"Summarise the release"}}');
+            await local.talk('mcp {"name":"send_message","arguments":{"group":"everyone","text":"Summarise the release"}}');
             await eventually(() => receiver.received.length === 1);
             const owner = supervisor.send('b', 'And the changelog?');
             await eventually(() => supervisor.history('b').some(event => event.type === 'queued'));
@@ -918,12 +923,12 @@ describe('A2AAgent: a message of another agent and the line', { timeout: 20_000 
             deepStrictEqual(supervisor.history('b').flatMap(event => event.type === 'turn-end' ? [event.reason] : []), ['end_turn', 'end_turn']);
             deepStrictEqual(supervisor.history('b').flatMap(event => event.type === 'message' ? [`${event.role}: ${event.text}`] : []), [
                 'user: Summarise the release',
-                'agent: done: [from a] Summarise the release',
+                'agent: done: [from a in group everyone] Summarise the release',
                 'user: And the changelog?',
                 'agent: done: And the changelog?'
             ]);
             await eventually(() => prompts(local).length === 2, 5_000);
-            match(prompts(local)[1] ?? '', /^\[from b\] In reply to a message from you:\n> Summarise the release\n\ndone: /);
+            match(prompts(local)[1] ?? '', /^\[from b in group everyone\] In reply to a message from you:\n> Summarise the release\n\ndone: /);
             await supervisor.stop();
         } finally {
             await server.close();
@@ -1163,7 +1168,7 @@ describe('cardLocation', () => {
     });
 });
 describe('A2AAgent: messages to a group through the inbox (docs/groups.md)', () => {
-    it('says which group a message of its own is for, and does not send one addressed both ways or giving a group a task', async () => {
+    it('says which group a message or a task of its own is for, and does not send one addressed both ways or a task without its doer', async () => {
         const { agent, post, isOpen } = await inboxAgent();
         const { client, events } = connect(agent);
         await client.start();
@@ -1171,16 +1176,21 @@ describe('A2AAgent: messages to a group through the inbox (docs/groups.md)', () 
         post('ship it', 'g-1', { [INBOX_EXTENSION]: { group: 'release' } });
         post('both', 'g-2', { [INBOX_EXTENSION]: { to: 'builder', group: 'release' } });
         post('a task', 'g-3', { [INBOX_EXTENSION]: { group: 'release', task: {} } });
+        post('review it', 'g-4', { [INBOX_EXTENSION]: { to: 'builder', group: 'release', task: {} } });
         const logs = () => events.flatMap(event => event.type === 'log' && event.source === 'flotti' ? [event.text] : []);
         await eventually(() => logs().length === 2);
-        deepStrictEqual(events.flatMap(event => event.type === 'message' ? [[event.role, event.text, event.to, event.group]] : []), [
-            ['agent', 'ship it', undefined, 'release']
+        await eventually(() => events.filter(event => event.type === 'message').length === 2);
+        deepStrictEqual(events.flatMap(event => event.type === 'message' ? [[event.role, event.text, event.to, event.group, event.delegation]] : []), [
+            ['agent', 'ship it', undefined, 'release', undefined],
+            ['agent', 'review it', 'builder', 'release', { id: 'g-4' }]
         ]);
         deepStrictEqual(logs(), [
-            'the message was not sent: it names both "to" ("builder") and "group" ("release"); a message goes to an agent or to a group, not both',
-            'the message was not sent: a task goes to one agent: "task" goes with "to", not with "group" ("release")'
+            'the message was not sent: it names both "to" ("builder") and "group" ("release"); a message goes to a group — address one member with @<id> in the text',
+            'the message was not sent: a task names one doer: "task" goes with "group" ("release") and "to", the member that does it'
         ]);
     });
+});
+describe('A2AAgent: group messages to the agent (docs/groups.md)', () => {
     it('tells the agent which group a message was posted to, in the metadata beside the sender', async () => {
         const { agent, isOpen } = await inboxAgent();
         const { client, events } = connect(agent);

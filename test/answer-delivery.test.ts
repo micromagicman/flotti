@@ -144,13 +144,14 @@ describe('answer delivery: what is not held, and the choice taken per message', 
     });
 });
 describe('answer delivery: what agents say to one another', () => {
-    it('what an agent says to another one reaches that one at once, whatever the rule; its tab shows it before what came back', async () => {
+    it('what an agent says to its group reaches the other members, whatever the rule; its tab shows it before what came back', async () => {
         const { supervisor, fake, notices } = supervised('whole', 'a', 'b');
         await supervisor.start();
         fake('a').emit({ type: 'message', role: 'user', messageId: 'q', text: 'go', append: false });
-        fake('a').emit({ type: 'message', role: 'agent', messageId: 'r1', text: 'rerun the tests', append: false, to: 'b' });
-        deepStrictEqual(fake('b').calls.filter((call) => call.startsWith('send')), ['send rerun the tests from a'], 'b has it already');
-        // b answered at once, and the answer came back to a as a message it got: after what a said, not before.
+        fake('a').emit({ type: 'message', role: 'agent', messageId: 'r1', text: 'rerun the tests', append: false, group: 'everyone' });
+        await eventually(() => told(notices).filter((event) => event.agentId === 'a').length >= 4);
+        deepStrictEqual(fake('b').calls.filter((call) => call.startsWith('send')), ['send rerun the tests from a'], 'b has it');
+        // b answered at once, and the answer came back to a through the group as a message it got: after what a said, not before.
         deepStrictEqual(shape(told(notices).filter((event) => event.agentId === 'a')).slice(0, 4), [
             'status', 'message:user:go', 'message:agent:rerun the tests', 'message:user:you said: rerun the tests'
         ]);
