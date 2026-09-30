@@ -117,6 +117,8 @@ const en = {
         broadcast: 'Broadcast',
         addAgent: 'Add agent',
         addAgentHint: 'Local or remote',
+        addGroup: 'Add group',
+        addGroupHint: 'Name, topic, members',
         newOutput: 'new output',
         newMessages: 'new messages',
         agents: 'Agents',
@@ -127,7 +129,6 @@ const en = {
         groupHint: (members: number, messages: number) => `${f.number(members)} member${s(members)} · ${f.number(messages)} message${s(messages)}`,
         groupTab: (name: string, members: number, messages: number) => `Group ${name}, ${f.number(members)} member${s(members)}, ${f.number(messages)} message${s(messages)}`,
         noGroups: 'Your agents don\'t see each other yet.',
-        noGroupsWhy: 'An agent reaches only the members of its groups. One group of everyone lets them talk; split them later in Settings.',
         everyone: 'Everyone',
         makingEveryone: 'Making the group…'
     },
@@ -262,7 +263,7 @@ const en = {
         of: (name: string) => `Group ${name}`,
         members: (n: number) => `${f.number(n)} member${s(n)}`,
         notInFleet: 'not in the fleet',
-        editHint: 'Members, name and topic — in Settings → Groups',
+        editHint: 'The name, the topic and the members, or delete the group',
         notYet: (name: string) => `Nothing said in ${name} yet. Every member gets what you write here.`,
         answer: 'answer',
         toGroup: (from: string, name: string) => `${from} → ${name}`,
@@ -351,11 +352,6 @@ const en = {
         languageHint: 'Kept in this browser. Messages of agents and people are shown as they were written.'
     },
     groups: {
-        title: 'Groups',
-        noGroups: 'No groups yet: the agents do not see each other until they are in one.',
-        addGroup: 'Add group',
-        members: (n: number) => `${f.number(n)} member${s(n)}`,
-        noMembers: 'no members',
         notInFleet: 'not in the fleet',
         confirmDelete: (name: string) => `Move the group ${name} and its history to .trash in the fleet directory? Its members stop seeing each other through it.`,
         keep: 'Keep',

@@ -12,12 +12,12 @@ Nothing depends on it and it touches the rail first. Assumes open question 3 (tw
 
 May run with 1 (both touch `Sidebar.tsx`; whichever lands second rebases).
 
-- [ ] 2.1 Edit in the header of the group tab opens `GroupForm` in place over the lane, id read-only; Save → `PUT /api/groups/<id>`, Cancel drops the draft; the check is the server's `parseGroup`
-- [ ] 2.2 Delete in the editor with a confirmation naming the group → `DELETE /api/groups/<id>`; the page goes to the next tab of the Groups section or its empty state
-- [ ] 2.3 Add group as a tab at the end of the Groups section, opening the same form for a new group as a panel; a saved group opens its tab; the «Everyone» offer stays one click
-- [ ] 2.4 Remove Settings → Groups: `GroupSettings.tsx`, `GroupEditor`, `atGroup` and `editGroupOf` in `web/src/App.tsx`, the sentence `sidebar.noGroupsWhy`
-- [ ] 2.5 Unit tests for the draft shared with the form; e2e — from the tab of a group: rename, change members, delete, and `groups/<id>/group.json` follows; Add group in the section makes a group and opens its tab; Settings has no Groups
-- [ ] 2.6 README («Groups», «The dashboard», «Settings») and CHANGELOG
+- [x] 2.1 Edit in the header of the group tab opens `GroupForm` in place over the lane, id read-only; Save → `PUT /api/groups/<id>`, Cancel drops the draft; the check is the server's `parseGroup`
+- [x] 2.2 Delete in the editor with a confirmation naming the group → `DELETE /api/groups/<id>`; the page goes to the next tab of the Groups section or its empty state
+- [x] 2.3 Add group as a tab at the end of the Groups section, opening the same form for a new group as a panel; a saved group opens its tab; the «Everyone» offer stays one click
+- [x] 2.4 Remove Settings → Groups: `GroupSettings.tsx`, `GroupEditor`, `atGroup` and `editGroupOf` in `web/src/App.tsx`, the sentence `sidebar.noGroupsWhy`
+- [x] 2.5 Unit tests for the draft shared with the form; e2e — from the tab of a group: rename, change members, delete, and `groups/<id>/group.json` follows; Add group in the section makes a group and opens its tab; Settings has no Groups
+- [x] 2.6 README («Groups», «The dashboard», «Settings») and CHANGELOG
 
 ## 3. #171 Agents talk only inside groups
 

@@ -8,7 +8,7 @@ import type { AgentFeed } from '../web/src/feed.js';
 import type { GroupFeed } from '../web/src/groups.js';
 import { FIRST_SECTION, SECTIONS, isSection, markerDot, markerOf, sectionForKey, sectionOf } from '../web/src/sidebar-sections.js';
 import type { MarkerInput } from '../web/src/sidebar-sections.js';
-const OTHER = { broadcastId: 'all' };
+const OTHER = { broadcastId: 'all', addGroupId: '_add-group' };
 const agent = (id: string, status: AgentStatus = 'idle'): AgentSummary => ({ id, name: id, kind: 'local', status });
 const feed = (lastSeq: number, status: AgentStatus = 'idle'): AgentFeed => ({ ...emptyFeed(status), lastSeq });
 const group = (id: string, members: readonly string[] = []): GroupSummary => ({ id, name: id, members });
@@ -35,7 +35,8 @@ test('a tab of the sidebar is in its section: an agent and the broadcast in Agen
     strictEqual(sectionOf('_conversations', ids, OTHER), undefined, 'and so is the list of them');
     strictEqual(sectionOf('all', ids, OTHER), 'agents', 'All agents is the first tab of Agents (#173)');
     strictEqual(sectionOf('_feed', ids, OTHER), undefined, 'the feed of the fleet is gone (#173)');
-    strictEqual(sectionOf('_add-agent', ids, OTHER), undefined, 'Add agent is under every section and moves none');
+    strictEqual(sectionOf('_add-agent', ids, OTHER), undefined, 'Add agent opens the settings and moves no section');
+    strictEqual(sectionOf('_add-group', ids, OTHER), 'groups', 'Add group is the last tab of Groups (#175)');
     strictEqual(sectionOf('_settings', ids, OTHER), undefined);
 });
 test('the open section carries no marker', () => {

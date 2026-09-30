@@ -17,6 +17,13 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   the roster do not change. **Breaking** for the tool schema of local agents and for adapters that post
   `to` between agents: they post with `group` now.
 
+- **A group is managed from its tab.** **Edit** in the header of a group's tab opens its form in place
+  of the lane — rename it, change the topic, tick members in and out — and **Delete** there, after a
+  confirmation that names the group, moves it to `.trash/` and opens the next group. **Add group** is
+  the last tab of the Groups section; a saved group opens its tab. Settings → Groups goes, and the
+  empty Groups section no longer points to Settings. The API and the files of groups do not change
+  (#175).
+
 - **No «All messages».** The feed of the whole fleet goes: a group is read in its tab, an agent in its
   tab. The Fleet section goes with it, and **All agents** — the broadcast — is the first tab of
   **Agents**; a page that remembered Fleet opens on Agents. Nothing on disk or on the socket changes

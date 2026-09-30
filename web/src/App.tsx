@@ -4,6 +4,7 @@ import type { Quote } from '../../src/agent-events.js';
 import { AgentPanel } from './components/AgentPanel.js';
 import type { Jump } from './components/Feed.js';
 import { BroadcastPanel } from './components/BroadcastPanel.js';
+import { NewGroup } from './components/GroupEdit.js';
 import { GroupPanel } from './components/GroupPanel.js';
 import { Logo } from './components/Logo.js';
 import { SettingsPanel } from './components/SettingsPanel.js';
@@ -14,7 +15,7 @@ import { useT } from './i18n/I18n.js';
 import { quotedMessage } from './feed.js';
 import type { AgentFeed } from './feed.js';
 import type { Link } from './fleet-state.js';
-import { everyoneGroup, groupOf } from './groups.js';
+import { everyoneGroup, groupAfter, groupOf } from './groups.js';
 import { groupTabId } from '../../src/dashboard-protocol.js';
 import { useAgentColors } from './use-agent-colors.js';
 import { useAttention } from './use-attention.js';
@@ -26,15 +27,8 @@ const BROADCAST = 'all';
 const SETTINGS = '_settings';
 /** The settings opened at the agents, to add one (#116). */
 const ADD_AGENT = '_add-agent';
-/** The settings opened at the form of a group (#152), from Edit in its tab: `_edit-group:<id>`. */
-const EDIT_GROUP = '_edit-group:';
-function editGroupOf(tab: string): string | undefined {
-    return tab.startsWith(EDIT_GROUP) && tab.length > EDIT_GROUP.length ? tab.slice(EDIT_GROUP.length) : undefined;
-}
-/** Whether the tab is the settings page itself: opened by the gear, or at a group by Edit. */
-function isSettingsTab(tab: string): boolean {
-    return tab === SETTINGS || editGroupOf(tab) !== undefined;
-}
+/** The form for a new group, the last tab of the Groups section (#175). */
+const ADD_GROUP = '_add-group';
 function tabFromHash(): string {
     return decodeURIComponent(window.location.hash.replace(/^#\/?/, ''));
 }
@@ -109,7 +103,7 @@ function useOpenGroup(state: FleetState, tab: string) {
 }
 type OpenGroup = ReturnType<typeof useOpenGroup>;
 function isPanelTab(tab: string, group: unknown): boolean {
-    return [BROADCAST, ADD_AGENT].includes(tab) || isSettingsTab(tab) || group !== undefined;
+    return [BROADCAST, SETTINGS, ADD_AGENT, ADD_GROUP].includes(tab) || group !== undefined;
 }
 type FleetState = ReturnType<typeof useFleet>[0];
 type AgentSummary = FleetState['agents'][number];
@@ -164,9 +158,20 @@ function Topbar({ link, settingsOpen, onSettings }: { readonly link: Link; reado
 }
 type Panel = (props: { readonly model: AppModel }) => JSX.Element;
 function SettingsMain({ model }: { readonly model: AppModel }) {
-    const { state, tab, attention, live } = model;
+    const { tab, attention, live } = model;
     const notify = { permission: attention.permission, onAsk: attention.askPermission };
-    return <SettingsPanel key={tab} agents={live} groups={state.groups} notify={notify} atAgents={tab === ADD_AGENT} atGroup={editGroupOf(tab)} />;
+    return <SettingsPanel key={tab} agents={live} notify={notify} atAgents={tab === ADD_AGENT} />;
+}
+/** Add group (#175): a saved group opens its tab; Cancel goes to the first group, if there is one. */
+function AddGroupMain({ model }: { readonly model: AppModel }) {
+    const { state, setTab } = model;
+    const first = state.groups[0];
+    return <NewGroup agents={state.agents} onSaved={(id) => setTab(groupTabId(id))} onCancel={first === undefined ? undefined : () => setTab(groupTabId(first.id))} />;
+}
+/** Where the page goes once the open group is deleted (#175): the next group, or Add group when none is left. */
+function afterDelete(state: FleetState, id: string): string {
+    const next = groupAfter(state.groups, id);
+    return next === undefined ? ADD_GROUP : groupTabId(next);
 }
 /** The tab of a group (#152), while the group is in the fleet. */
 function GroupMain({ model }: { readonly model: AppModel }) {
@@ -174,8 +179,9 @@ function GroupMain({ model }: { readonly model: AppModel }) {
     if (group.open === undefined) {
         return <AgentMain model={model} />;
     }
+    const { id } = group.open;
     return <GroupPanel key={tab} group={group.open} feed={group.feed} agents={state.agents} colors={colors} quotes={quotes}
-        onEdit={() => setTab(`${EDIT_GROUP}${group.open?.id ?? ''}`)} />;
+        onDeleted={() => setTab(afterDelete(state, id))} />;
 }
 function AgentMain({ model }: { readonly model: AppModel }) {
     const { state, dispatch, setTab, colors, agent, feed, live, quotes, jump } = model;
@@ -189,17 +195,15 @@ function AgentMain({ model }: { readonly model: AppModel }) {
 /** The panels a tab of their own opens. */
 const PANELS: ReadonlyMap<string, Panel> = new Map([
     [ SETTINGS, SettingsMain ],
-    [ ADD_AGENT, SettingsMain ]
+    [ ADD_AGENT, SettingsMain ],
+    [ ADD_GROUP, AddGroupMain ]
 ]);
 /** The panel of a tab that is none of the groups': one of its own, else an agent or the broadcast. */
 function plainPanelOf(model: AppModel): Panel {
     return PANELS.get(model.tab) ?? AgentMain;
 }
-/** The panel the open tab opens: the settings at a group, the tab of a group, or one of the others. */
+/** The panel the open tab opens: the tab of a group, or one of the others. */
 function panelOf(model: AppModel): Panel {
-    if (editGroupOf(model.tab) !== undefined) {
-        return SettingsMain;
-    }
     return model.group.open === undefined ? plainPanelOf(model) : GroupMain;
 }
 function Main({ model }: { readonly model: AppModel }) {
@@ -215,20 +219,17 @@ function selectedTab({ tab, agent, group }: AppModel): string {
 }
 /** One of the tabs that are neither an agent nor a group; the broadcast when the tab is none of them. */
 function otherTab(tab: string): string {
-    if (editGroupOf(tab) !== undefined) {
-        return SETTINGS;
-    }
-    return [SETTINGS, ADD_AGENT].includes(tab) ? tab : BROADCAST;
+    return [SETTINGS, ADD_AGENT, ADD_GROUP].includes(tab) ? tab : BROADCAST;
 }
 function App() {
     const model = useAppModel();
     const { state, tab, setTab, colors, seenSeq, onEveryone } = model;
-    const tabs = { broadcastId: BROADCAST, addAgentId: ADD_AGENT };
+    const tabs = { broadcastId: BROADCAST, addAgentId: ADD_AGENT, addGroupId: ADD_GROUP };
     const selected = selectedTab(model);
     const [section, setSection] = useSidebarSection(tab, sectionOf(selected, state.agents.map((summary) => summary.id), tabs));
     return (
         <div className="app">
-            <Topbar link={state.link} settingsOpen={isSettingsTab(tab)} onSettings={() => setTab(SETTINGS)} />
+            <Topbar link={state.link} settingsOpen={tab === SETTINGS} onSettings={() => setTab(SETTINGS)} />
             <Sidebar agents={state.agents} feeds={state.feeds} colors={colors} groups={state.groups} groupFeeds={state.groupFeeds}
                 onEveryone={onEveryone} seenSeq={seenSeq} selected={selected} onSelect={setTab} section={section} onSection={setSection} {...tabs} />
             <Main model={model} />

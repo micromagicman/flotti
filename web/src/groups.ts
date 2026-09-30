@@ -6,7 +6,7 @@
  * every agent in one group. Pure: the page and the tests share it.
  */
 import type { Delegation, DelegationState, Quote } from '../../src/agent-events.js';
-import type { AgentSummary, Delivery, GroupConfig, GroupMessage } from '../../src/dashboard-protocol.js';
+import type { AgentSummary, Delivery, GroupConfig, GroupMessage, GroupSummary } from '../../src/dashboard-protocol.js';
 import { groupTabId } from '../../src/dashboard-protocol.js';
 import { present } from '../../src/present.js';
 import type { MessageItem } from './feed.js';
@@ -122,5 +122,18 @@ function outcomeOf(message: GroupMessage): DelegationState | undefined {
 function everyoneGroup(agents: readonly AgentSummary[]): GroupConfig {
     return { id: 'everyone', name: 'Everyone', members: agents.map((agent) => agent.id) };
 }
-export { EMPTY_GROUP_FEED, everyoneGroup, groupMessageKey, groupOf, inFleet, laneItem, outcomeOf, quotedInLane, taskOf, textOf, tookNames, withGroupMessage };
+/**
+ * Where the page goes once a group is deleted from its tab (#175): the next
+ * group of the Groups section, the one before it when it was the last, and
+ * nothing when it was the only one — the section is empty then.
+ */
+function groupAfter(groups: readonly Pick<GroupSummary, 'id'>[], deleted: string): string | undefined {
+    const at = groups.findIndex((group) => group.id === deleted);
+    const rest = groups.filter((group) => group.id !== deleted);
+    if (rest.length === 0) {
+        return undefined;
+    }
+    return (at < 0 ? rest[0] : rest[Math.min(at, rest.length - 1)])?.id;
+}
+export { EMPTY_GROUP_FEED, everyoneGroup, groupAfter, groupMessageKey, groupOf, inFleet, laneItem, outcomeOf, quotedInLane, taskOf, textOf, tookNames, withGroupMessage };
 export type { GroupFeed, Took };

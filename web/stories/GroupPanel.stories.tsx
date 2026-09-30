@@ -17,7 +17,7 @@ const meta = {
         agents: AGENTS,
         colors: COLORS,
         quotes: { hasQuoted: () => true, onOpenQuote: () => undefined },
-        onEdit: () => undefined
+        onDeleted: () => undefined
     }
 } satisfies Meta<typeof GroupPanel>;
 export default meta;

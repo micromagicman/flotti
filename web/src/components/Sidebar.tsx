@@ -28,6 +28,8 @@ type SidebarProps = {
     readonly broadcastId: string;
     /** Where the settings stood: the settings opened at the agents, to add one (#116). */
     readonly addAgentId: string;
+    /** The form for a new group, the last tab of the Groups section (#175). */
+    readonly addGroupId: string;
     readonly onSelect: (tab: string) => void;
     /** The section in sight (#136), and how to open another. */
     readonly section: Section;
@@ -40,7 +42,7 @@ type SideTabProps = {
     readonly name: string;
     readonly hint: string;
 };
-/** A tab that is not an agent's: the broadcast one, Add agent. */
+/** A tab that is not an agent's: the broadcast one, Add agent, Add group. */
 function SideTab({ className, selected, onClick, name, hint }: SideTabProps) {
     return (
         <button
@@ -139,7 +141,6 @@ function EveryoneOffer({ onEveryone }: Pick<SidebarProps, 'onEveryone'>) {
     return (
         <div className="side-empty" role="note">
             <p><b>{t.sidebar.noGroups}</b></p>
-            <p className="muted">{t.sidebar.noGroupsWhy}</p>
             <button type="button" className="btn btn-sm btn-primary" disabled={making} onClick={make}>{making ? t.sidebar.makingEveryone : t.sidebar.everyone}</button>
             {error === undefined ? null : <p className="error" role="alert">{error}</p>}
         </div>
@@ -257,14 +258,20 @@ function SectionTabs(props: SidebarProps) {
     const Tabs = SECTION_TABS[props.section];
     return <Tabs {...props} />;
 }
-/** The open section: its tabs, then Add agent at the foot of every one. */
-function SectionList(props: SidebarProps) {
-    const { section, selected, addAgentId, onSelect } = props;
+/** The tab at the foot of a section: Add group under Groups (#175), Add agent under Agents. */
+function AddTab({ section, selected, addAgentId, addGroupId, onSelect }: Pick<SidebarProps, 'section' | 'selected' | 'addAgentId' | 'addGroupId' | 'onSelect'>) {
     const t = useT();
+    if (section === 'groups') {
+        return <SideTab className="tab tab-add-group" selected={selected === addGroupId} onClick={() => onSelect(addGroupId)} name={t.sidebar.addGroup} hint={t.sidebar.addGroupHint} />;
+    }
+    return <SideTab className="tab tab-add-agent" selected={selected === addAgentId} onClick={() => onSelect(addAgentId)} name={t.sidebar.addAgent} hint={t.sidebar.addAgentHint} />;
+}
+/** The open section: its tabs, then the way to add to it. */
+function SectionList(props: SidebarProps) {
     return (
-        <nav className="sidebar" role="tablist" aria-label={useSectionLabel()(section)} aria-orientation="vertical">
+        <nav className="sidebar" role="tablist" aria-label={useSectionLabel()(props.section)} aria-orientation="vertical">
             <SectionTabs {...props} />
-            <SideTab className="tab tab-add-agent" selected={selected === addAgentId} onClick={() => onSelect(addAgentId)} name={t.sidebar.addAgent} hint={t.sidebar.addAgentHint} />
+            <AddTab {...props} />
         </nav>
     );
 }

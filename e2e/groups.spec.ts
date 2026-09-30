@@ -1,7 +1,8 @@
 /**
  * The groups of the fleet on the dashboard (docs/groups.md, #152): a fleet
  * with agents but no group offers one click «Everyone»; the tab of a group
- * shows what was said in it and how each member took it. A fleet of its own,
+ * shows what was said in it and how each member took it; the last group
+ * deleted from its tab leaves the section empty (#175). A fleet of its own,
  * since dashboard.spec.ts starts with a group.
  */
 import { spawn } from 'node:child_process';
@@ -130,4 +131,26 @@ test('a member busy when the message is posted is «in line» under it, and the 
     await groupTab(page).click();
     await expect(lane(page).locator('.message-row-user').filter({ hasText: 'who is free' }).locator('.took summary')).toHaveText('claude, codex got it');
     rmSync(gate, { force: true });
+});
+test('the last group deleted from its tab leaves the Groups section empty: the offer of «Everyone» and Add group, which is open (#175)', async ({ page }) => {
+    await openGroups(page);
+    await groupTab(page).click();
+    await page.locator('.group-header').getByRole('button', { name: 'Edit' }).click();
+    const form = page.getByRole('form', { name: 'Group everyone' });
+    await form.getByRole('button', { name: 'Delete' }).click();
+    await expect(form).toContainText('Move the group Everyone and its history to .trash in the fleet directory?');
+    await form.getByRole('button', { name: 'Delete' }).click();
+    await expect(groupTab(page)).toHaveCount(0);
+    await expect(section(page, 'Groups')).toHaveAttribute('aria-selected', 'true');
+    const offer = page.getByRole('note');
+    await expect(offer).toContainText('Your agents don\'t see each other yet.');
+    await expect(offer, 'the empty section does not point to Settings').not.toContainText('Settings');
+    await expect(page.locator('.sidebar').getByRole('tab').last()).toHaveText(/^Add group/);
+    await expect(page.locator('.sidebar').getByRole('tab', { name: /^Add group/ })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('form', { name: 'New group' })).toBeVisible();
+    expect(existsSync(join(fleet, 'groups', 'everyone'))).toBe(false);
+    // The one click stays one click.
+    await offer.getByRole('button', { name: 'Everyone' }).click();
+    await expect(page.getByRole('region', { name: 'Group Everyone' })).toBeVisible();
+    expect(existsSync(join(fleet, 'groups', 'everyone', 'group.json'))).toBe(true);
 });
