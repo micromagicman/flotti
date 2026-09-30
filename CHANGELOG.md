@@ -2,6 +2,15 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **The specs live in OpenSpec.** `openspec/specs/` is the record of what is built (groups, direct
+  messages, the feed, the rail — the capabilities 0.7.0 touches), `openspec/changes/groups-only/` the
+  spec of 0.7.0 (#171–#175) with its open questions; the `openspec` job of `checks` validates them, and
+  the README says how to run it locally. `docs/groups.md` stays the record of 0.6.0 and its reasons (#177).
+
 ## [0.6.1] — 2026-09-30
 
 A patch of 0.6.0: the dashboard no longer dies when its page is served by a flotti of 0.5.x that was

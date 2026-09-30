@@ -2,6 +2,16 @@
 
 Spec of #144, the main feature of 0.6.0. Status: **built in 0.6.0** — the [sub-issues](#sub-issues)
 #149–#154 are the code, as reviewed here; the [open questions](#open-questions) keep the decisions taken.
+This document is the record of 0.6.0 as built and of the reasons — what was decided, what was rejected
+and why. **The requirements themselves live in OpenSpec** ([`openspec/specs/groups/spec.md`](../openspec/specs/groups/spec.md),
+with `direct-messages`, `fleet-feed` and `dashboard-rail` beside it): where this document and a spec
+disagree, the spec is right. **0.7.0 changes it** — agents talk only inside groups, one message is read
+in one place, mentions, a group managed from its tab: the spec of #171–#175 is the OpenSpec change
+[`openspec/changes/groups-only/`](../openspec/changes/groups-only/) (its
+[proposal](../openspec/changes/groups-only/proposal.md) with the open questions, its
+[design](../openspec/changes/groups-only/design.md) with what was rejected, its
+[tasks](../openspec/changes/groups-only/tasks.md) with the order of the sub-issues, and the spec deltas);
+a line under each section below that 0.7.0 touches says what changes and points there.
 
 Today every agent of the fleet sees every other one — `list_agents` for a local agent, the roster of
 [the fleet extension](a2a-fleet.md) for a remote one — and can write to any of them: `send_message`,
@@ -15,6 +25,8 @@ them. The person sees and reaches everyone, as before.
 - **The person is bound by nothing.** Every tab, the broadcast to all agents, the feed of every message
   (#114) and the conversations of pairs (#50) stay fleet-wide: groups are a rule for agents, not a
   filter on the dashboard.
+  *0.7.0:* the feed (#173) and the conversations (#171) go; the person reads a group in its tab and an
+  agent in its tab, and the broadcast stays — [0.7.0](../openspec/changes/groups-only/proposal.md).
 - **The rule lives in flotti, not in the agents.** Every message between agents already goes through
   the supervisor — a tool of the fleet, the inbox of a remote agent, a task — and that is where the
   check goes. An agent cannot get round it, and an agent that knows nothing of groups is not broken by
@@ -120,8 +132,10 @@ has no peers.
   is one row, not one per member: who wrote it → the name of the group, with the group as the tag where
   a forward or a task has theirs, and a click opens the tab of the group at that message. The filter by
   agent matches a group message an agent wrote or got.
+  *0.7.0:* removed (#173).
 - **The conversations** of pairs show direct messages only, as today. What was said in a group is in the
   group.
+  *0.7.0:* removed with the direct messages (#171).
 
 Rejected: *administrators see the whole fleet* — that would make them the one kind of agent groups do
 not apply to, and the id an administrator acts on is «as `list_agents` gives it», so the two would
@@ -148,8 +162,9 @@ busy holds nobody up — and is written to the history of the group with how eac
 - **From a remote agent through the inbox:** `group` beside `to` under the extension URI, one or the
   other, with `kind: message` only; `task` goes with `to` only. A message with both, or with a group the
   agent is not in, is a line in the tab of the sender saying why, as an undeliverable `to` is today.
-- **What a member gets:** the message in its tab from the sender, marked with the group. A local agent
-  over ACP, and a remote one without the inbox, get it in the text — `[from eva in group release] …` —
+- **What a member gets:** the message in its tab from the sender, marked with the group (*0.7.0:* kept
+  in its history, not shown in its tab — #172, and `mentions` beside it — #174). A local agent over ACP,
+  and a remote one without the inbox, get it in the text — `[from eva in group release] …` —
   and a remote one with the inbox gets `group` beside `from` in the metadata. The person's message to a
   group reaches a member as `[in group release] …`, and as `{"group": "release"}` without `from` over
   the inbox. The `message` event of the tab carries `group` next to `from`, so the tab shows the group
@@ -166,6 +181,9 @@ busy holds nobody up — and is written to the history of the group with how eac
   waits for a busy one, and a stopped agent takes nothing, today and after.
 
 ### A message to one agent inside a group
+
+*0.7.0:* gone — a message between agents goes through a group, addressed with `@<id>` when it is for
+one of them (#171, #174); what becomes of a task is [open question 1 of 0.7.0](../openspec/changes/groups-only/proposal.md#open-questions).
 
 Exactly what an agent-to-agent message is today — `send_message` with `to`, `to` of the inbox, a task —
 checked once at the door with `canReach`. It lands in the conversation of the pair, not in a group: a
@@ -192,8 +210,10 @@ writes it for the agents: what the group is for, and what its members are expect
 ## The dashboard
 
 The rail of #136 gets a fourth section — **Groups** — between Agents and Conversations: Fleet, Agents,
-Groups, Conversations. It lists the groups of the fleet with the marks of their members; a group with
-something new carries the dot a conversation carries, and a closed section its marker. Where exactly the
+Groups, Conversations. *0.7.0:* Conversations and the feed go (#171, #173); the shape of what is left is
+[open question 3 of 0.7.0](../openspec/changes/groups-only/proposal.md#open-questions). It lists the groups of the fleet with the marks of their
+members; a group with something new carries the dot a conversation carries, and a closed section its
+marker. Where exactly the
 tab sits and how a group is drawn on it are chosen through variants.
 
 **The tab of a group** (`_group:<id>`, the address the feed jumps to):
@@ -205,7 +225,8 @@ tab sits and how a group is drawn on it are chosen through variants.
   took it, folded, as the broadcast page shows deliveries;
 - a composer at the bottom, as in an agent's tab: Enter sends to the group, Reply quotes.
 
-**Creating and managing** is in **Settings → Groups**, the way agents are: the list, **Add group** with
+**Creating and managing** is in **Settings → Groups**, the way agents are (*0.7.0:* moved to the tab of
+the group and to the Groups section; Settings → Groups goes — #175): the list, **Add group** with
 the id (picked once, it names the directory), the name, the topic and the members as ticks; **Edit**;
 **Delete**, which moves the directory to `.trash/` like an agent's. A new or changed group is checked
 before it is written and refused with the sentence `flotti run` would print. An unknown member id typed
@@ -329,3 +350,17 @@ built. Every sub-issue updates the README and the CHANGELOG for what it brings, 
    it can and the person reads the conversation in the tab of the group; the README gets a «Groups»
    section and the fleet layout gets `groups/`; the CHANGELOG entry of 0.6.0 names the feature.
    *Acceptance:* the scenario passes on CI; every sentence of the README about who sees whom is true.
+
+## 0.7.0: groups only
+
+Asked by the owner on 30.09.2026, after a day with 0.6.0: five changes, one spec — #171 (agents talk
+only inside groups), #172 (isolation by chat), #173 (no feed of the fleet), #174 (mentions), #175 (a
+group is managed from its own tab). The spec is the OpenSpec change
+[`openspec/changes/groups-only/`](../openspec/changes/groups-only/): the
+[proposal](../openspec/changes/groups-only/proposal.md) (what changes per issue, the decisions the owner
+took in #174 and #175, the six open questions with a recommendation each), the
+[design](../openspec/changes/groups-only/design.md) (where each rule lands, what was rejected and why),
+the [tasks](../openspec/changes/groups-only/tasks.md) (the five issues as sub-issues, in order, with
+the dependencies) and the deltas to the specs of `groups`, `direct-messages`, `fleet-feed` and
+`dashboard-rail`. When the change ships it is archived into `openspec/specs/`, and this document stays
+the record of 0.6.0.
