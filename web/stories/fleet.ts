@@ -11,7 +11,7 @@ import type { AgentColors } from '../src/agent-colors.js';
 import type { AgentFeed, FeedItem, MessageItem, QueuedMessage } from '../src/feed.js';
 import type { GroupFeed } from '../src/groups.js';
 /** The ids of the tabs that are not an agent's, as App.tsx names them. */
-const TABS = { broadcastId: 'all', addAgentId: '_add-agent' } as const;
+const TABS = { broadcastId: 'all', addAgentId: '_add-agent', addGroupId: '_add-group' } as const;
 const SCOUT: AgentSummary = { id: 'scout', name: 'Scout', kind: 'local', harness: 'claude', status: 'idle', description: 'Reads the code and answers questions about it.', memory: { state: 'on', policy: 1, skill: 'builtin' } };
 const BUILDER: AgentSummary = { id: 'builder', name: 'Builder', kind: 'local', harness: 'codex', status: 'working', description: 'Writes the code, runs the tests.', admin: true };
 const REVIEWER: AgentSummary = { id: 'reviewer', name: 'Reviewer', kind: 'remote', status: 'waiting', description: 'Reviews pull requests on the build host.', health: healthOf('fine') };

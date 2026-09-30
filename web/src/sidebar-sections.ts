@@ -20,17 +20,20 @@ function isSection(value: unknown): value is Section {
     return SECTIONS.includes(value as Section);
 }
 /** The ids of the tabs that are not an agent's nor a group's. */
-type OtherTabs = { readonly broadcastId: string };
+type OtherTabs = { readonly broadcastId: string; readonly addGroupId: string };
 /**
  * The section a tab of the sidebar is in: an agent and the broadcast in
- * Agents, a group in Groups. None for a tab of every section, such as Add
- * agent or the settings.
+ * Agents, a group and Add group (#175) in Groups. None for a tab that opens
+ * the settings: Add agent or the gear.
  */
-function sectionOf(tab: string, agentIds: readonly string[], { broadcastId }: OtherTabs): Section | undefined {
-    if (agentIds.includes(tab) || tab === broadcastId) {
+function sectionOf(tab: string, agentIds: readonly string[], { broadcastId, addGroupId }: OtherTabs): Section | undefined {
+    if (agentIds.includes(tab)) {
         return 'agents';
     }
-    return groupOf(tab) === undefined ? undefined : 'groups';
+    if (groupOf(tab) !== undefined) {
+        return 'groups';
+    }
+    return new Map<string, Section>([[broadcastId, 'agents'], [addGroupId, 'groups']]).get(tab);
 }
 /** The live status of the agent: its feed knows it first. */
 function statusOf(agent: AgentSummary, feed: AgentFeed | undefined): AgentStatus {

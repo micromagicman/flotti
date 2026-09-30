@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { AgentSummary, Delivery, GroupMessage, ServerMessage } from '../src/dashboard-protocol.js';
 import { groupTabId } from '../src/dashboard-protocol.js';
 import { fleetReducer, initialState, seen } from '../web/src/fleet-state.js';
-import { EMPTY_GROUP_FEED, everyoneGroup, groupMessageKey, groupOf, laneItem, outcomeOf, quotedInLane, taskOf, tookNames, withGroupMessage } from '../web/src/groups.js';
+import { EMPTY_GROUP_FEED, everyoneGroup, groupAfter, groupMessageKey, groupOf, laneItem, outcomeOf, quotedInLane, taskOf, tookNames, withGroupMessage } from '../web/src/groups.js';
 const agent = (id: string): AgentSummary => ({ id, name: id.toUpperCase(), kind: 'local', status: 'idle' });
 function message(seq: number, text: string, extra: Partial<GroupMessage> = {}): GroupMessage {
     return { groupId: 'team', seq, messageId: `g${seq}`, time: `2026-01-01T00:00:0${seq}.000Z`, text, deliveries: [], ...extra };
@@ -89,4 +89,13 @@ test('a task given in the group is one card on its line, in the state of its las
     strictEqual(outcomeOf(outcome), 'completed');
     strictEqual(outcomeOf(given), undefined);
     strictEqual(outcomeOf(other), undefined);
+});
+test('a group deleted from its tab leads to the next group of the section, to the one before when it was the last, to none when it was the only one (#175)', () => {
+    const groups = [{ id: 'release' }, { id: 'docs' }, { id: 'watch' }];
+    strictEqual(groupAfter(groups, 'release'), 'docs');
+    strictEqual(groupAfter(groups, 'docs'), 'watch');
+    strictEqual(groupAfter(groups, 'watch'), 'docs');
+    strictEqual(groupAfter([{ id: 'release' }], 'release'), undefined);
+    strictEqual(groupAfter([], 'release'), undefined);
+    strictEqual(groupAfter(groups.slice(1), 'release'), 'docs', 'a group the fleet no longer lists: the first one left');
 });

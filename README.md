@@ -124,7 +124,8 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   hollow grey square, more than four «+N»), its name, how many members and messages, and a dot when
   something was said in it since you last looked; a closed section carries the dot on its icon. The tab
   of a group is the tab of an agent for a group: a header with the members by mark and name and
-  **Edit**, which opens the group in Settings → Groups, the topic under it; one lane of what was said in
+  **Edit**, which opens the group's form in place of the lane (see [Groups](#on-the-dashboard)), the
+  topic under it; one lane of what was said in
   it, in the order it was sent — your messages on the right, the agents' as envelopes on the left, an
   answer a member gave in the turn a message started marked «answer» and quoting the message it
   answers; under every message, folded, how each member took it («claude, codex got it · tester
@@ -132,8 +133,9 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   takes the message or fails it, and then the fold says so, as does the history a page opened later
   reads; a task given in the group as the card of the task, in the state it stands in, and its outcome
   from the doer marked «task completed» (or failed, canceled) and quoting it; and a field at the foot:
-  Enter sends to every member, **Reply** quotes. A group is read in its
-  tab and nowhere else: there is no feed of the whole fleet (#173). A fleet with agents but no group says in the section
+  Enter sends to every member, **Reply** quotes. A group is read in its tab and nowhere else: there is
+  no feed of the whole fleet (#173). **Add group**, the last tab of the section, opens the form for a
+  new group; a saved group opens its tab (#175). A fleet with agents but no group says in the section
   that the agents do not see each other yet, and one click **Everyone** puts every agent of the fleet
   in one group of that name. The details of an agent («i») list its groups.
 - **All agents**, the first tab of the Agents section, sends one message to every agent you leave ticked.
@@ -170,14 +172,8 @@ same files: the fleet stays directories a person can read and edit by hand.
 - **Delete** stops the agent and moves its directory — memory bank and skills with it — to `.trash/`
   in the fleet directory, as `<local|remote>-<id>-<time>`. The fleet does not read `.trash/`; to bring
   an agent back, move its directory back and run flotti again.
-- **Groups.** The groups of the fleet ([docs/groups.md](docs/groups.md)) — each with its id, name,
-  topic and members — with **Edit** and **Delete**, and **Add group**. The form is the agent form's:
-  the id names the directory `groups/<id>/` and is picked once; the name, the topic the agents get as
-  it is, and the members as ticks over the agents of the fleet, plus ids typed by hand for agents that
-  are not in it yet. A member the fleet does not have — deleted, or typed by hand — is kept and shown
-  as *not in the fleet*. The group is checked the way `flotti run` checks it before `group.json` is
-  written, and refused with the same sentence; the agents in it see each other on their next
-  `list_agents`. **Delete** moves the directory to `.trash/` as `group-<id>-<time>`.
+- **Groups are not here.** Since 0.7.0 a group is made with **Add group** in the Groups section and
+  changed or deleted from its own tab — see [Groups on the dashboard](#on-the-dashboard) (#175).
 - **Fleet directory.** Shows the directory the run works with and where it came from. **Switch** points
   the run at another one: the agents of the old fleet stop, those of the new one start, and
   `.flotti-run.json` moves along so `flotti stop` still finds the run. A directory that is not there
@@ -378,7 +374,8 @@ ids of the agents in it, which may be empty:
 - A member is named by id only. A member that is not in the fleet — deleted, or typed by hand — is
   kept in the file and shown as *not in the fleet*; it is not an error, and the fleet loads.
   Deleting an agent in the settings takes it out of every group.
-- Only a person changes membership: in [Settings → Groups](#settings) or by editing the file. No
+- Only a person changes membership: from the tab of the group ([On the dashboard](#on-the-dashboard))
+  or by editing the file. No
   tool lets an agent join, leave or invite; `list_groups` says so.
 - The messages of a group are its own, in `groups/<id>/.flotti-history.jsonl`, written by flotti and
   bounded like an agent's — see [The fleet](#the-fleet) for the layout.
@@ -461,11 +458,22 @@ history is written again with `taken` or `failed` and the reason, and goes out o
   `_group:<id>` — is where you read the conversation and write to every member; the details of an
   agent list its groups. How each
   looks is in [The dashboard](#the-dashboard).
-- **Settings → Groups** is where groups are made, changed and deleted: the list, **Add group**,
-  **Edit**, **Delete**; see [Settings](#settings).
+- **A group is managed where it is read** (#175). **Edit** in the header of its tab opens the form in
+  place of the lane: the id names the directory `groups/<id>/` and stays, read-only; the name, the
+  topic the agents get as it is, and the members as ticks over the agents of the fleet, plus ids typed
+  by hand for agents that are not in it yet. A member the fleet does not have — deleted, or typed by
+  hand — is kept and shown as *not in the fleet*. **Save** checks the group the way `flotti run` does
+  before `group.json` is written, refuses it with the same sentence, and brings the lane back with the
+  header changed; **Cancel** drops what was typed. The agents in the group see the change on their
+  next `list_agents`, and a remote one gets the roster again. **Delete**, in the same form, asks first
+  and names the group, then moves the directory to `.trash/` as `group-<id>-<time>`; the page goes to
+  the next group of the section, or to Add group when it was the last.
+- **Add group** is the last tab of the Groups section, as Add agent is the last of Agents: the same
+  form for a new group, whose id is picked once; a saved group opens its tab. Settings has no Groups
+  list since 0.7.0.
 - **Everyone.** A fleet with agents but no group says in the Groups section that the agents do not see
   each other yet, and one click puts every agent of the fleet in one group named «Everyone» — a group
-  like any other, to edit or delete in the settings.
+  like any other, to edit or delete from its tab.
 
 ### An existing fleet
 

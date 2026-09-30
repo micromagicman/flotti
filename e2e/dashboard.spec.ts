@@ -174,7 +174,7 @@ test.afterAll(async () => {
 const tab = (page: Page, name: string) => page.locator('.sidebar').getByRole('tab', { name: new RegExp(`^${name}`) });
 /** A tab of the switch of the sections of the sidebar (#136): Agents and Groups. */
 const section = (page: Page, name: string) => page.getByRole('tablist', { name: 'Sections of the sidebar' }).getByRole('tab', { name: new RegExp(`^${name}`) });
-/** The section a tab of the sidebar is in: the broadcast and the agents in Agents (#173); none for Add agent, which is under every one. */
+/** The section a tab of the sidebar is in: the broadcast and the agents in Agents (#173); none for Add agent, which opens the settings. */
 function sectionOfTab(name: string): string | undefined {
     return name.startsWith('Add agent') ? undefined : 'Agents';
 }
@@ -375,7 +375,8 @@ test('the sidebar is two tabs, with no Fleet, no All messages and no Conversatio
     await expect(tab(page, 'claude')).toHaveCount(0);
     await expect(page.getByRole('tab', { name: /^Conversation of/ })).toHaveCount(0);
     await expect(page.getByRole('textbox', { name: 'Message to claude' }), 'the chat open stays open').toBeVisible();
-    await expect(tab(page, 'Add agent'), 'Add agent is under every section').toBeVisible();
+    await expect(tab(page, 'Add group'), 'Add group ends Groups (#175)').toBeVisible();
+    await expect(tab(page, 'Add agent'), 'Add agent ends Agents, not Groups').toHaveCount(0);
     await page.reload();
     await expect(section(page, 'Groups')).toHaveAttribute('aria-selected', 'true');
     await expect(tab(page, 'Group team')).toBeVisible();
@@ -1147,7 +1148,6 @@ test('deletes an agent: it stops, and its directory goes to .trash', async ({ pa
     expect(existsSync(join(workspace, 'fleet', 'local', 'helper'))).toBe(false);
     expect(readdirSync(join(workspace, 'fleet', '.trash')).some((name) => name.startsWith('local-helper-'))).toBe(true);
 });
-const groupRow = (page: Page, id: string) => page.getByRole('list', { name: 'Groups' }).locator(`[data-group="${id}"]`);
 const groupFile = (id: string) => JSON.parse(readFileSync(join(workspace, 'fleet', 'groups', id, 'group.json'), 'utf8')) as Record<string, unknown>;
 /** Has a local agent call `list_agents`, and gives what the tool said — the answer of the fleet, as the pretend adapter reports it. */
 async function listAgents(page: Page, name: string): Promise<Locator> {
@@ -1156,50 +1156,82 @@ async function listAgents(page: Page, name: string): Promise<Locator> {
     await expect(answer).toContainText('mcp: [');
     return answer;
 }
-test('makes a group in the settings: it is on disk as group.json, and the agents in it see each other on their next list_agents', async ({ page }) => {
-    await page.goto(`${url}#/_settings`);
-    await expect(groupRow(page, 'team')).toContainText('team · 3 members');
-    await expect(groupRow(page, 'team')).toContainText('claude, codex, relay');
-    await page.getByRole('button', { name: 'Add group' }).click();
+/** The tab of a group by its name: the region of the page, and its tab in the Groups section. */
+const groupRegion = (page: Page, name: string) => page.getByRole('region', { name: `Group ${name}`, exact: true });
+const groupHeader = (page: Page, name: string) => groupRegion(page, name).locator('.group-header');
+/** Opens the tab of a group by its id, as a link to it does, with the Groups section in sight. */
+async function openGroup(page: Page, id: string): Promise<void> {
+    await page.goto(`${url}#/${encodeURIComponent(`_group:${id}`)}`);
+    await section(page, 'Groups').click();
+}
+test('Add group, the last tab of the Groups section, makes a group: it is on disk as group.json, its tab opens, and the agents in it see each other on their next list_agents (#175)', async ({ page }) => {
+    await page.goto(url);
+    await section(page, 'Groups').click();
+    await expect(page.locator('.sidebar').getByRole('tab').last()).toHaveText(/^Add group/);
+    await expect(tab(page, 'Add agent'), 'Add agent ends Agents, not Groups').toHaveCount(0);
+    await tab(page, 'Add group').click();
     const form = page.getByRole('form', { name: 'New group' });
+    await expect(field(page, 'Id')).not.toHaveAttribute('readonly', '');
     await field(page, 'Id').fill('docs');
     await field(page, 'Name').fill('Docs');
     await field(page, 'Topic').fill('Write the docs.');
     await form.getByRole('checkbox', { name: 'claude' }).check();
     await form.getByRole('checkbox', { name: 'codex' }).check();
     await form.getByRole('button', { name: 'Add group' }).click();
-    // The list follows the fleet message of the socket: no reload.
-    await expect(groupRow(page, 'docs')).toContainText('Docs');
-    await expect(groupRow(page, 'docs')).toContainText('docs · 2 members');
-    await expect(groupRow(page, 'docs')).toContainText('claude, codex');
-    await expect(groupRow(page, 'docs')).toContainText('Write the docs.');
+    // The tab of the new group opens, and the section lists it: the fleet message of the socket, no reload.
+    await expect(groupRegion(page, 'Docs')).toBeVisible();
+    await expect(tab(page, 'Group Docs')).toHaveAttribute('aria-selected', 'true');
+    await expect(section(page, 'Groups')).toHaveAttribute('aria-selected', 'true');
+    await expect(groupHeader(page, 'Docs').locator('.member')).toHaveText(['claude', 'codex']);
+    await expect(groupHeader(page, 'Docs')).toContainText('Write the docs.');
     expect(groupFile('docs')).toEqual({ name: 'Docs', topic: 'Write the docs.', members: ['claude', 'codex'] });
     await expect(await listAgents(page, 'claude')).toContainText(/"id": "codex"[\s\S]*?"groups": \[\s*"docs",\s*"team"\s*\]/);
 });
-test('changes the members of a group in the settings: a member typed by hand that is not in the fleet is kept and marked, and the agents see the change', async ({ page }) => {
+test('Settings has no Groups: groups are made in the Groups section and changed in their tab (#175)', async ({ page }) => {
     await page.goto(`${url}#/_settings`);
-    await groupRow(page, 'docs').getByRole('button', { name: 'Edit' }).click();
+    const settings = page.getByRole('region', { name: 'Fleet settings' });
+    await expect(settings.getByRole('heading', { name: 'Agents' })).toBeVisible();
+    await expect(settings.getByRole('heading', { name: 'Groups' })).toHaveCount(0);
+    await expect(settings.getByRole('button', { name: 'Add group' })).toHaveCount(0);
+});
+test('from the tab of a group: Edit opens the form over the lane, and a rename and a change of the members follow to group.json, the header and the agents (#175)', async ({ page }) => {
+    await openGroup(page, 'docs');
+    await groupHeader(page, 'Docs').getByRole('button', { name: 'Edit' }).click();
     const form = page.getByRole('form', { name: 'Group docs' });
+    await expect(page.getByRole('log', { name: 'Group Docs' }), 'the form stands over the lane').toHaveCount(0);
     await expect(field(page, 'Id')).toHaveValue('docs');
     await expect(field(page, 'Id')).toHaveAttribute('readonly', '');
     await expect(field(page, 'Topic')).toHaveValue('Write the docs.');
     await expect(form.getByRole('checkbox', { name: 'codex' })).toBeChecked();
+    // Cancel drops the draft: the lane comes back, and nothing is written.
+    await field(page, 'Name').fill('Scrap');
+    await form.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByRole('log', { name: 'Group Docs' })).toBeVisible();
+    expect(groupFile('docs')['name']).toBe('Docs');
+    await groupHeader(page, 'Docs').getByRole('button', { name: 'Edit' }).click();
+    await expect(field(page, 'Name')).toHaveValue('Docs');
+    await field(page, 'Name').fill('Documentation');
     await form.getByRole('checkbox', { name: 'codex' }).uncheck();
     await field(page, 'Other members').fill('ghost');
     await form.getByRole('button', { name: 'Save' }).click();
-    await expect(groupRow(page, 'docs')).toContainText('claude, ghost · not in the fleet');
-    expect(groupFile('docs')).toEqual({ name: 'Docs', topic: 'Write the docs.', members: ['claude', 'ghost'] });
+    await expect(page.getByRole('log', { name: 'Group Documentation' })).toBeVisible();
+    await expect(groupHeader(page, 'Documentation').getByRole('heading')).toHaveText('Documentation');
+    await expect(groupHeader(page, 'Documentation').locator('.member')).toHaveText(['claude', 'ghost']);
+    await expect(groupHeader(page, 'Documentation').locator('.name-gone')).toHaveText('ghost');
+    await expect(tab(page, 'Group Documentation')).toBeVisible();
+    expect(groupFile('docs')).toEqual({ name: 'Documentation', topic: 'Write the docs.', members: ['claude', 'ghost'] });
     const answer = await listAgents(page, 'claude');
     await expect(answer).toContainText(/"id": "codex"[\s\S]*?"groups": \[\s*"team"\s*\]/);
     await expect(answer).not.toContainText('ghost');
-    await page.goto(`${url}#/_settings`);
-    await groupRow(page, 'docs').getByRole('button', { name: 'Edit' }).click();
+    await openGroup(page, 'docs');
+    await groupHeader(page, 'Documentation').getByRole('button', { name: 'Edit' }).click();
     await expect(form.getByRole('checkbox', { name: 'ghost · not in the fleet' })).toBeChecked();
     await form.getByRole('button', { name: 'Cancel' }).click();
 });
-test('refuses a group flotti run would refuse, and says why', async ({ page }) => {
-    await page.goto(`${url}#/_settings`);
-    await page.getByRole('button', { name: 'Add group' }).click();
+test('refuses a group flotti run would refuse, in Add group and in the tab of a group, and says why: nothing is written (#175)', async ({ page }) => {
+    await page.goto(url);
+    await section(page, 'Groups').click();
+    await tab(page, 'Add group').click();
     const form = page.getByRole('form', { name: 'New group' });
     await field(page, 'Id').fill('-bad');
     await form.getByRole('button', { name: 'Add group' }).click();
@@ -1213,19 +1245,31 @@ test('refuses a group flotti run would refuse, and says why', async ({ page }) =
     await form.getByRole('button', { name: 'Add group' }).click();
     await expect(page.getByRole('alert')).toContainText('The id "team" is already taken by a group of this fleet');
     await form.getByRole('button', { name: 'Cancel' }).click();
-    await expect(groupRow(page, 'bad')).toHaveCount(0);
+    await expect(page.getByRole('form', { name: 'New group' })).toHaveCount(0);
     expect(existsSync(join(workspace, 'fleet', 'groups', 'bad'))).toBe(false);
+    await openGroup(page, 'docs');
+    await groupHeader(page, 'Documentation').getByRole('button', { name: 'Edit' }).click();
+    const edit = page.getByRole('form', { name: 'Group docs' });
+    await field(page, 'Other members').fill('two words');
+    await edit.getByRole('button', { name: 'Save' }).click();
+    await expect(edit.getByRole('alert')).toContainText('must be an agent id');
+    expect(groupFile('docs')).toEqual({ name: 'Documentation', topic: 'Write the docs.', members: ['claude', 'ghost'] });
+    await edit.getByRole('button', { name: 'Cancel' }).click();
 });
-test('deletes a group: its directory goes to .trash, and the agents in it stop seeing each other through it', async ({ page }) => {
-    await page.goto(`${url}#/_settings`);
-    const row = groupRow(page, 'docs');
-    await row.getByRole('button', { name: 'Delete' }).click();
-    await expect(row).toContainText('Move the group Docs and its history to .trash in the fleet directory?');
-    await row.getByRole('button', { name: 'Keep' }).click();
-    await expect(row.getByRole('button', { name: 'Edit' })).toBeVisible();
-    await row.getByRole('button', { name: 'Delete' }).click();
-    await row.getByRole('button', { name: 'Delete' }).click();
-    await expect(row).toHaveCount(0);
+test('deletes a group from its tab: the confirmation names it, the directory goes to .trash, the page goes to the next group, and the agents stop seeing each other through it (#175)', async ({ page }) => {
+    await openGroup(page, 'docs');
+    await groupHeader(page, 'Documentation').getByRole('button', { name: 'Edit' }).click();
+    const form = page.getByRole('form', { name: 'Group docs' });
+    await form.getByRole('button', { name: 'Delete' }).click();
+    await expect(form).toContainText('Move the group Documentation and its history to .trash in the fleet directory?');
+    await form.getByRole('button', { name: 'Keep' }).click();
+    await expect(form.getByRole('button', { name: 'Keep' })).toHaveCount(0);
+    expect(existsSync(join(workspace, 'fleet', 'groups', 'docs'))).toBe(true);
+    await form.getByRole('button', { name: 'Delete' }).click();
+    await form.getByRole('button', { name: 'Delete' }).click();
+    await expect(groupRegion(page, 'team')).toBeVisible();
+    await expect(tab(page, 'Group team')).toHaveAttribute('aria-selected', 'true');
+    await expect(tab(page, 'Group Documentation')).toHaveCount(0);
     expect(existsSync(join(workspace, 'fleet', 'groups', 'docs'))).toBe(false);
     expect(readdirSync(join(workspace, 'fleet', '.trash')).some((name) => name.startsWith('group-docs-'))).toBe(true);
     await expect(await listAgents(page, 'claude')).not.toContainText('"docs"');

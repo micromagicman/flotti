@@ -10,6 +10,7 @@ import type { GroupFeed, Took } from '../groups.js';
 import { GroupMarks, Member, nameOf } from './AgentMark.js';
 import { Composer } from './Composer.js';
 import { DelegationCard } from './DelegationCard.js';
+import { GroupEdit } from './GroupEdit.js';
 import { usePinnedScroll } from './Feed.js';
 import { MessageBody, MessageToolbar, ReplyPreview } from './Message.js';
 import type { MessageActions, QuoteActions } from './Message.js';
@@ -25,8 +26,8 @@ type GroupPanelProps = Fleet & {
     readonly feed: GroupFeed | undefined;
     /** Where a quote leads when the quoted message is not in the lane: the tab of an agent. */
     readonly quotes: QuoteActions;
-    /** Opens the group in Settings → Groups. */
-    readonly onEdit: () => void;
+    /** The group was deleted from its editor (#175): the page leaves the tab. */
+    readonly onDeleted: () => void;
 };
 /** A message to bring into view in the lane; `n` tells one ask from the next. */
 type Found = { readonly key: string; readonly n: number };
@@ -170,7 +171,8 @@ function Lane({ group, messages, actions, found, ...fleet }: LaneProps) {
  * the name, the members by mark and name — one not in the fleet in grey —
  * and Edit; the topic on a second line. No stripe: a group has no one colour.
  */
-function GroupHeader({ group, agents, colors, onEdit }: Fleet & Pick<GroupPanelProps, 'group' | 'onEdit'>) {
+type HeaderProps = Fleet & Pick<GroupPanelProps, 'group'> & { readonly editing: boolean; readonly onEdit: () => void };
+function GroupHeader({ group, agents, colors, editing, onEdit }: HeaderProps) {
     const t = useT();
     return (
         <header className="agent-header group-header">
@@ -179,7 +181,7 @@ function GroupHeader({ group, agents, colors, onEdit }: Fleet & Pick<GroupPanelP
             </div>
             <div className="group-members">{group.members.map((id) => <Member key={id} id={id} agents={agents} colors={colors} />)}</div>
             <div className="header-actions">
-                <button type="button" className="btn btn-sm" title={t.group.editHint} onClick={onEdit}>{t.common.edit}</button>
+                <button type="button" className="btn btn-sm" title={t.group.editHint} aria-pressed={editing} disabled={editing} onClick={onEdit}>{t.common.edit}</button>
             </div>
             {group.topic === undefined ? null : <p className="group-topic" title={group.topic}>{group.topic}</p>}
         </header>
@@ -239,18 +241,24 @@ function GroupComposer({ group, agents, colors, messaging }: ComposerProps) {
  * The tab of a group (docs/groups.md, #152): the header, one lane of what was
  * said in it — the person's messages, the agents' messages, the answers marked
  * as answers, how the members took each one — and a composer at the foot.
+ * Edit in the header puts the editor of the group over the lane (#175).
  */
-function GroupPanel({ group, feed, quotes, onEdit, agents, colors }: GroupPanelProps) {
+function GroupPanel({ group, feed, quotes, onDeleted, agents, colors }: GroupPanelProps) {
     const t = useT();
+    const [editing, setEditing] = useState(false);
     const messages = feed?.messages ?? NO_MESSAGES;
     const messaging = useMessaging(quotes, t);
     const { actions, found } = useLaneQuotes(messages, group.id, messaging.actions);
     const fleet = { agents, colors };
     return (
         <section className="agent-panel group-panel" aria-label={t.group.of(group.name)}>
-            <GroupHeader group={group} onEdit={onEdit} {...fleet} />
-            <Lane group={group} messages={messages} actions={{ ...messaging.actions, ...actions }} found={found} {...fleet} />
-            <GroupComposer group={group} messaging={messaging} {...fleet} />
+            <GroupHeader group={group} editing={editing} onEdit={() => setEditing(true)} {...fleet} />
+            {editing
+                ? <GroupEdit group={group} agents={agents} onDone={() => setEditing(false)} onDeleted={onDeleted} />
+                : <>
+                    <Lane group={group} messages={messages} actions={{ ...messaging.actions, ...actions }} found={found} {...fleet} />
+                    <GroupComposer group={group} messaging={messaging} {...fleet} />
+                </>}
         </section>
     );
 }

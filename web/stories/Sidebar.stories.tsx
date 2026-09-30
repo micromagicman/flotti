@@ -39,11 +39,11 @@ export const Agents: Story = {};
 export const Broadcast: Story = {
     args: { selected: 'all' }
 };
-/** The groups of the fleet (#152): the marks of the members in a row — Tester, not in the fleet, hollow — the name, the counts; the release group has something new. */
+/** The groups of the fleet (#152), Add group last (#175): the marks of the members in a row — Tester, not in the fleet, hollow — the name, the counts; the release group has something new. */
 export const Groups: Story = {
     args: { selected: '_group:docs', section: 'groups', seenSeq: { ...SEEN_SEQ, '_group:release': 3, '_group:docs': 1 } }
 };
-/** A fleet with agents but no group: the section says the agents do not see each other, and one click puts them all in one. */
+/** A fleet with agents but no group: the section says the agents do not see each other, one click puts them all in one, and Add group is under it. */
 export const NoGroups: Story = {
     args: { groups: [], groupFeeds: {}, selected: 'all', section: 'groups' }
 };

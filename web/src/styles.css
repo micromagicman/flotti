@@ -753,7 +753,7 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
     .tab-broadcast { margin-bottom: 0; }
     .tab-label { max-width: 40vw; }
 }
-.tab-add-agent { margin-top: auto; }
+.tab-add-agent, .tab-add-group { margin-top: auto; }
 .settings { flex: 1; padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
 .settings h1 { font-size: 18px; margin: 0; }
 .settings h2 { font-size: 15px; margin: 0; display: flex; align-items: baseline; gap: 10px; }
