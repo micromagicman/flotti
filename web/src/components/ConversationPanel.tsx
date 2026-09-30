@@ -25,8 +25,6 @@ type ConversationPanelProps = Fleet & {
     readonly quotes: QuoteActions;
     readonly onOpen: (tab: string) => void;
     readonly conversationsId: string;
-    /** A message to bring into view as the lane opens: one picked in the feed of the fleet (#114). */
-    readonly opened?: Found | undefined;
 };
 /** A message to bring into view in the lane; `n` tells one ask from the next. */
 type Found = { readonly key: string; readonly n: number };
@@ -92,12 +90,11 @@ function LaneRow({ message, side, actions, agents, colors }: LaneRowProps) {
         </div>
     );
 }
-type LaneProps = Fleet & Pick<ConversationPanelProps, 'pair' | 'conversation' | 'opened'> & { readonly actions: QuoteActions; readonly found: Found | undefined };
-function Lane({ pair, conversation, actions, found, opened, ...fleet }: LaneProps) {
+type LaneProps = Fleet & Pick<ConversationPanelProps, 'pair' | 'conversation'> & { readonly actions: QuoteActions; readonly found: Found | undefined };
+function Lane({ pair, conversation, actions, found, ...fleet }: LaneProps) {
     const messages = conversation?.messages ?? [];
     const { list, onScroll } = usePinnedScroll(messages);
     useFound(list, found);
-    useFound(list, opened);
     const [first, second] = pair;
     const t = useT();
     const names = t.common.and(nameOf(fleet.agents, first), nameOf(fleet.agents, second));
@@ -140,14 +137,14 @@ function LaneFoot({ pair, agents, colors, onOpen }: Fleet & Pick<ConversationPan
 }
 /** The conversation of two agents in one lane, read-only: every message either sent the other, oldest first (#50). */
 function ConversationPanel(props: ConversationPanelProps) {
-    const { pair, conversation, feeds, quotes, agents, colors, onOpen, opened } = props;
+    const { pair, conversation, feeds, quotes, agents, colors, onOpen } = props;
     const { actions, found } = useLaneQuotes(conversation, feeds, quotes);
     const t = useT();
     const names = t.common.and(nameOf(agents, pair[0]), nameOf(agents, pair[1]));
     return (
         <section className="agent-panel conversation-panel" aria-label={t.conversation.of(names)}>
             <LaneHeader {...props} />
-            <Lane pair={pair} conversation={conversation} actions={actions} found={found} opened={opened} agents={agents} colors={colors} />
+            <Lane pair={pair} conversation={conversation} actions={actions} found={found} agents={agents} colors={colors} />
             <LaneFoot pair={pair} agents={agents} colors={colors} onOpen={onOpen} />
         </section>
     );

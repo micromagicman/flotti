@@ -17,8 +17,6 @@ type Format = {
     readonly dateTime: (time: number | Date) => string;
     /** A time of day, hours and minutes. */
     readonly time: (time: number | Date) => string;
-    /** A time of day with the day of the week before it. */
-    readonly weekdayTime: (time: number | Date) => string;
     /** A duration the way a person reads it, in whole units, the two largest. */
     readonly duration: (ms: number, units: DurationUnits) => string;
 };
@@ -43,7 +41,6 @@ function formatFor(locale: string): Format {
     const dates = new Intl.DateTimeFormat(locale, { dateStyle: 'medium' });
     const times = new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' });
     const clock = new Intl.DateTimeFormat(locale, { timeStyle: 'short' });
-    const weekdayClock = new Intl.DateTimeFormat(locale, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
     const number = (n: number): string => numbers.format(n);
     return {
         locale,
@@ -52,7 +49,6 @@ function formatFor(locale: string): Format {
         date: (time) => dates.format(time),
         dateTime: (time) => times.format(time),
         time: (time) => clock.format(time),
-        weekdayTime: (time) => weekdayClock.format(time),
         duration: (ms, units) => duration(number, ms, units)
     };
 }

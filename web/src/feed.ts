@@ -32,7 +32,7 @@ type FeedItem =
         readonly from?: string;
         /** Id of the agent this message of the agent went to, when it went to another agent and not to a person. */
         readonly to?: string;
-        /** Id of the group of the fleet the message went through (docs/groups.md): the feed of the fleet takes it from the group, not from here. */
+        /** Id of the group of the fleet the message went through (docs/groups.md). */
         readonly group?: string;
         /** The message this one answers. */
         readonly replyTo?: Quote;

@@ -1,6 +1,6 @@
 import type { AgentEvent } from './agent-events.js';
 /**
- * How the answer of an agent reaches its tab and the feed of the fleet (#157):
+ * How the answer of an agent reaches its tab (#157):
  * - `streamed` — piece by piece, as the agent writes it: the message grows in place;
  * - `whole`    — once, when the message is complete: nothing partial is shown.
  *

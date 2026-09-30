@@ -1,9 +1,8 @@
 /**
  * The groups of the fleet on the dashboard (docs/groups.md, #152): a fleet
  * with agents but no group offers one click «Everyone»; the tab of a group
- * shows what was said in it and how each member took it; a group message of
- * the feed of the fleet opens the tab of the group at that message. A fleet
- * of its own, since dashboard.spec.ts starts with a group.
+ * shows what was said in it and how each member took it. A fleet of its own,
+ * since dashboard.spec.ts starts with a group.
  */
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
@@ -62,7 +61,6 @@ const section = (page: Page, name: string) => page.getByRole('tablist', { name: 
 const agentTab = (page: Page, name: string) => page.locator('.sidebar').getByRole('tab', { name: new RegExp(`^${name}`) });
 const groupTab = (page: Page) => page.locator('.sidebar').getByRole('tab', { name: /^Group Everyone/ });
 const lane = (page: Page) => page.getByRole('log', { name: 'Group Everyone' });
-const fleetFeed = (page: Page) => page.getByRole('log', { name: 'Messages' });
 async function openGroups(page: Page): Promise<void> {
     await page.goto(url);
     await section(page, 'Groups').click();
@@ -103,20 +101,6 @@ test('the tab of a group shows what was said in it — the person\'s message, th
     await expect(answer.locator('.envelope-bar').first()).toContainText('→ Everyone · answer');
     await expect(answer.locator('.quote').first()).toContainText('hello team');
     await expect(groupTab(page)).toContainText('3 messages');
-});
-test('a group message of the feed of the fleet is one row with the tag «group», and opens the tab of the group at the message (#152)', async ({ page }) => {
-    await page.goto(`${url}#/_feed`);
-    const row = fleetFeed(page).getByRole('button', { name: /^You to Everyone, / }).filter({ hasText: 'hello team' });
-    await expect(row).toHaveCount(1);
-    await expect(row.locator('.fleet-kind')).toHaveText(['group']);
-    const answers = fleetFeed(page).getByRole('button', { name: /^(claude|codex) to Everyone, / });
-    await expect(answers).toHaveCount(2);
-    await expect(answers.first().locator('.fleet-kind')).toHaveText(['group', 'answer']);
-    await page.getByRole('group', { name: 'Show messages of' }).getByRole('button', { name: 'codex' }).click();
-    await expect(row).toHaveCount(1, { timeout: 5_000 });
-    await row.click();
-    await expect(lane(page).locator('.message-row.message-found')).toContainText('hello team');
-    await expect(section(page, 'Groups')).toHaveAttribute('aria-selected', 'true');
 });
 test('a member busy when the message is posted is «in line» under it, and the fold, the history and a reloaded page say how it ended once it does (#162)', async ({ page }) => {
     const gate = join(fleet, 'local', 'claude', 'gate');

@@ -123,7 +123,7 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   lane is read-only: **Write to …** opens the tab of either agent. Every agent keeps one mark
   everywhere — a shape in a muted hue by its name in the sidebar, in the header of its tab and in a
   conversation — and a faint tone of that hue on the bar of its envelopes.
-- **Groups**, the third section of the sidebar, lists every group of the fleet
+- **Groups**, the second section of the sidebar, lists every group of the fleet
   ([docs/groups.md](docs/groups.md)): the marks of its members in a row (a member not in the fleet a
   hollow grey square, more than four «+N»), its name, how many members and messages, and a dot when
   something was said in it since you last looked; a closed section carries the dot on its icon. The tab
@@ -134,13 +134,13 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   answers; under every message, folded, how each member took it («claude, codex got it · tester
   failed»), and open, the list of the broadcast page — a member that was busy is «in line» until it
   takes the message or fails it, and then the fold says so, as does the history a page opened later
-  reads; and a field at the foot: Enter sends to every member, **Reply** quotes. In the feed of the fleet a message to a group is one row, not one per
-  member — who wrote it → the marks and the name of the group, tagged `group`, and `answer` on what a
-  member answered — and a click opens the tab of the group at that message; the filter by an agent
-  matches a group message the agent wrote or got. A fleet with agents but no group says in the section
+  reads; and a field at the foot: Enter sends to every member, **Reply** quotes. A group is read in its
+  tab and nowhere else: there is no feed of the whole fleet (#173). A fleet with agents but no group says in the section
   that the agents do not see each other yet, and one click **Everyone** puts every agent of the fleet
   in one group of that name. The details of an agent («i») list its groups.
-- **All agents** sends one message to every agent you leave ticked. Each gets it on its own, so an
+- **All agents**, the first tab of the Agents section, sends one message to every agent you leave ticked.
+  The sidebar has a rail of sections — **Agents**, **Groups**, **Conversations** — and remembers the one
+  you picked across reloads. Each gets it on its own, so an
   agent that is down or busy holds nobody up; the page shows, agent by agent, whether the message was
   delivered, waits in line or failed, and the answers come in each agent's tab.
 - **Administrators** of the fleet are marked `admin` in the header of their tab. What one does to an
@@ -192,7 +192,7 @@ same files: the fleet stays directories a person can read and edit by hand.
   clears its context** makes every such action wait for **Allow** in the tab of the administrator —
   **Refuse** reaches the administrator as a refusal; off, the action is done at once. It is off by
   default, saved in `~/.flotti/settings.json` and read at every action.
-- **Answers.** How an answer of an agent reaches its tab and the feed of the fleet — one rule for every
+- **Answers.** How an answer of an agent reaches its tab — one rule for every
   agent, local over ACP or remote over A2A, whatever way the agent sends its answer. **As it is
   written, piece by piece** shows the message growing as the pieces come; **Whole, once the agent has
   finished it** shows the message once, when it is complete — at the end of the message, or at the end
@@ -409,8 +409,8 @@ group with anyone has no peers.
   sends back at the end of a turn, the outcome of a task — reaches the agent that started it even when
   the two no longer share a group by then. A message sent on purpose is a new exchange and is checked
   anew.
-- **You are bound by nothing.** The message of a tab, the broadcast to all agents, the feed of every
-  message and the conversations of pairs stay fleet-wide: groups are a rule for agents, not a filter on
+- **You are bound by nothing.** The message of a tab, the broadcast to all agents and the
+  conversations of pairs stay fleet-wide: groups are a rule for agents, not a filter on
   the dashboard.
 
 ### A message to a group
@@ -450,8 +450,8 @@ history is written again with `taken` or `failed` and the reason, and goes out o
 ### On the dashboard
 
 - **The Groups section** of the sidebar lists the groups of the fleet, and **the tab of a group** —
-  `_group:<id>` — is where you read the conversation and write to every member; a group message is
-  one row of the feed of the fleet, tagged `group`; the details of an agent list its groups. How each
+  `_group:<id>` — is where you read the conversation and write to every member; the details of an
+  agent list its groups. How each
   looks is in [The dashboard](#the-dashboard).
 - **Settings → Groups** is where groups are made, changed and deleted: the list, **Add group**,
   **Edit**, **Delete**; see [Settings](#settings).

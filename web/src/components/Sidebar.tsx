@@ -7,7 +7,6 @@ import type { AgentColors } from '../agent-colors.js';
 import { shownInSidebar } from '../conversations.js';
 import type { Conversation } from '../conversations.js';
 import type { AgentFeed } from '../feed.js';
-import { FLEET_FEED_SIZE } from '../fleet-feed.js';
 import type { GroupFeed } from '../groups.js';
 import { AgentMark, GroupMarks, PairMarks, nameOf } from './AgentMark.js';
 import { PoorConnectionMark } from './ConnectionHealth.js';
@@ -32,8 +31,6 @@ type SidebarProps = {
     readonly seenSeq: Readonly<Record<string, number>>;
     readonly selected: string;
     readonly broadcastId: string;
-    /** The feed of every message of the fleet (#114). */
-    readonly feedId: string;
     /** Where the settings stood: the settings opened at the agents, to add one (#116). */
     readonly addAgentId: string;
     readonly conversationsId: string;
@@ -217,20 +214,13 @@ function ConversationTabs({ agents, colors, conversations, seenSeq, selected, co
         </>
     );
 }
-type FleetTabsProps = Pick<SidebarProps, 'selected' | 'broadcastId' | 'feedId' | 'onSelect'>;
-/** The two tabs of the whole fleet (#114): the broadcast and the feed of every message. */
-function FleetTabs({ selected, broadcastId, feedId, onSelect }: FleetTabsProps) {
+type AgentTabsProps = Pick<SidebarProps, 'agents' | 'feeds' | 'colors' | 'seenSeq' | 'selected' | 'broadcastId' | 'onSelect'>;
+/** The broadcast to every agent first (#173), then a tab per agent. */
+function AgentTabs({ agents, feeds, colors, seenSeq, selected, broadcastId, onSelect }: AgentTabsProps) {
     const t = useT();
     return (
         <>
-            <SideTab className="tab tab-broadcast tab-fleet" selected={selected === broadcastId} onClick={() => onSelect(broadcastId)} name={t.sidebar.allAgents} hint={t.sidebar.broadcast} />
-            <SideTab className="tab tab-feed tab-fleet" selected={selected === feedId} onClick={() => onSelect(feedId)} name={t.sidebar.allMessages} hint={t.sidebar.allMessagesHint(FLEET_FEED_SIZE)} />
-        </>
-    );
-}
-function AgentTabs({ agents, feeds, colors, seenSeq, selected, onSelect }: Pick<SidebarProps, 'agents' | 'feeds' | 'colors' | 'seenSeq' | 'selected' | 'onSelect'>) {
-    return (
-        <>
+            <SideTab className="tab tab-broadcast" selected={selected === broadcastId} onClick={() => onSelect(broadcastId)} name={t.sidebar.allAgents} hint={t.sidebar.broadcast} />
             {agents.map((agent) => (
                 <AgentTab key={agent.id} agent={agent} feed={feeds[agent.id]} color={colors[agent.id]} selected={agent.id === selected} onSelect={onSelect}
                     unread={hasUnread(agent.id, selected, lastSeqOf(feeds[agent.id]), seenSeq)} />
@@ -240,14 +230,13 @@ function AgentTabs({ agents, feeds, colors, seenSeq, selected, onSelect }: Pick<
 }
 /** Line icons of the switch, 24 units drawn at 20 px (16 px on a phone). */
 const ICONS: Readonly<Record<Section, JSX.Element>> = {
-    fleet: <><path d="M3 17V11Q6.5 13 7 17Z" /><path d="M9 17V7.5Q13.5 10.5 14 17Z" /><path d="M16 17V3.5Q21 8 21.5 17Z" /><path d="M3 20.5H21.5" /></>,
     agents: <><circle cx="12" cy="8" r="4" /><path d="M4 20.5c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5" /></>,
     groups: <><circle cx="9" cy="8" r="3.4" /><path d="M2.5 20c0-3.6 2.9-5.6 6.5-5.6s6.5 2 6.5 5.6" /><circle cx="16.5" cy="9" r="2.7" /><path d="M15.8 14.4c3.3.2 5.7 2.1 5.7 5.3" /></>,
     conversations: <><path d="M3 4.5h12v8.5H8l-5 3.5z" /><path d="M11 16h6.5l3.5 3v-10h-3" /></>
 };
 function useSectionLabel(): (section: Section) => string {
     const t = useT();
-    return (section) => ({ fleet: t.sidebar.fleet, agents: t.sidebar.agents, groups: t.sidebar.groups, conversations: t.sidebar.conversations })[section];
+    return (section) => ({ agents: t.sidebar.agents, groups: t.sidebar.groups, conversations: t.sidebar.conversations })[section];
 }
 /** In words, what the dot of a closed section says. */
 function markerWords(sidebar: ReturnType<typeof useT>['sidebar'], marker: Marker | undefined): string[] {
@@ -315,7 +304,7 @@ function Rail({ section, onSection, ...input }: RailProps) {
 }
 /** What each section lists. */
 const SECTION_TABS: Readonly<Record<Section, (props: SidebarProps) => JSX.Element>> = {
-    fleet: FleetTabs, agents: AgentTabs, groups: GroupTabs, conversations: ConversationTabs
+    agents: AgentTabs, groups: GroupTabs, conversations: ConversationTabs
 };
 /** What the open section lists. */
 function SectionTabs(props: SidebarProps) {
