@@ -103,6 +103,38 @@ test('the tab of a group shows what was said in it — the person\'s message, th
     await expect(answer.locator('.quote').first()).toContainText('hello team');
     await expect(groupTab(page)).toContainText('3 messages');
 });
+test('a group message and a direct message are each read in one place: the tab of the agent has the person\'s message only, the tab of the group the group\'s, and a group turn lights no agent tab (#172)', async ({ page }) => {
+    const feed = page.getByRole('log', { name: 'Output of codex' });
+    await page.goto(url);
+    await agentTab(page, 'codex').click();
+    await expect(feed).toBeVisible();
+    // The tab of codex has been seen; the group message and the turn it starts go to the tab of the group.
+    await section(page, 'Groups').click();
+    await groupTab(page).click();
+    const toGroup = page.getByRole('textbox', { name: 'Message to Everyone' });
+    await toGroup.fill('group only');
+    await toGroup.press('Enter');
+    await expect(lane(page).locator('.message-row-user').filter({ hasText: 'group only' })).toHaveCount(1);
+    await expect(lane(page).locator('.message-peer').filter({ hasText: 'you said: [in group everyone] group only' })).toHaveCount(2);
+    await section(page, 'Agents').click();
+    await expect(agentTab(page, 'codex').locator('.unread'), 'a group turn is not new in the tab of the agent').toHaveCount(0);
+    await agentTab(page, 'codex').click();
+    const toCodex = page.getByRole('textbox', { name: 'Message to codex' });
+    await toCodex.fill('direct only');
+    await toCodex.press('Enter');
+    await expect(feed.locator('.message-row-agent').filter({ hasText: 'you said: direct only' })).toHaveCount(1);
+    await expect(feed.locator('.message-row-user'), 'the person\'s message to codex, and no group message').toHaveText([/direct only/]);
+    await expect(feed.getByText(/group only|hello team/)).toHaveCount(0);
+    await section(page, 'Groups').click();
+    await groupTab(page).click();
+    await expect(lane(page).locator('.message-row-user').filter({ hasText: 'group only' })).toHaveCount(1);
+    await expect(lane(page).getByText('direct only')).toHaveCount(0);
+    // A reloaded page reads the same histories the same way.
+    await page.reload();
+    await section(page, 'Agents').click();
+    await agentTab(page, 'codex').click();
+    await expect(feed.locator('.message-row-user')).toHaveText([/direct only/]);
+});
 test('a member busy when the message is posted is «in line» under it, and the fold, the history and a reloaded page say how it ended once it does (#162)', async ({ page }) => {
     const gate = join(fleet, 'local', 'claude', 'gate');
     rmSync(gate, { force: true });

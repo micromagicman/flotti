@@ -58,6 +58,8 @@ type FeedItem =
         readonly options: readonly PermissionOption[];
         /** Answered — here or anywhere else; the buttons go away. */
         readonly settled: boolean;
+        /** Id of the group whose message started the turn that asks (0.7.0, #172): the tab says so. */
+        readonly group?: string;
     }
     /** A task one agent gave another, where it was given, as it stands now. */
     | ({ readonly kind: 'delegation'; readonly key: string } & Delegation)
@@ -109,11 +111,16 @@ type AgentFeed = {
     readonly queue: readonly QueuedMessage[];
     /** Last event taken in; a reconnecting page asks for what came after it. */
     readonly lastSeq: number;
+    /**
+     * Last event that changed what the tab shows (0.7.0, #172): the unread mark
+     * follows it, so a group turn left to the tab of the group lights nothing.
+     */
+    readonly shownSeq: number;
     readonly status: AgentStatus;
     readonly reason: string | undefined;
 };
 function emptyFeed(status: AgentStatus): AgentFeed {
-    return { items: [], queue: [], lastSeq: 0, status, reason: undefined };
+    return { items: [], queue: [], lastSeq: 0, shownSeq: 0, status, reason: undefined };
 }
 /** Statuses always worth a line in the feed; `working` and `idle` come and go with every message. */
 const NOTEWORTHY: ReadonlySet<AgentStatus> = new Set([ 'starting', 'error', 'stopped' ]);
@@ -264,7 +271,35 @@ const STEPS: { readonly [T in AgentEvent['type']]: Step<T> } = {
     raw: (items, event) => [...items, { kind: 'raw', key: `e${event.seq}`, protocol: event.protocol, payload: event.payload }]
 };
 function permissionItem(event: EventOf<'permission'>): FeedItem {
-    return { kind: 'permission', key: `e${event.seq}`, requestId: event.requestId, title: event.title, options: event.options, settled: false };
+    return {
+        kind: 'permission',
+        key: `e${event.seq}`,
+        requestId: event.requestId,
+        title: event.title,
+        options: event.options,
+        settled: false,
+        ...present('group', event.group)
+    };
+}
+/** What waits for the person in a group turn: it stays in the tab of the agent, where every permission is answered. */
+const WAITS_FOR_THE_PERSON: ReadonlySet<AgentEvent['type']> = new Set<AgentEvent['type']>(['permission', 'admin-action']);
+/**
+ * Whether the tab of the agent shows the event (0.7.0, #172): what the person
+ * and the agent say to each other. What was said in a group — a group message
+ * and every event of the turn it started, all marked with `group` — is read in
+ * the tab of the group; a permission request of such a turn, and an action of
+ * an administrator waiting for the person, stay here. A status is no traffic:
+ * the badge follows it whatever the turn.
+ */
+function inAgentTab(event: AgentEvent): boolean {
+    return event.group === undefined || event.type === 'status' || WAITS_FOR_THE_PERSON.has(event.type);
+}
+/**
+ * An event the tab does not show changes nothing in it; the end of its turn
+ * still settles the permissions it asked, as the end of any turn does.
+ */
+function withHidden(line: InLine, event: AgentEvent): InLine {
+    return event.type === 'turn-end' ? { items: settlePermissions(line.items), queue: line.queue } : line;
 }
 function withEvent(items: readonly FeedItem[], event: AgentEvent): readonly FeedItem[] {
     // The step is the one of the event's own type: TypeScript cannot tie the two together by itself.
@@ -334,10 +369,16 @@ function applyEvent(feed: AgentFeed, event: AgentEvent): AgentFeed {
     if (event.seq <= feed.lastSeq) {
         return feed;
     }
-    const status = event.type === 'status'
-        ? { status: event.status, reason: event.reason }
-        : { status: feed.status, reason: feed.reason };
-    return { ...withLine(feed, event), lastSeq: event.seq, ...status };
+    const line = inAgentTab(event) ? withLine(feed, event) : withHidden(feed, event);
+    return { ...line, lastSeq: event.seq, shownSeq: shownSeqAfter(feed, line, event), ...statusAfter(feed, event) };
+}
+/** The status of the agent once the event is in: a status event says it, any other leaves it. */
+function statusAfter(feed: AgentFeed, event: AgentEvent): Pick<AgentFeed, 'status' | 'reason'> {
+    return event.type === 'status' ? { status: event.status, reason: event.reason } : { status: feed.status, reason: feed.reason };
+}
+/** The last event that changed what the tab shows: this one, when it changed the feed or the line. */
+function shownSeqAfter(feed: AgentFeed, line: InLine, event: AgentEvent): number {
+    return line.items !== feed.items || line.queue !== feed.queue ? event.seq : feed.shownSeq;
 }
 /** Marks a permission request answered from this page, before the agent says so. */
 function settlePermission(feed: AgentFeed, requestId: string): AgentFeed {
@@ -405,6 +446,7 @@ export {
     applyEvent,
     awaitsAllowance,
     emptyFeed,
+    inAgentTab,
     forwardOf,
     quoteOf,
     quotedMessage,

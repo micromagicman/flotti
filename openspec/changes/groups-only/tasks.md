@@ -36,11 +36,11 @@ The server part may run with 1 and 2; the page part after 1 (the rail without Co
 
 May run with 3 (it is a rule about `group`, and 0.6.0 already puts it on the message; the mark on the whole turn is new). Assumes open questions 2 (old rows stay) and 6 (the whole turn goes).
 
-- [ ] 4.1 The supervisor puts `group` on every event of the turn a group message started (`keep`, before `store`, using `followTurn` / `AgentAnswers.asked`), not on the first message only; the history file keeps every event
-- [ ] 4.2 The reducer of `web/src/feed.ts` drops the events that carry `group` on the way into the agent tab; a permission request of that turn stays, marked with the group; one pure rule with a unit test
-- [ ] 4.3 `hasUnread` in `web/src/sidebar-sections.ts` follows the last event shown, not the last kept
-- [ ] 4.4 Unit — a group message and the member's answer produce no rows in the member's tab, a permission request of that turn does, a direct message of the person produces no row in any group; e2e — after a group message and a direct message the agent tab has one message and the group tab has one
-- [ ] 4.5 README («The dashboard», «Groups») and CHANGELOG
+- [x] 4.1 The supervisor puts `group` on every event of the turn a group message started (`keep`, before `store`, using `followTurn` / `AgentAnswers.asked`), not on the first message only; the history file keeps every event
+- [x] 4.2 The reducer of `web/src/feed.ts` drops the events that carry `group` on the way into the agent tab; a permission request of that turn stays, marked with the group; one pure rule with a unit test
+- [x] 4.3 `hasUnread` in `web/src/sidebar-sections.ts` follows the last event shown, not the last kept
+- [x] 4.4 Unit — a group message and the member's answer produce no rows in the member's tab, a permission request of that turn does, a direct message of the person produces no row in any group; e2e — after a group message and a direct message the agent tab has one message and the group tab has one
+- [x] 4.5 README («The dashboard», «Groups») and CHANGELOG
 
 ## 5. #174 Mentions
 

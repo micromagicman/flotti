@@ -6,11 +6,11 @@ import { groupTabId } from '../src/dashboard-protocol.js';
 import { emptyFeed } from '../web/src/feed.js';
 import type { AgentFeed } from '../web/src/feed.js';
 import type { GroupFeed } from '../web/src/groups.js';
-import { FIRST_SECTION, SECTIONS, isSection, markerDot, markerOf, sectionForKey, sectionOf } from '../web/src/sidebar-sections.js';
+import { FIRST_SECTION, SECTIONS, agentShownSeq, hasUnread, isSection, markerDot, markerOf, sectionForKey, sectionOf } from '../web/src/sidebar-sections.js';
 import type { MarkerInput } from '../web/src/sidebar-sections.js';
 const OTHER = { broadcastId: 'all', addGroupId: '_add-group' };
 const agent = (id: string, status: AgentStatus = 'idle'): AgentSummary => ({ id, name: id, kind: 'local', status });
-const feed = (lastSeq: number, status: AgentStatus = 'idle'): AgentFeed => ({ ...emptyFeed(status), lastSeq });
+const feed = (lastSeq: number, status: AgentStatus = 'idle', shownSeq = lastSeq): AgentFeed => ({ ...emptyFeed(status), lastSeq, shownSeq });
 const group = (id: string, members: readonly string[] = []): GroupSummary => ({ id, name: id, members });
 const groupFeed = (lastSeq: number): GroupFeed => ({ messages: [], lastSeq });
 function input(over: Partial<MarkerInput> = {}): MarkerInput {
@@ -73,4 +73,14 @@ test('the keys of the switch go round with the arrows, both ways, and Home and E
     strictEqual(sectionForKey('groups', 'Home'), 'agents');
     strictEqual(sectionForKey('agents', 'End'), 'groups');
     strictEqual(sectionForKey('agents', 'Enter'), undefined);
+});
+test('a group turn left to the tab of the group does not light the tab of the agent: the unread mark follows the last event shown (0.7.0, #172)', () => {
+    const seenSeq = { builder: 4 };
+    const afterGroupTurn = feed(9, 'idle', 4);
+    strictEqual(agentShownSeq(afterGroupTurn), 4);
+    strictEqual(hasUnread('builder', 'scout', agentShownSeq(afterGroupTurn), seenSeq), false, 'five events kept, none shown');
+    deepStrictEqual(markerOf('agents', 'groups', input({ feeds: { builder: afterGroupTurn }, seenSeq })), { waiting: [], unread: 0 });
+    const afterDirect = feed(11, 'idle', 11);
+    strictEqual(hasUnread('builder', 'scout', agentShownSeq(afterDirect), seenSeq), true, 'a message of the person lights it');
+    deepStrictEqual(markerOf('agents', 'groups', input({ feeds: { builder: afterDirect }, seenSeq })), { waiting: [], unread: 1 });
 });

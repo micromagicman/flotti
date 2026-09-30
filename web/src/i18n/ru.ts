@@ -209,6 +209,7 @@ const ru: Messages = {
         output: (name) => `Вывод ${name}`,
         empty: (name) => `Пока пусто. Напишите что-нибудь ${name}.`,
         permission: 'Запрос разрешения',
+        permissionInGroup: (group) => `Запрос разрешения · в группе ${group}`,
         allow: 'Разрешить',
         refuse: 'Отказать',
         adminRequest: 'Действие администратора',

@@ -51,7 +51,7 @@ function message({ seq, minutesAgo, ...rest }: MessageInput): MessageItem {
 }
 function feed(items: readonly FeedItem[], status: AgentStatus, extras: Partial<Pick<AgentFeed, 'queue' | 'reason'>> = {}): AgentFeed {
     const lastSeq = items.reduce((last, item) => ('seq' in item ? Math.max(last, item.seq) : last), 0);
-    return { items, queue: extras.queue ?? [], lastSeq, status, reason: extras.reason };
+    return { items, queue: extras.queue ?? [], lastSeq, shownSeq: lastSeq, status, reason: extras.reason };
 }
 /** A talk with Scout: a question, an answer with a link, a reply to that answer, a message sent on. */
 const SCOUT_ITEMS: readonly FeedItem[] = [

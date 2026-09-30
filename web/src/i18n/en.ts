@@ -198,6 +198,7 @@ const en = {
         output: (name: string) => `Output of ${name}`,
         empty: (name: string) => `Nothing yet. Say something to ${name}.`,
         permission: 'Permission requested',
+        permissionInGroup: (group: string) => `Permission requested · in group ${group}`,
         allow: 'Allow',
         refuse: 'Refuse',
         adminRequest: 'Administrator action',
