@@ -2,7 +2,10 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.6.1] — 2026-09-30
+
+A patch of 0.6.0: the dashboard no longer dies when its page is served by a flotti of 0.5.x that was
+left running after the files were updated. Restart flotti after updating it.
 
 ### Fixed
 
@@ -403,6 +406,7 @@ The first release: a fleet of AI agents and one dashboard to work with them.
   ([micromagicman/eva#266](https://github.com/micromagicman/eva/issues/266)).
 - The A2A adapter of Cutie, on the same contract as Eva's (owners/quanthread-ai-hub#218, !194).
 
+[0.6.1]: https://github.com/micromagicman/flotti/releases/tag/v0.6.1
 [0.6.0]: https://github.com/micromagicman/flotti/releases/tag/v0.6.0
 [0.5.0]: https://github.com/micromagicman/flotti/releases/tag/v0.5.0
 [0.4.0]: https://github.com/micromagicman/flotti/releases/tag/v0.4.0
