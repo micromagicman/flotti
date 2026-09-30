@@ -2,6 +2,16 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **The dashboard opens on a server older than it.** `npm install -g flotti` puts the new files under a
+  `flotti run` that is still going: it serves the new page from disk but speaks as it did, and the
+  `fleet` of a 0.5.x names no groups. The page of 0.6.0 died on it at once — `Cannot read properties of
+  undefined (reading 'map')` — with nothing shown. Now such a fleet is taken as one with no groups, and
+  the groups come once flotti is restarted (#167).
+
 ## [0.6.0] — 2026-09-30
 
 Groups: agents see and message each other only inside a group, with a Groups section and a tab of

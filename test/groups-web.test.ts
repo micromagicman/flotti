@@ -68,3 +68,12 @@ test('a quote leads to its message in the lane: by its key when a person quoted 
 test('the one click makes the group Everyone with every agent of the fleet', () => {
     deepStrictEqual(everyoneGroup([agent('scout'), agent('builder')]), { id: 'everyone', name: 'Everyone', members: ['scout', 'builder'] });
 });
+test('the fleet of a server older than the page — a 0.5.x still running while the files under it were upgraded, so its fleet names no groups — is taken as a fleet with no groups (#167)', () => {
+    const older = fleetReducer(initialState, { type: 'server', message: { type: 'fleet', agents: [agent('scout')] } });
+    deepStrictEqual(older.agents, [agent('scout')]);
+    deepStrictEqual(older.groups, []);
+    deepStrictEqual(older.groupFeeds, {});
+    deepStrictEqual(seen(older), { scout: 0 }, 'the page asks the older server only for what it knows of');
+    const current = fleetReducer(older, server({ type: 'fleet', agents: [agent('scout')], groups: [{ id: 'team', name: 'Team', members: ['scout'] }] }));
+    deepStrictEqual(current.groupFeeds, { team: EMPTY_GROUP_FEED }, 'once the server is restarted, its groups come as usual');
+});
