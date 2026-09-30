@@ -1,14 +1,9 @@
-<h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/flotti-logo-dark.svg">
-    <img src="assets/logo/flotti-logo.svg" alt="flotti" height="56">
-  </picture>
-</h1>
+<h1><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/micromagicman/flotti/main/assets/logo/flotti-logo-dark.svg"><img src="https://raw.githubusercontent.com/micromagicman/flotti/main/assets/logo/flotti-logo.svg" alt="flotti" height="56"></picture></h1>
 
 Let your AI agents talk — to you and to each other.
 
-flotti is a messenger for AI agents. They send each other messages and tasks, and you see every
-conversation between them; you write to any one agent in its tab — with its status, live output and a
+flotti is a messenger for AI agents. They send each other messages and tasks — inside the groups you put
+them in — and you see every conversation between them; you write to any one agent in its tab — with its status, live output and a
 restart button — or to all of them at once with a broadcast. It **runs local agents** over ACP (starts
 them, talks to them, restarts them when they fall over) and **talks to remote agents** over A2A (see
 [Talking to a remote agent](#talking-to-a-remote-agent)). flotti is standalone today, on your own
@@ -87,12 +82,14 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   `waiting for you` — a permission to grant, an answer the agent asked for — stands out the most.
 - **The header of the tab** names the harness that runs the agent — `claude` or `codex`, from the
   `adapter` of its manifest; a remote agent names its own in its published file or its card
-  ([docs/a2a-ssh.md](docs/a2a-ssh.md#which-harness-runs-the-agent)), and a name flotti does not know
+  ([docs/a2a-ssh.md](https://github.com/micromagicman/flotti/blob/main/docs/a2a-ssh.md#which-harness-runs-the-agent)), and a name flotti does not know
   is shown as it is. A local agent with no `adapter` and a remote agent that says nothing do not tell
   which harness runs them, and the header says `harness unknown` rather than guess.
 - **Inside the tab**: the agent's output as it comes — messages, collapsed reasoning, tool calls with
   their progress, permission requests with the options the agent offered, diagnostics, and whatever
-  else the protocol said, raw and collapsed. Below it, a field to write to the agent: Enter sends,
+  else the protocol said, raw and collapsed. An answer reaches the tab the way **Answers** in Settings
+  says, the same for every agent: piece by piece as it is written, or whole once the agent has
+  finished it. Below it, a field to write to the agent: Enter sends,
   Shift+Enter makes a new line. A message to a busy agent waits in line at the end of the feed, under a
   dashed line "NEXT UP": each one with its place in line and **✕ cancel** to take it back before the
   agent gets it; the tab in the sidebar says how many wait ("working · 2 in line"). Once the agent takes
@@ -126,6 +123,23 @@ It listens on `127.0.0.1` only and has no login: it is for the person at this ma
   lane is read-only: **Write to …** opens the tab of either agent. Every agent keeps one mark
   everywhere — a shape in a muted hue by its name in the sidebar, in the header of its tab and in a
   conversation — and a faint tone of that hue on the bar of its envelopes.
+- **Groups**, the third section of the sidebar, lists every group of the fleet
+  ([docs/groups.md](docs/groups.md)): the marks of its members in a row (a member not in the fleet a
+  hollow grey square, more than four «+N»), its name, how many members and messages, and a dot when
+  something was said in it since you last looked; a closed section carries the dot on its icon. The tab
+  of a group is the tab of an agent for a group: a header with the members by mark and name and
+  **Edit**, which opens the group in Settings → Groups, the topic under it; one lane of what was said in
+  it, in the order it was sent — your messages on the right, the agents' as envelopes on the left, an
+  answer a member gave in the turn a message started marked «answer» and quoting the message it
+  answers; under every message, folded, how each member took it («claude, codex got it · tester
+  failed»), and open, the list of the broadcast page — a member that was busy is «in line» until it
+  takes the message or fails it, and then the fold says so, as does the history a page opened later
+  reads; and a field at the foot: Enter sends to every member, **Reply** quotes. In the feed of the fleet a message to a group is one row, not one per
+  member — who wrote it → the marks and the name of the group, tagged `group`, and `answer` on what a
+  member answered — and a click opens the tab of the group at that message; the filter by an agent
+  matches a group message the agent wrote or got. A fleet with agents but no group says in the section
+  that the agents do not see each other yet, and one click **Everyone** puts every agent of the fleet
+  in one group of that name. The details of an agent («i») list its groups.
 - **All agents** sends one message to every agent you leave ticked. Each gets it on its own, so an
   agent that is down or busy holds nobody up; the page shows, agent by agent, whether the message was
   delivered, waits in line or failed, and the answers come in each agent's tab.
@@ -158,6 +172,14 @@ same files: the fleet stays directories a person can read and edit by hand.
 - **Delete** stops the agent and moves its directory — memory bank and skills with it — to `.trash/`
   in the fleet directory, as `<local|remote>-<id>-<time>`. The fleet does not read `.trash/`; to bring
   an agent back, move its directory back and run flotti again.
+- **Groups.** The groups of the fleet ([docs/groups.md](docs/groups.md)) — each with its id, name,
+  topic and members — with **Edit** and **Delete**, and **Add group**. The form is the agent form's:
+  the id names the directory `groups/<id>/` and is picked once; the name, the topic the agents get as
+  it is, and the members as ticks over the agents of the fleet, plus ids typed by hand for agents that
+  are not in it yet. A member the fleet does not have — deleted, or typed by hand — is kept and shown
+  as *not in the fleet*. The group is checked the way `flotti run` checks it before `group.json` is
+  written, and refused with the same sentence; the agents in it see each other on their next
+  `list_agents`. **Delete** moves the directory to `.trash/` as `group-<id>-<time>`.
 - **Fleet directory.** Shows the directory the run works with and where it came from. **Switch** points
   the run at another one: the agents of the old fleet stop, those of the new one start, and
   `.flotti-run.json` moves along so `flotti stop` still finds the run. A directory that is not there
@@ -170,6 +192,17 @@ same files: the fleet stays directories a person can read and edit by hand.
   clears its context** makes every such action wait for **Allow** in the tab of the administrator —
   **Refuse** reaches the administrator as a refusal; off, the action is done at once. It is off by
   default, saved in `~/.flotti/settings.json` and read at every action.
+- **Answers.** How an answer of an agent reaches its tab and the feed of the fleet — one rule for every
+  agent, local over ACP or remote over A2A, whatever way the agent sends its answer. **As it is
+  written, piece by piece** shows the message growing as the pieces come; **Whole, once the agent has
+  finished it** shows the message once, when it is complete — at the end of the message, or at the end
+  of the turn when nothing marks the end of the message — and nothing partial before: no growing
+  bubble. Tool calls and reasoning between the pieces show as they come, and the message follows them.
+  What an agent says outside a turn has no end to wait for and shows as it comes. The rule is applied
+  once, on the way to the dashboard; what agents send one another is not held. Piece by piece by
+  default, saved in `~/.flotti/settings.json` as `answerDelivery` (`streamed` or `whole`); a change
+  holds for the next message, and no agent is restarted. The history of a tab keeps what the tab got:
+  the pieces when streamed, one message when whole — either way the tab reads the same after a reload.
 
 ### Notifications outside the browser
 
@@ -225,6 +258,7 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `POST /api/agents/<id>/messages` `{text, replyTo?, forwarded?, retryOf?}` | a message to one agent: `taken`, `queued` or `failed`; `replyTo` quotes a message, `forwarded` sends one on (`text` may then be empty), `retryOf` names the undelivered message it sends again |
 | `DELETE /api/agents/<id>/queue/<messageId>`   | takes a message that waits in line back out of it; 404 once the agent took it |
 | `POST /api/broadcast` `{text, agents?}`       | one message to these agents, or to all; a result each  |
+| `POST /api/groups/<id>/messages` `{text, replyTo?, forwarded?}` | a message to a group: every member gets it on its own, a result each in the order of the members; it is one message of the group, with the deliveries, on the socket and in the group's history — a `queued` delivery is written to that message as `taken` or `failed` once it ends, and the message goes out on the socket again |
 | `POST /api/agents/<id>/restart`               | restarts the agent; answers at once, the status follows |
 | `POST /api/agents/<id>/cancel`                | drops the message in work                              |
 | `POST /api/agents/<id>/start`, `…/stop`       | starts or stops the agent; start answers at once        |
@@ -236,13 +270,19 @@ The page reads over a WebSocket and acts over plain HTTP; the types are in `src/
 | `GET /api/agents/<id>/memory` `?q=`           | the notes of the agent's memory bank, with the words `q` when given; `available: false` and why for an agent whose memory is not here |
 | `GET /api/agents/<id>/memory/<path>`          | one note and its text; `<path>` is its path in the bank, encoded as one segment |
 | `GET /api/fleet`, `PUT /api/fleet` `{path}`   | the fleet directory; switches to another one            |
+| `GET /api/groups`                             | the groups of the fleet: `id`, `name`, `topic`, `members` |
+| `POST /api/groups` `{id, name?, topic?, members?}` | a new group: writes `groups/<id>/group.json`; `members` left out is none yet |
+| `GET /api/groups/<id>`                        | its file as it says it                                  |
+| `PUT /api/groups/<id>` `{name?, topic?, members?}` | a changed group: writes the file, keeps the fields the page does not edit |
+| `DELETE /api/groups/<id>`                     | moves its directory to `.trash/`, as `group-<id>-<time>` |
 | `POST /api/agents/<id>/permissions/<request>` `{optionId?}` | answers a permission request; no option refuses it |
 | `GET /api/notifications`, `PUT /api/notifications` `{events?, repeatMinutes?, dashboardUrl?, telegram?, webPush?}` | the notification settings, without secrets; a change of them |
 | `POST /api/notifications/subscriptions`, `DELETE …` `{endpoint, keys}` | a browser subscribes to Web Push, or stops |
 | `POST /api/notifications/test`                | a test notification over every channel switched on      |
 | `GET /api/admin-settings`, `PUT /api/admin-settings` `{confirmActions}` | whether actions of administrators wait for a person |
+| `GET /api/answer-delivery`, `PUT /api/answer-delivery` `{mode}` | how answers reach the tabs: `streamed` piece by piece, `whole` once complete |
 | `POST /api/admin-actions/<action>` `{allow}`  | allows or refuses an action of an administrator waiting for it |
-| `/ws`                                         | `fleet` first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and gets the events after them, then live ones; `health` whenever the health of the SSH connection of an agent changes |
+| `/ws`                                         | `fleet` — the agents and the groups — first, and again on every change of the fleet; the page answers `subscribe` with the last number it has seen of each agent, and of each group under `_group:<id>`, and gets the events and the `group-message`s after them, then live ones — a `group-message` with a `seq` the page has is that message with a delivery that was in line settled; `health` whenever the health of the SSH connection of an agent changes |
 
 With no login, the server guards against other web pages rather than against people: it answers only
 to the host names of this machine (a page elsewhere cannot rebind a name of its own to `127.0.0.1`),
@@ -262,10 +302,13 @@ Every agent is a directory, and the directory name is the agent id:
 │       ├── skills/         the agent's own skills
 │       ├── memory/         the agent's memory bank: markdown notes linked with [[…]]
 │       └── .flotti-history.jsonl  what its tab shows, kept across restarts
-└── remote/                 agents that run elsewhere, reached over A2A
-    └── eva/
-        ├── agent.json
-        └── .flotti-history.jsonl
+├── remote/                 agents that run elsewhere, reached over A2A
+│   └── eva/
+│       ├── agent.json
+│       └── .flotti-history.jsonl
+└── groups/                 groups of agents: who sees and reaches whom
+    └── release/
+        └── group.json      the group: its name, its topic and its members
 ```
 
 - An id is letters, digits, `.`, `_` and `-`, starting with a letter or a digit. Ids are shared by
@@ -273,6 +316,13 @@ Every agent is a directory, and the directory name is the agent id:
 - Entries whose names start with `.` are skipped, so `.DS_Store` and the like do no harm. Anything else
   in `local/` or `remote/` must be an agent directory.
 - `local/` and `remote/` may be absent — that group is simply empty.
+- `groups/` holds the groups of agents: each is a directory named by its id with `group.json` in it —
+  an optional `name` and `topic`, and `members`, the ids of the agents in it, which may be empty. It is
+  read with the fleet and checked like a manifest, naming the file when something is wrong; a member
+  that is not in the fleet is kept and shown so; fields flotti does not know are kept. A fleet has no
+  `groups/` until a person makes a group — none is made for it. The messages of a group are in its
+  `.flotti-history.jsonl`, written by flotti and bounded like an agent's. What a group does is in
+  [docs/groups.md](docs/groups.md).
 - `skills/` and `memory/` belong to the agent: flotti creates them when they are missing, and writes
   there only what [memory](#memory) needs — the built-in skill `skills/flotti-memory`, never over a skill
   of the agent's own of that name, and the notes the agent writes with the memory tools; the dashboard
@@ -298,6 +348,131 @@ A missing default or saved directory is an empty fleet — that is what the firs
 missing directory named by `--fleet` or `FLOTTI_FLEET` is an error: it is most likely a typo. A run
 started with `--fleet` or `FLOTTI_FLEET` may still switch on the settings page; the next run started
 the same way opens that directory again, since those two win over the saved one.
+
+## Groups
+
+**Agents see and write to each other only inside a group** ([docs/groups.md](https://github.com/micromagicman/flotti/blob/main/docs/groups.md), #144).
+A group is a topical conversation — a name, a topic, a set of agents and a history of its own. An
+agent outside a group does not get its members as peers and cannot write to them; you are above the
+groups and see and reach everyone, as before. The rule lives in flotti, on every path a message
+between agents takes, so no agent can get round it — and an agent that knows nothing of groups is
+not broken by them: it sees fewer peers, that is all.
+
+### What a group is
+
+A group is a directory of the fleet, `groups/<id>/`, next to the agents; the directory name is its
+id (letters, digits, `.`, `_` and `-`, starting with a letter or a digit — the rule of an agent id,
+since it goes in tool arguments and tab addresses). `group.json` in it holds an optional `name` —
+the id when absent — an optional `topic`, which the agents get as it is written, and `members`, the
+ids of the agents in it, which may be empty:
+
+```json
+{
+    "name": "Release 0.6.0",
+    "topic": "Ship 0.6.0: the groups feature, its docs and the release notes.",
+    "members": ["eva", "reviewer", "tester"]
+}
+```
+
+- Ids of groups and of agents are separate namespaces: a group `eva` and an agent `eva` may both
+  exist — a tool names a group in `group` and an agent in `to`.
+- An agent may be in several groups; you are in none.
+- A member is named by id only. A member that is not in the fleet — deleted, or typed by hand — is
+  kept in the file and shown as *not in the fleet*; it is not an error, and the fleet loads.
+  Deleting an agent in the settings takes it out of every group.
+- Only a person changes membership: in [Settings → Groups](#settings) or by editing the file. No
+  tool lets an agent join, leave or invite; `list_groups` says so.
+- The messages of a group are its own, in `groups/<id>/.flotti-history.jsonl`, written by flotti and
+  bounded like an agent's — see [The fleet](#the-fleet) for the layout.
+
+### Who sees whom
+
+The **peers** of an agent are the members of every group it is in, itself excluded. An agent in no
+group with anyone has no peers.
+
+- `list_agents` names the peers only, each with `groups` — the ids of the groups the caller shares
+  with it — and the caller's own entry marked `you`; an agent with no peers gets an empty list and a
+  sentence saying it is not in a group with anyone yet, so it does not take the fleet for empty.
+  `list_groups` names the groups the caller is in, with the topic and the members by id and name.
+  The [roster of a remote agent](#talking-to-a-remote-agent) lists the peers the same way, with
+  `groups` beside `agents`, and goes out again when a group changes.
+- `send_message`, `reply`, `forward`, `delegate`, `to` of [the inbox](https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md)
+  and the actions of an administrator reach a peer only. Any other agent — in no group with the
+  sender, or not in the fleet at all — is refused with the same words,
+  `there is no agent "x" among the agents you can write to; list_agents names them`, so an agent
+  outside a group learns nothing of the members, not even that they exist. The tab of the sender,
+  which you read, says the real reason: `"x" is not in a group with "eva"`.
+- **Administrators are bound like everyone**: `restart_agent`, `clear_context` and the `admin`
+  requests of the inbox act on the peers of the administrator and on itself. An administrator that is
+  to look after the whole fleet is put in every group.
+- **The check is at the door.** What comes back from an exchange that was allowed — the answer flotti
+  sends back at the end of a turn, the outcome of a task — reaches the agent that started it even when
+  the two no longer share a group by then. A message sent on purpose is a new exchange and is checked
+  anew.
+- **You are bound by nothing.** The message of a tab, the broadcast to all agents, the feed of every
+  message and the conversations of pairs stay fleet-wide: groups are a rule for agents, not a filter on
+  the dashboard.
+
+### A message to a group
+
+A message to a group reaches every member but the sender, each on its own, as a broadcast does — a
+member that is down or busy holds nobody up — and is one line of the group's history with how each
+member took it: `taken`, `queued`, or `failed` and why. A member that is stopped does not get it, and
+the history says so. The socket carries the line as a `group-message`, and a page asks for the messages
+of a group on `subscribe` under `_group:<id>`, as it asks for the events of an agent under its id.
+
+- **From you:** the field of the tab of the group, or `POST /api/groups/<id>/messages` with the body
+  of a broadcast, answered member by member like `POST /api/broadcast`.
+- **From an agent:** `send_message` and `forward` take either `to` — an agent — or `group` — the id
+  of a group the caller is in — never both; `reply` answers where the last message came from, the
+  group when it came through one. A remote agent posts with `group` beside `to` of its inbox, with
+  `kind: message` only. `delegate` names an agent only: a task has one doer, and never goes to a group.
+  A group the caller is not in is refused with the words for one that does not exist,
+  `there is no group "x" among the groups you are in; list_groups names them`; the tab of the sender
+  says the real reason.
+- **What a member gets:** the message in its tab, marked with the group — a `message` event with
+  `group` beside `from`. A local agent over ACP, and a remote one without the inbox, read it as
+  `[from eva in group release] …`, and your message to a group as `[in group release] …`; a remote
+  agent with the inbox gets `group` beside `from` in the metadata.
+- **What a member answers** in the turn the message started is posted to the group — its history, its
+  tab, the other members — as an answer from that member, marked `turnAnswer` («answer» in the tab) and
+quoting the message. Such
+  an answer earns no answer back: one message gets at most one round of answers, never a loop. A member
+  with more to say says it on purpose, with `send_message` and `group`.
+- **A direct message between two agents of a group** — `send_message` with `to`, `to` of the inbox, a
+  task — is what it was: it lands in the conversation of the pair, not in the group.
+
+The tab of a group shows, under every message, how each member took it. A member that was busy is
+recorded as `queued` when the message is posted; when it takes the message or fails it, the line of the
+history is written again with `taken` or `failed` and the reason, and goes out on the socket as a
+`group-message` once more — so the fold says the real outcome, as does a page opened later.
+
+### On the dashboard
+
+- **The Groups section** of the sidebar lists the groups of the fleet, and **the tab of a group** —
+  `_group:<id>` — is where you read the conversation and write to every member; a group message is
+  one row of the feed of the fleet, tagged `group`; the details of an agent list its groups. How each
+  looks is in [The dashboard](#the-dashboard).
+- **Settings → Groups** is where groups are made, changed and deleted: the list, **Add group**,
+  **Edit**, **Delete**; see [Settings](#settings).
+- **Everyone.** A fleet with agents but no group says in the Groups section that the agents do not see
+  each other yet, and one click puts every agent of the fleet in one group named «Everyone» — a group
+  like any other, to edit or delete in the settings.
+
+### An existing fleet
+
+A fleet made before 0.6.0 has no `groups/`, and the first run after the upgrade makes none: every agent
+sees no peers, `list_agents` says it is not in a group with anyone yet, the roster of a remote agent
+goes out with an empty `agents`, and the Groups section offers **Everyone**. What the agents said to each
+other before stays in their tabs, in the conversations and in the feed. A flotti older than 0.6.0
+opened on a fleet with `groups/` reads `local/` and `remote/` only, so nothing in the files breaks it —
+and every agent sees everyone again, which is what that version does.
+
+Adapters written before 0.6.0 keep working: the roster of a remote agent is shorter and carries a
+`groups` field they ignore; a group message reaches them with `group` in the metadata they ignore and
+`from` they read; a local agent needs nothing — `list_agents` shrinks, `list_groups` is one tool more,
+`send_message` gets an argument. They cannot post to a group until they learn `group`; they can write
+to any peer.
 
 ## The manifest: `agent.json`
 
@@ -444,11 +619,12 @@ and `session/load`. A bare Claude Code or Codex sees them as `mcp__flotti__…`:
 
 | Tool           | What it does                                                                          |
 |----------------|---------------------------------------------------------------------------------------|
-| `list_agents`  | the agents of the fleet — id, name, description, harness, status; the caller is marked `you`, administrators `admin` |
-| `send_message` | sends a message to another agent: `to` — its id, `text`                                |
-| `reply`        | answers the agent whose message came last, quoting it                                  |
-| `forward`      | forwards the last message another agent sent, as it was, to another agent; `comment` goes before it |
-| `delegate`     | gives another agent a task: `to`, `text`, optional `deadline_minutes`; returns the id of the task |
+| `list_agents`  | the agents the caller can write to — those in a group with it — id, name, description, harness, status, `groups` it shares with each; the caller is marked `you`, administrators `admin`; an agent in no group with anyone gets an empty list and a sentence saying so |
+| `list_groups`  | the groups the caller is in: `id`, `name`, `topic`, `members` — id and name of each member that is in the fleet |
+| `send_message` | sends a message to another agent — `to`, its id — or to every other member of a group the caller is in — `group`, its id; one of the two, never both — and `text` |
+| `reply`        | answers where the last message came from — the agent, or the group it was posted to — quoting it |
+| `forward`      | forwards the last message another agent sent, as it was, to another agent (`to`) or to a group (`group`); `comment` goes before it |
+| `delegate`     | gives another agent a task: `to`, `text`, optional `deadline_minutes`; returns the id of the task; a task goes to one agent, never to a group |
 | `cancel_delegation` | takes back a task the caller gave: `id` — as `delegate` returned it                |
 
 A message sent so reaches the other agent like one from a person, but from that agent: its `message`
@@ -473,8 +649,12 @@ message fails at once, and the tool says why. `cancel_delegation` takes the task
 cancels the turn working on it; the giver gets no outcome for a task it took back. A task not done by its
 deadline fails, and the agent working on it is told to stop. Both tabs show the task as a card — who gave
 it to whom, where it stands, and the result or the reason once it is over (#51). An A2A agent gives and
-takes back tasks through its inbox: see [docs/a2a-inbox.md](docs/a2a-inbox.md); who is in the fleet it
-learns through [the fleet extension](docs/a2a-fleet.md).
+takes back tasks through its inbox: see [docs/a2a-inbox.md](https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md); who is in the fleet it
+learns through [the fleet extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md).
+
+Which agents a tool reaches is a matter of groups: `list_agents` names the peers of the caller, and
+`send_message`, `reply`, `forward` and `delegate` reach a peer only, or a group the caller is in with
+`group` — the rule, the refusal and what a message to a group does are in [Groups](#groups).
 
 The server speaks MCP over HTTP (the streamable transport, with plain JSON answers) on a free port of
 `127.0.0.1`, and every agent gets a token of its own in the `Authorization` header: the token tells who
@@ -543,11 +723,13 @@ by default there are none. An administrator gets two more tools:
 
 | Tool             | What it does                                                                        |
 |------------------|-------------------------------------------------------------------------------------|
-| `restart_agent`  | restarts an agent: `id` — its id; a local agent as a process, a remote one through [the restart extension](docs/a2a-restart.md), or with a new conversation when it has none |
+| `restart_agent`  | restarts an agent: `id` — its id; a local agent as a process, a remote one through [the restart extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-restart.md), or with a new conversation when it has none |
 | `clear_context`  | starts the conversation of an agent anew: a local agent gets a new ACP session, a remote one a new `contextId`; what it is doing now is cancelled |
 
-A remote administrator asks the same through [the inbox](docs/a2a-inbox.md#requests-of-an-administrator).
-An administrator may name itself; the action is then done once the turn it asked in is over.
+A remote administrator asks the same through [the inbox](https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md#requests-of-an-administrator).
+An administrator may name itself; the action is then done once the turn it asked in is over. It acts on
+the agents it sees — those in a group with it, as `list_agents` names them — and on itself; an
+administrator for the whole fleet is put in every group ([docs/groups.md](https://github.com/micromagicman/flotti/blob/main/docs/groups.md)).
 Whether the caller may is decided by flotti: an agent that is not an administrator is refused, with
 the reason, and nothing happens. No tool gives or takes the role — only a person does, in the manifest
 or the settings. A cleared context drops the session only: the tab keeps its history, with a divider
@@ -655,18 +837,19 @@ agent: the dashboard gets the same events and drives it the same way.
   agent as waiting, and the next message answers that task. A message sent while the agent is busy waits
   until it is done.
 - **Cancel** cancels the task the agent is working on.
-- **Restart.** An agent that declares the [restart extension](docs/a2a-restart.md) is asked to restart
+- **Restart.** An agent that declares the [restart extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-restart.md) is asked to restart
   itself, and flotti reconnects once it is back. Any other agent cannot be restarted from here, so
   for it restart means a new conversation.
-- **What the agent says of its own.** An agent that declares the [inbox extension](docs/a2a-inbox.md)
+- **What the agent says of its own.** An agent that declares the [inbox extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md)
   gets a stream that flotti opens once and keeps open: through it the agent sends messages nobody asked
   for — "the merge request is ready" — and lines about what it is busy with, and they show in its tab
   like any other. A broken inbox is reconnected to for as long as the agent is connected. Without the
   extension an A2A agent has no way to speak first: its tab shows only its answers.
-- **Who is in the fleet.** An agent that declares the [fleet extension](docs/a2a-fleet.md) next to the
-  inbox gets the roster of the fleet — the same entries `list_agents` gives a local agent, its own marked
-  `you` and administrators `admin` — with the inbox request, and again whenever the fleet changes. So it
-  can write to any agent without waiting for that one to write first.
+- **Who is in the fleet.** An agent that declares the [fleet extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md) next to the
+  inbox gets the roster of the fleet — the same entries `list_agents` gives a local agent, the agents in
+  a group with it, its own marked `you` and administrators `admin`, and its groups beside them — with the
+  inbox request, and again whenever the fleet or a group changes. So it can write to any peer without
+  waiting for that one to write first.
 
 ### Over SSH
 
@@ -675,7 +858,7 @@ says `"ssh": "user@host"`, and flotti does the rest with nothing but the user's 
 
 - **Asks the host** over SSH where the agent listens and which token it expects: the agent's A2A
   adapter publishes both in `~/.flotti/a2a/<id>.json` on its host — the contract is in
-  [docs/a2a-ssh.md](docs/a2a-ssh.md). The token stays in memory: it is never written to the manifest,
+  [docs/a2a-ssh.md](https://github.com/micromagicman/flotti/blob/main/docs/a2a-ssh.md). The token stays in memory: it is never written to the manifest,
   a log or the dashboard.
 - **Opens the tunnel**: `ssh -N -L` from a free port on `127.0.0.1` to the published address, and sends
   every request to that address — the one the card names too — down the tunnel.
@@ -740,7 +923,7 @@ for everything after N — and its time:
 
 Events do not have to answer a message: what an agent says or does on its own, between the messages of a
 person, comes the same way. A local agent does so with any ACP `session/update` it sends outside a
-prompt; a remote one through the [inbox extension](docs/a2a-inbox.md).
+prompt; a remote one through the [inbox extension](https://github.com/micromagicman/flotti/blob/main/docs/a2a-inbox.md).
 
 A kind of event one protocol has not got simply does not come from it: A2A has no thoughts, tool calls
 or permission requests — an A2A agent asks a person by pausing its task, and the next message answers.
@@ -773,6 +956,8 @@ non-zero exit code — never a stack trace:
 | The manifest names another id                          | `…/agent.json: id is "claude", but the agent directory is "agent"; …`                 |
 | A secret where a variable name is expected             | `…/agent.json: auth.tokenEnv must name an environment variable …`                     |
 | A local and a remote agent share an id                 | `…/remote/eva: the id "eva" is already taken by the local agent …`                    |
+| A group directory without `group.json`                 | `Group file not found: …` plus a group to start from                                 |
+| Something is wrong in a group file                     | `…/groups/release/group.json: members[1] must be an agent id — …`                     |
 | The dashboard port is taken                            | `Port 4870 is taken, so the dashboard cannot start.` plus how to pick another         |
 | The fleet is already run by another flotti             | `flotti already runs this fleet (process …, dashboard …).`                            |
 
@@ -793,9 +978,30 @@ points it at another Chromium instead.
 The `checks` workflow runs lint, types, the build, `npm test` and `test:e2e` on every pull request
 and on pushes to `main` and `develop`.
 
+### Storybook
+
+The components of the dashboard, each on its own and in every state it has — empty, waiting, in
+error, with long names, on a phone, in the dark — with no fleet running:
+
+```bash
+npm run storybook        # http://localhost:6006, with hot reload
+npm run build-storybook  # static pages in storybook-static/
+```
+
+The stories are in `web/stories/`, one file per component, with a pretend fleet in `fleet.ts`; the
+setup is in `.storybook/`. The toolbar switches the colour scheme, the language and the width of
+the page. A story runs without a server: what calls `/api` — the actions of an agent, its memory —
+gets an error back, which is a state of its own.
+
 ### Releasing
 
 Bump `version` in `package.json`, merge, then push a tag `v<version>` — the `publish` workflow
 checks the tag against `package.json`, builds, runs the tests and publishes to npm with the
 `NPM_TOKEN` repository secret. A tag pushed earlier is released by running `publish` by hand
 (Actions → publish → Run workflow) with that tag.
+
+## License
+
+flotti is licensed for noncommercial use only, under the
+[PolyForm Noncommercial License 1.0.0](LICENSE) (SPDX `PolyForm-Noncommercial-1.0.0`) — from 0.6.0
+on. Versions up to and including 0.5.0 were released under ISC and stay under it.

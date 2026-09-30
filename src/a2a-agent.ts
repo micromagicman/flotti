@@ -12,7 +12,7 @@ import {
     withA2AExtensions
 } from '@a2a-js/sdk/client';
 import type { Client } from '@a2a-js/sdk/client';
-import { AgentEvents, WITHDRAWN, composeText, messageFields } from './agent-events.js';
+import { AgentEvents, WITHDRAWN, composeText, markedText, messageFields } from './agent-events.js';
 import type { AgentEvent, AgentEventListener, AgentStatus, FleetAgent, SendOptions } from './agent-events.js';
 import type { Environment } from './manifest.js';
 import { HealthTracker } from './connection-health.js';
@@ -20,9 +20,9 @@ import type { ConnectionHealth, HealthListener, HealthTrackerOptions } from './c
 import { SshConnection } from './ssh.js';
 import type { RemoteConnection, RemoteEndpoint, SshOptions } from './ssh.js';
 import type { RemoteAgent, RemoteAuth } from './types.js';
-import type { AgentSummary } from './dashboard-protocol.js';
 import { roster, rosterEntries } from './fleet-roster.js';
 import type { Roster } from './fleet-roster.js';
+import type { GroupView, PeerSummary } from './groups.js';
 import { describeError } from './describe-error.js';
 import { cachingCardFetch, cardLocation, cardUrl, describeCard, hearsFleet } from './a2a-card.js';
 import type { A2AAgentInfo } from './a2a-card.js';
@@ -86,14 +86,19 @@ type A2AAgentOptions = {
      */
     readonly onAdminRequest?: (request: AdminRequest) => void;
     /**
-     * The fleet the agent is in, handed to an agent that declares the fleet
+     * The fleet as this agent sees it — the agents in a group with it, and
+     * its groups (docs/groups.md) — handed to an agent that declares the fleet
      * extension (docs/a2a-fleet.md); without it the agent is told nothing of
      * the fleet.
      */
-    readonly fleet?: { readonly roster: () => readonly AgentSummary[] };
+    readonly fleet?: { readonly roster: () => readonly PeerSummary[]; readonly groups: () => readonly GroupView[] };
     /** How long changes of the fleet are gathered before the roster goes out; 1 s by default. */
     readonly rosterDebounceMs?: number;
 };
+/** What the agent is told of the fleet: its peers and its groups; nothing without the fleet hook. */
+function fleetSeen(fleet: A2AAgentOptions['fleet']): { readonly agents: readonly PeerSummary[]; readonly groups: readonly GroupView[] } {
+    return fleet === undefined ? { agents: [], groups: [] } : { agents: fleet.roster(), groups: fleet.groups() };
+}
 /** A round trip that takes longer than this is not measured: the connection says itself when it is gone. */
 const PROBE_TIMEOUT_MS = 10_000;
 /** The task a conversation is at, as far as its last event told. */
@@ -300,8 +305,9 @@ class A2AAgent implements FleetAgent {
     }
     /**
      * A message from another agent carries the sender under the inbox extension
-     * URI in its metadata (docs/a2a-inbox.md); an agent that does not offer the
-     * inbox gets it as `[from <id>]` in front of the text as well.
+     * URI in its metadata, one posted to a group the group beside it
+     * (docs/a2a-inbox.md); an agent that does not offer the inbox gets them as
+     * `[from <id> in group <group>]` in front of the text instead.
      */
     send(text: string, options: SendOptions = {}): Promise<void> {
         const client = this.client;
@@ -1162,7 +1168,21 @@ class A2AAgent implements FleetAgent {
         } else if (params.kind === 'progress') {
             this.showProgress(message);
         } else {
-            this.showMessage(message, params.to, params.task);
+            this.showSaid(message, params);
+        }
+    }
+    /**
+     * A message of the agent's own: shown, and sent on where it names an agent
+     * or a group. One that names both, or gives a group a task, goes nowhere:
+     * a line in the tab says why, once, whatever repeats the message.
+     */
+    private showSaid(message: Message, params: SaidParams): void {
+        const why = misaddressed(params);
+        if (why === undefined) {
+            this.showMessage(message, params);
+        } else if (!this.shown.has(messageIdOf(message))) {
+            this.shown.add(messageIdOf(message));
+            this.log(`the message was not sent: ${why}`);
         }
     }
     /** A line of progress, shown once, whatever repeats it. */
@@ -1206,9 +1226,10 @@ class A2AAgent implements FleetAgent {
     // --- the roster of the fleet: who the agent can write to ------------------------------------------------
     /**
      * The fleet changed — an agent came or went, was renamed, changed its
-     * status. The agent is sent the roster once the changes stop for a moment;
-     * nothing is sent before its inbox was asked for, nor when nothing it sees
-     * changed. The roster goes outside the line of messages and starts no turn.
+     * status, a group changed. The agent is sent the roster once the changes
+     * stop for a moment; nothing is sent before its inbox was asked for, nor
+     * when nothing it sees changed. The roster goes outside the line of
+     * messages and starts no turn.
      */
     fleetChanged(): void {
         const client = this.client;
@@ -1229,10 +1250,11 @@ class A2AAgent implements FleetAgent {
     private rosterDue(): boolean {
         return this.rosterSent !== undefined && this.rosterTimer === undefined && this.wantsRoster();
     }
-    /** The roster as it is now, with the next version, and its entries as JSON to tell a change by. */
+    /** The roster as it is now, with the next version, and what it lists as JSON to tell a change by. */
     private nextRoster(): { readonly roster: Roster; readonly key: string } {
-        const entries = rosterEntries(this.hooks.fleet?.roster() ?? [], this.agentId);
-        return { roster: roster(this.rosterVersion + 1, entries), key: JSON.stringify(entries) };
+        const { agents, groups } = fleetSeen(this.hooks.fleet);
+        const entries = rosterEntries(agents, this.agentId);
+        return { roster: roster(this.rosterVersion + 1, entries, groups), key: JSON.stringify({ entries, groups }) };
     }
     /** Sends the roster as a `fleet` request; a failed one is a line in the tab, and the next change tries again. */
     private async sendRoster(client: Client, signal: AbortSignal): Promise<void> {
@@ -1263,9 +1285,10 @@ class A2AAgent implements FleetAgent {
     }
     /**
      * A message of the agent; `to` — the agent of the fleet it is for, when it
-     * is not for a person, and `task` — when it gives that agent a task.
+     * is not for a person, `group` — the group it is posted to, and `task` —
+     * when it gives that agent a task.
      */
-    private showMessage(message: Message, to?: string, task?: { readonly deadline?: string }): void {
+    private showMessage(message: Message, said: Addressed = {}): void {
         const id = messageIdOf(message);
         if (this.shown.has(id)) {
             return;
@@ -1273,7 +1296,7 @@ class A2AAgent implements FleetAgent {
         this.shown.add(id);
         const text = partsText(message.parts);
         if (text !== '') {
-            this.events.emit({ type: 'message', role: 'agent', messageId: id, text, append: false, ...addressee(id, to, task) });
+            this.events.emit({ type: 'message', role: 'agent', messageId: id, text, append: false, ...addressee(id, said) });
         }
     }
     private showArtifact(taskId: string, artifactId: string, parts: readonly Part[], append: boolean): void {
@@ -1304,10 +1327,10 @@ class A2AAgent implements FleetAgent {
         const task = this.task;
         return options.from === undefined && task !== undefined && INTERRUPTED_STATES.includes(task.state) ? task.id : '';
     }
-    /** The text as the agent gets it: an agent without the inbox is told the sender in front of it. */
+    /** The text as the agent gets it: an agent without the inbox is told the sender and the group in front of it. */
     private toldText(text: string, options: SendOptions): string {
         const body = composeText(text, options, this.agentId);
-        return options.from === undefined || this.card?.inbox === true ? body : `[from ${options.from}] ${body}`;
+        return this.card?.inbox === true ? body : markedText(body, options);
     }
     private setStatus(status: AgentStatus, reason?: string): void {
         if (status === this.currentStatus && reason === this.currentReason) {
@@ -1401,11 +1424,31 @@ function messageIdOf(message: Message): string {
     return message.messageId || randomUUID();
 }
 /** Who a message of the agent is for, when not for a person, and the task it gives that agent. */
-function addressee(id: string, to?: string, task?: { readonly deadline?: string }): Pick<AgentEvent & { type: 'message' }, 'to' | 'delegation'> {
+/** Where a message of the agent goes, as the inbox says it: an agent, with the task it gives, or a group. */
+type Addressed = Pick<SaidParams, 'to' | 'group' | 'task'>;
+function addressee(id: string, { to, group, task }: Addressed): Pick<AgentEvent & { type: 'message' }, 'to' | 'group' | 'delegation'> {
     if (to === undefined) {
-        return {};
+        return group === undefined ? {} : { group };
     }
     return task === undefined ? { to } : { to, delegation: { id, ...task } };
+}
+/**
+ * Why a message of the agent's own goes nowhere: it names both an agent and
+ * a group, or gives a group a task — a task has one doer (docs/groups.md).
+ * Nothing when it is addressed as it should be.
+ */
+function misaddressed(said: Addressed): string | undefined {
+    return namesBoth(said) ?? tasksAGroup(said);
+}
+function namesBoth({ to, group }: Addressed): string | undefined {
+    return to !== undefined && group !== undefined
+        ? `it names both "to" ("${to}") and "group" ("${group}"); a message goes to an agent or to a group, not both`
+        : undefined;
+}
+function tasksAGroup({ group, task }: Addressed): string | undefined {
+    return group !== undefined && task !== undefined
+        ? `a task goes to one agent: "task" goes with "to", not with "group" ("${group}")`
+        : undefined;
 }
 /** Waits, or stops waiting as soon as the signal is aborted. */
 function pause(ms: number, signal: AbortSignal): Promise<void> {

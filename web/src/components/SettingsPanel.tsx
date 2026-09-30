@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import type { AgentConfig, AgentSummary, FleetInfo } from '../../../src/dashboard-protocol.js';
+import type { AgentConfig, AgentSummary, FleetInfo, GroupSummary } from '../../../src/dashboard-protocol.js';
 import { fromConfig, newDraft } from '../agent-draft.js';
 import type { Draft } from '../agent-draft.js';
 import { api } from '../api.js';
 import { AgentForm } from './AgentForm.js';
+import { AnswerDeliverySection } from './AnswerDelivery.js';
 import { ConnectionHealthView } from './ConnectionHealth.js';
+import { GroupEditor, GroupList } from './GroupSettings.js';
+import type { GroupEditing } from './GroupSettings.js';
 import { NotificationSettingsSection } from './NotificationSettings.js';
 import type { BrowserNotify } from './NotificationSettings.js';
 import { LanguageSection } from './LanguageSection.js';
@@ -16,15 +19,20 @@ import type { Messages } from '../i18n/en.js';
 type SettingsPanelProps = {
     /** The fleet as the socket says it, with live statuses. */
     readonly agents: readonly AgentSummary[];
+    /** The groups of the fleet, as the socket says them (docs/groups.md). */
+    readonly groups: readonly GroupSummary[];
     /** Notifications of this browser: whether it may show them, and the request for it. */
     readonly notify: BrowserNotify;
     /** Opened by Add agent (#116): at the agents, the first way to add one in focus. */
     readonly atAgents?: boolean;
+    /** Opened by Edit in the tab of a group (#152): at the form of that group. */
+    readonly atGroup?: string | undefined;
 };
-/** What is being edited: nothing, a new agent of a kind, or an agent of the fleet. */
-type Editing =
+/** What is being edited: nothing, a new agent of a kind, an agent of the fleet, or a group. */
+type AgentEditing =
     | { readonly mode: 'new'; readonly kind: 'local' | 'remote' }
     | { readonly mode: 'edit'; readonly id: string };
+type Editing = AgentEditing | GroupEditing;
 /** Where the path of the fleet came from, by its origin, in the words of the page. */
 const SOURCE_TEXTS: { readonly [S in FleetInfo['source']]: (info: FleetInfo, t: Messages) => string } = {
     argument: (_info, t) => t.settings.sourceArgument,
@@ -243,7 +251,7 @@ function ManifestLoading({ error, onDone }: { readonly error: string | undefined
     );
 }
 /** Reads the manifest of the agent being changed, then shows the form with it. */
-function AgentEditor({ editing, onDone }: { readonly editing: Editing; readonly onDone: () => void }) {
+function AgentEditor({ editing, onDone }: { readonly editing: AgentEditing; readonly onDone: () => void }) {
     const [draft, setDraft] = useState<Draft | undefined>(editing.mode === 'new' ? newDraft(editing.kind) : undefined);
     const [error, setError] = useState<string>();
     const t = useT();
@@ -296,15 +304,18 @@ function AgentList({ agents, onEditing, atAgents }: AgentListProps) {
         </div>
     );
 }
-/** Every section of the settings, the language of the page last. */
-function SettingsSections({ agents, onEditing, notify, atAgents }: AgentListProps & { readonly notify: BrowserNotify }) {
+type SectionsProps = AgentListProps & { readonly groups: readonly GroupSummary[]; readonly notify: BrowserNotify };
+/** Every section of the settings, the groups next to the agents, the language of the page last. */
+function SettingsSections({ agents, groups, onEditing, notify, atAgents }: SectionsProps) {
     return (
         <>
             <SshConnect />
             <FleetDirectory />
             <AgentList agents={agents} onEditing={onEditing} atAgents={atAgents} />
+            <GroupList groups={groups} agents={agents} onEditing={onEditing} />
             <NotificationSettingsSection notify={notify} />
             <AdminConfirm />
+            <AnswerDeliverySection />
             <LanguageSection />
         </>
     );
@@ -314,16 +325,23 @@ function SettingsSections({ agents, onEditing, notify, atAgents }: AgentListProp
  * removed, started and stopped. Everything is written to the agent
  * directories, so the files stay the truth and can still be edited by hand.
  */
-function SettingsPanel({ agents, notify, atAgents = false }: SettingsPanelProps) {
-    const [editing, setEditing] = useState<Editing>();
+function SettingsPanel({ agents, groups, notify, atAgents = false, atGroup }: SettingsPanelProps) {
+    const [editing, setEditing] = useState<Editing | undefined>(atGroup === undefined ? undefined : { mode: 'edit-group', id: atGroup });
     const { settings } = useT();
     return (
         <section className="settings" aria-label={settings.label}>
             <h1>{settings.title}</h1>
             {editing === undefined
-                ? <SettingsSections agents={agents} onEditing={setEditing} notify={notify} atAgents={atAgents} />
-                : <AgentEditor editing={editing} onDone={() => setEditing(undefined)} />}
+                ? <SettingsSections agents={agents} groups={groups} onEditing={setEditing} notify={notify} atAgents={atAgents} />
+                : <Editor editing={editing} agents={agents} onDone={() => setEditing(undefined)} />}
         </section>
     );
+}
+/** The form of what is being edited: an agent, or a group. */
+function Editor({ editing, agents, onDone }: { readonly editing: Editing; readonly agents: readonly AgentSummary[]; readonly onDone: () => void }) {
+    if (editing.mode === 'new-group' || editing.mode === 'edit-group') {
+        return <GroupEditor editing={editing} agents={agents} onDone={onDone} />;
+    }
+    return <AgentEditor editing={editing} onDone={onDone} />;
 }
 export { SettingsPanel };

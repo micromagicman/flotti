@@ -203,7 +203,7 @@ describe('connection health: where it shows', () => {
         deepStrictEqual(lines.map((line) => line.split(/\s{2,}/)), [['ID', 'TYPE', 'HARNESS', 'STATUS'], ['builder', 'local', 'codex', 'idle']]);
     });
     it('the page takes the health the server sends, without reloading the fleet', () => {
-        const withFleet = fleetReducer(initialState, { type: 'server', message: { type: 'fleet', agents: [{ ...agents[1] as AgentSummary, health: { reconnects: 0, reconnectsLastHour: 0, poor: [] } }] } });
+        const withFleet = fleetReducer(initialState, { type: 'server', message: { type: 'fleet', agents: [{ ...agents[1] as AgentSummary, health: { reconnects: 0, reconnectsLastHour: 0, poor: [] } }], groups: [] } });
         const changed = fleetReducer(withFleet, { type: 'server', message: { type: 'health', agentId: 'relay', health } });
         deepStrictEqual(changed.agents[0]?.health, health);
         strictEqual(changed.feeds, withFleet.feeds, 'the feeds stay as they were');

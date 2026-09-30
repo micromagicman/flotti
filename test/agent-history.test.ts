@@ -13,7 +13,7 @@ const workspace = mkdtempSync(join(tmpdir(), 'flotti-history-'));
 after(() => rmSync(workspace, { recursive: true, force: true }));
 let made = 0;
 /** A fleet of fake agents whose directories are real, so their history has somewhere to go. */
-function fleetOnDisk(...ids: string[]): { fleet: Fleet; directory: (id: string) => string } {
+function fleetOnDisk(...ids: string[]): { fleet: Fleet; directory: (id: string) => string; groupDirectory: string } {
     const root = join(workspace, `fleet-${++made}`);
     const { fleet } = fakeFleet(...ids);
     const agents = fleet.agents.map((agent) => {
@@ -21,7 +21,10 @@ function fleetOnDisk(...ids: string[]): { fleet: Fleet; directory: (id: string) 
         mkdirSync(directory, { recursive: true });
         return { ...agent, directory, manifestPath: join(directory, 'agent.json') };
     });
-    return { fleet: { ...fleet, location: { path: root, source: 'argument' }, agents }, directory: (id) => join(root, 'local', id) };
+    const groupDirectory = join(root, 'groups', 'everyone');
+    mkdirSync(groupDirectory, { recursive: true });
+    const groups = fleet.groups.map((group) => ({ ...group, directory: groupDirectory, filePath: join(groupDirectory, 'group.json') }));
+    return { fleet: { ...fleet, location: { path: root, source: 'argument' }, agents, groups }, directory: (id) => join(root, 'local', id), groupDirectory };
 }
 /** One run of flotti over the fleet: fresh fakes each time, as after a restart. */
 function run(fleet: Fleet, options: SupervisorOptions = {}) {
@@ -160,4 +163,68 @@ test('a message that waited in line when flotti stopped is said to be dropped, n
     await second.supervisor.send('a', 'again');
     const after = second.supervisor.history('a').map((event) => event.seq);
     deepStrictEqual(after, after.map((_, index) => index + 1), 'numbers go on with no gap and no repeat');
+});
+/** Waits for the condition, a little at a time; fails once two seconds are up. */
+async function until(condition: () => boolean): Promise<void> {
+    const deadline = Date.now() + 2_000;
+    while (!condition()) {
+        if (Date.now() > deadline) {
+            throw new Error('the condition did not come true in time');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+}
+test('the messages of a group are there again after flotti is started anew, and are numbered on (docs/groups.md)', async () => {
+    const { fleet, groupDirectory } = fleetOnDisk('a', 'b');
+    const first = run(fleet);
+    await first.supervisor.start();
+    await first.supervisor.sendToGroup('everyone', 'hello');
+    await until(() => first.supervisor.groupHistory('everyone').length === 3);
+    await first.supervisor.stop();
+    const before = first.supervisor.groupHistory('everyone');
+    deepStrictEqual(before.map((message) => [message.seq, message.from, message.text]), [[1, undefined, 'hello'], [2, 'a', 'you said: hello'], [3, 'b', 'you said: hello']]);
+    const second = run(fleet);
+    deepStrictEqual(second.supervisor.groupHistory('everyone'), before, 'the messages of the last run, numbers and all');
+    await second.supervisor.start();
+    const again = await second.supervisor.sendToGroup('everyone', 'again');
+    strictEqual(again.seq, 4, 'numbers go on from where they stopped');
+    await until(() => second.supervisor.groupHistory('everyone').length === 6);
+    const onDisk = readFileSync(join(groupDirectory, HISTORY_FILE), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { seq: number; groupId?: string });
+    deepStrictEqual(onDisk.map((line) => line.seq), [1, 2, 3, 4, 5, 6]);
+    strictEqual(onDisk[0]?.groupId, 'everyone');
+    deepStrictEqual(second.warnings, []);
+    await second.supervisor.stop();
+});
+test('how a member in line took a group message is in the file once known, and there again after a restart (#162)', async () => {
+    const { fleet, groupDirectory } = fleetOnDisk('a', 'b');
+    const first = run(fleet);
+    await first.supervisor.start();
+    const b = first.fakes.get('b');
+    if (b === undefined) {
+        throw new Error('no fake for b');
+    }
+    b.busy = true;
+    const posted = await first.supervisor.sendToGroup('everyone', 'hello');
+    deepStrictEqual(posted.deliveries, [{ agentId: 'a', result: 'taken' }, { agentId: 'b', result: 'queued' }]);
+    // a answers; its answer is posted as the second line, in line for b as well.
+    await until(() => first.supervisor.groupHistory('everyone').length === 2);
+    b.release();
+    await until(() => first.supervisor.groupHistory('everyone').length === 3 && first.supervisor.groupHistory('everyone').every((message) => message.deliveries.every((delivery) => delivery.result === 'taken')));
+    await first.supervisor.stop();
+    const before = first.supervisor.groupHistory('everyone');
+    deepStrictEqual(before[0]?.deliveries, [{ agentId: 'a', result: 'taken' }, { agentId: 'b', result: 'taken' }]);
+    const onDisk = readFileSync(join(groupDirectory, HISTORY_FILE), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { seq: number; deliveries: { result: string }[] });
+    deepStrictEqual(onDisk.filter((line) => line.seq === 1).map((line) => line.deliveries.map((delivery) => delivery.result)), [['taken', 'queued'], ['taken', 'taken']], 'the line is written again with the outcome, after the first');
+    const second = run(fleet);
+    deepStrictEqual(second.supervisor.groupHistory('everyone'), before, 'the later line of a number is the one that counts');
+    deepStrictEqual(second.warnings, []);
+});
+test('without persistHistory the messages of a group stay in memory', async () => {
+    const { fleet, groupDirectory } = fleetOnDisk('a');
+    const { supervisor } = run(fleet, { persistHistory: false });
+    await supervisor.start();
+    await supervisor.sendToGroup('everyone', 'hello');
+    strictEqual(supervisor.groupHistory('everyone').length >= 1, true);
+    strictEqual(existsSync(join(groupDirectory, HISTORY_FILE)), false);
+    await supervisor.stop();
 });

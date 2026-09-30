@@ -1,10 +1,11 @@
-import { deepStrictEqual, rejects, strictEqual, throws } from 'node:assert/strict';
+import { deepStrictEqual, ok, rejects, strictEqual, throws } from 'node:assert/strict';
 import { test } from 'node:test';
-import { Supervisor, UnknownAgentError } from '../src/supervisor.js';
+import { Supervisor, UnknownAgentError, UnknownGroupError } from '../src/supervisor.js';
 import type { SupervisorNotice } from '../src/supervisor.js';
 import type { ConnectionHealth } from '../src/connection-health.js';
+import type { Delivery } from '../src/dashboard-protocol.js';
 import type { Agent, RemoteAgent } from '../src/types.js';
-import { FakeFleetAgent, fakeFleet } from './fake-fleet-agent.js';
+import { FakeFleetAgent, fakeFleet, group } from './fake-fleet-agent.js';
 function supervised(...ids: string[]) {
     const { fleet, fakes, createAgent } = fakeFleet(...ids);
     const supervisor = new Supervisor(fleet, { createAgent, queuedAfterMs: 50, historyLimit: 5 });
@@ -290,6 +291,55 @@ test('a message to another agent that cannot be delivered is a line in the tab o
     deepStrictEqual(history.map((event) => event.seq), [2, 3, 4, 5, 6, 7, 8], 'the lines take numbers of their own, and the events after them go on');
     deepStrictEqual(a.calls, ['start'], 'the sender is not sent anything');
 });
+test('a message to an agent in no group with the sender is refused at the door: a line in the tab of the sender says why (docs/groups.md)', async () => {
+    const { fleet, fakes, createAgent } = fakeFleet('a', 'b', 'c');
+    const supervisor = new Supervisor({ ...fleet, groups: [group('pair', ['a', 'b'])] }, { createAgent });
+    await supervisor.start();
+    const a = fake(fakes.get('a'));
+    a.emit({ type: 'message', role: 'agent', messageId: 'm1', text: 'hi', append: false, to: 'c' });
+    a.emit({ type: 'message', role: 'agent', messageId: 'm2', text: 'hi', append: false, to: 'b' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(supervisor.history('a').flatMap((event) => (event.type === 'log' ? [event.text] : [])), [
+        'could not deliver the message to "c": "c" is not in a group with "a"'
+    ]);
+    deepStrictEqual(fake(fakes.get('c')).calls, ['start'], 'the agent out of sight gets nothing');
+    deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send hi from a'], 'a peer gets it');
+    ok(supervisor.canReach('a', 'b') && !supervisor.canReach('a', 'c') && !supervisor.canReach('c', 'a'));
+});
+test('the answer at the end of a turn goes back even when the two no longer share a group; a new message does not', async () => {
+    const { fleet, fakes, createAgent } = fakeFleet('a', 'b');
+    const supervisor = new Supervisor(fleet, { createAgent });
+    await supervisor.start();
+    const b = fake(fakes.get('b'));
+    b.slow = true;
+    await supervisor.send('b', 'rerun the tests', { from: 'a' });
+    supervisor.replaceGroup(group('everyone', ['a']));
+    b.finish('all green');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(fake(fakes.get('a')).calls, ['start', 'send all green from b'], 'the exchange was allowed on its way in');
+    b.emit({ type: 'message', role: 'agent', messageId: 'm1', text: 'one more thing', append: false, to: 'a' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(fake(fakes.get('a')).calls, ['start', 'send all green from b'], 'a message on purpose is a new exchange');
+    deepStrictEqual(supervisor.history('b').flatMap((event) => (event.type === 'log' ? [event.text] : [])), [
+        'could not deliver the message to "a": "a" is not in a group with "b"'
+    ]);
+});
+test('peers and groupsOf: what an agent sees of the fleet, and nothing for an agent in no group with anyone', async () => {
+    const { fleet, createAgent } = fakeFleet('eva', 'loner', 'reviewer', 'writer');
+    const groups = [group('docs', ['writer', 'eva']), group('release', ['eva', 'reviewer', 'gone'], { name: 'Release', topic: 'Ship it.' })];
+    const supervisor = new Supervisor({ ...fleet, groups }, { createAgent });
+    await supervisor.start();
+    deepStrictEqual(supervisor.peers('eva').map((agent) => [agent.id, agent.groups]), [['eva', ['docs', 'release']], ['reviewer', ['release']], ['writer', ['docs']]]);
+    deepStrictEqual(supervisor.peers('writer').map((agent) => [agent.id, agent.groups]), [['eva', ['docs']], ['writer', ['docs']]]);
+    deepStrictEqual(supervisor.peers('loner'), [], 'in no group: not even itself, so the fleet is not taken for empty');
+    supervisor.addGroup(group('solo', ['loner']));
+    deepStrictEqual(supervisor.peers('loner'), [], 'alone in a group: the same');
+    deepStrictEqual(supervisor.groupsOf('eva'), [
+        { id: 'docs', name: 'docs', members: [{ id: 'writer', name: 'WRITER' }, { id: 'eva', name: 'EVA' }] },
+        { id: 'release', name: 'Release', topic: 'Ship it.', members: [{ id: 'eva', name: 'EVA' }, { id: 'reviewer', name: 'REVIEWER' }] }
+    ], 'a member not in the fleet is not listed to the agents');
+    deepStrictEqual(supervisor.groupsOf('reviewer').map((found) => found.id), ['release']);
+});
 test('passes on the health of a connection, in the summary and as it changes', () => {
     const { fleet, fakes, createAgent } = fakeFleet('relay', 'plain');
     let current: ConnectionHealth = { reconnects: 0, reconnectsLastHour: 0, poor: [] };
@@ -360,4 +410,133 @@ test('a message sent again names the one it replaces, in its events', async () =
     deepStrictEqual(fake(fakes.get('a')).options.map((options) => options.retryOf), ['lost-1']);
     const message = supervisor.history('a').find((event) => event.type === 'message' && event.role === 'user');
     strictEqual(message?.type === 'message' ? message.retryOf : undefined, 'lost-1');
+});
+/** Waits for the condition, a little at a time; fails once two seconds are up. */
+async function until(condition: () => boolean): Promise<void> {
+    const deadline = Date.now() + 2_000;
+    while (!condition()) {
+        if (Date.now() > deadline) {
+            throw new Error('the condition did not come true in time');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+}
+/** The lines of the group as `[from, text, turnAnswer]`. */
+function lines(supervisor: Supervisor, groupId: string): [string | undefined, string, true | undefined][] {
+    return supervisor.groupHistory(groupId).map((message) => [message.from, message.text, message.turnAnswer]);
+}
+test('a message of a person to a group reaches every member on its own, and is one line of the history with how each took it (docs/groups.md)', async () => {
+    const { supervisor, fakes, notices } = supervised('a', 'b', 'c', 'd');
+    await supervisor.start();
+    fake(fakes.get('c')).busy = true;
+    fake(fakes.get('d')).broken = true;
+    const posted = await supervisor.sendToGroup('everyone', 'hello');
+    deepStrictEqual(posted.deliveries, [
+        { agentId: 'a', result: 'taken' },
+        { agentId: 'b', result: 'taken' },
+        { agentId: 'c', result: 'queued' },
+        { agentId: 'd', result: 'failed', error: 'd is broken' }
+    ]);
+    deepStrictEqual([posted.groupId, posted.seq, posted.from, posted.text, posted.turnAnswer], ['everyone', 1, undefined, 'hello', undefined]);
+    ok(posted.messageId !== '' && typeof posted.time === 'string');
+    const got = supervisor.history('a').find((event) => event.type === 'message' && event.role === 'user');
+    deepStrictEqual(got?.type === 'message' ? [got.text, got.from, got.group] : undefined, ['hello', undefined, 'everyone'], 'the tab of a member shows the group');
+    deepStrictEqual(fake(fakes.get('a')).options.map((options) => [options.group, options.from]), [['everyone', undefined]]);
+    deepStrictEqual(notices.find((notice) => notice.type === 'group-message'), { type: 'group-message', message: posted });
+    throws(() => supervisor.groupHistory('nowhere'), UnknownGroupError);
+    await rejects(supervisor.sendToGroup('nowhere', 'hi'), UnknownGroupError);
+});
+/** The deliveries of the line numbered `seq` as every `group-message` notice of the socket showed them, in order. */
+function noticedDeliveries(notices: readonly SupervisorNotice[], seq: number): Delivery[][] {
+    return notices.flatMap((notice) => (notice.type === 'group-message' && notice.message.seq === seq ? [[...notice.message.deliveries]] : []));
+}
+test('a member in line for a group message: the line of the history and the socket learn how it ended — taken, or failed with why (#162)', async () => {
+    const { supervisor, fakes, notices } = supervised('a', 'b', 'c');
+    await supervisor.start();
+    const b = fake(fakes.get('b'));
+    const c = fake(fakes.get('c'));
+    b.busy = true;
+    c.busy = true;
+    const posted = await supervisor.sendToGroup('everyone', 'hello');
+    deepStrictEqual(posted.deliveries, [{ agentId: 'a', result: 'taken' }, { agentId: 'b', result: 'queued' }, { agentId: 'c', result: 'queued' }]);
+    b.release();
+    await until(() => supervisor.groupHistory('everyone')[0]?.deliveries[1]?.result === 'taken');
+    const taken: Delivery[] = [{ agentId: 'a', result: 'taken' }, { agentId: 'b', result: 'taken' }, { agentId: 'c', result: 'queued' }];
+    deepStrictEqual(supervisor.groupHistory('everyone')[0]?.deliveries, taken, 'the line says b took it; a, taken at once, is as it was');
+    deepStrictEqual(noticedDeliveries(notices, 1), [posted.deliveries, taken], 'the line went out again with the outcome');
+    deepStrictEqual(notices.filter((notice) => notice.type === 'delivery').map((notice) => notice.delivery), [{ agentId: 'b', result: 'taken' }], 'the notice of the agent is as before');
+    const inLineForC = c.options[0]?.messageId ?? '';
+    strictEqual(supervisor.withdraw('c', inLineForC), true);
+    await until(() => supervisor.groupHistory('everyone')[0]?.deliveries[2]?.result === 'failed');
+    const failedC: Delivery = { agentId: 'c', result: 'failed', error: 'the message was taken out of the line' };
+    deepStrictEqual(supervisor.groupHistory('everyone')[0]?.deliveries[2], failedC, 'the line says why c never got it');
+    deepStrictEqual(noticedDeliveries(notices, 1).at(-1), [taken[0], taken[1], failedC]);
+    strictEqual(noticedDeliveries(notices, 1).length, 3, 'one notice per outcome, and none for the member that took it at once');
+    ok(supervisor.groupHistory('everyone').every((message) => message.seq !== 1 || message.messageId === posted.messageId), 'the line is corrected, not added');
+});
+test('what a member answers to a group message is posted to the group once, as an answer, and the turns on it post nothing back', async () => {
+    const { supervisor, fakes } = supervised('a', 'b', 'c');
+    await supervisor.start();
+    fake(fakes.get('c')).busy = true;
+    await supervisor.sendToGroup('everyone', 'hello');
+    await until(() => supervisor.groupHistory('everyone').length === 3);
+    deepStrictEqual(lines(supervisor, 'everyone'), [
+        [undefined, 'hello', undefined],
+        ['a', 'you said: hello', true],
+        ['b', 'you said: hello', true]
+    ]);
+    const a = fake(fakes.get('a'));
+    deepStrictEqual(a.calls, ['start', 'send hello', 'send you said: hello from b'], 'the answer of b reaches a once; a answers it in its tab and posts nothing');
+    deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send hello', 'send you said: hello from a']);
+    const answer = a.options[1];
+    const inTabOfB = fake(fakes.get('b')).options[0]?.messageId;
+    ok(inTabOfB !== undefined && inTabOfB !== a.options[0]?.messageId, 'each member got the message under a messageId of its own tab');
+    deepStrictEqual([answer?.from, answer?.group, answer?.turnAnswer, answer?.replyTo], ['b', 'everyone', true, { agentId: 'b', messageId: inTabOfB, text: 'hello' }]);
+    deepStrictEqual(supervisor.groupHistory('everyone')[1]?.deliveries, [
+        { agentId: 'b', result: 'taken' },
+        { agentId: 'c', result: 'queued' }
+    ], 'the answer is delivered to the other members, not to the one who answered');
+    deepStrictEqual(supervisor.groupHistory('everyone', 2).map((message) => message.seq), [3], 'the history is asked for after a number');
+});
+test('what an agent says to a group goes to every other member, from the sender, and the fleet tools are told of each that took it', async () => {
+    const told: string[] = [];
+    const { fleet, fakes, createAgent } = fakeFleet('a', 'b', 'c');
+    const supervisor = new Supervisor(fleet, { createAgent, fleetTools: { access: () => ({ port: 0, token: '' }), delivered: (message) => told.push(`${message.from} -> ${message.to} in ${message.group ?? '-'}`) } });
+    await supervisor.start();
+    const a = fake(fakes.get('a'));
+    a.emit({ type: 'message', role: 'agent', messageId: 'm1', text: 'ship it', append: false, group: 'everyone' });
+    await until(() => supervisor.groupHistory('everyone').length === 3);
+    deepStrictEqual(lines(supervisor, 'everyone'), [['a', 'ship it', undefined], ['b', 'you said: ship it', true], ['c', 'you said: ship it', true]]);
+    deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send ship it from a', 'send you said: ship it from c']);
+    deepStrictEqual(fake(fakes.get('b')).options[0]?.group, 'everyone');
+    deepStrictEqual(a.calls, ['start', 'send you said: ship it from b', 'send you said: ship it from c'], 'the sender gets the answers, not its own message');
+    deepStrictEqual(told.sort(), ['a -> b in everyone', 'a -> c in everyone', 'b -> a in everyone', 'b -> c in everyone', 'c -> a in everyone', 'c -> b in everyone']);
+});
+test('a message to a group the agent is not in, or to no group, is a line in the tab of the sender saying why; the tools are told the real reason', async () => {
+    const { fleet, fakes, createAgent } = fakeFleet('a', 'b', 'c');
+    const supervisor = new Supervisor({ ...fleet, groups: [group('pair', ['a', 'b'])] }, { createAgent });
+    await supervisor.start();
+    const c = fake(fakes.get('c'));
+    c.emit({ type: 'message', role: 'agent', messageId: 'm1', text: 'hi', append: false, group: 'pair' });
+    c.emit({ type: 'message', role: 'agent', messageId: 'm2', text: 'hi', append: false, group: 'nowhere' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(supervisor.history('c').flatMap((event) => (event.type === 'log' ? [event.text] : [])), [
+        'could not post the message to group "pair": "c" is not in group "pair"',
+        'could not post the message to group "nowhere": there is no such group in the fleet'
+    ]);
+    deepStrictEqual(fake(fakes.get('a')).calls, ['start'], 'the members get nothing');
+    deepStrictEqual(supervisor.groupHistory('pair'), []);
+    ok(supervisor.mayPost('a', 'pair') && !supervisor.mayPost('c', 'pair') && !supervisor.mayPost('a', 'nowhere'));
+    deepStrictEqual(supervisor.history('c').filter((event) => event.type === 'log').length, 3, 'mayPost says why in the tab, as mayWrite does; an unknown group says nothing');
+});
+test('a group made again in one run numbers its messages on; the numbers of another fleet start anew', async () => {
+    const { supervisor, fakes } = supervised('a', 'b');
+    await supervisor.start();
+    fake(fakes.get('b')).slow = true;
+    fake(fakes.get('a')).slow = true;
+    strictEqual((await supervisor.sendToGroup('everyone', 'one')).seq, 1);
+    supervisor.removeGroup('everyone');
+    supervisor.addGroup(group('everyone', ['a', 'b']));
+    deepStrictEqual(supervisor.groupHistory('everyone'), [], 'the messages of the group that went are not the new group\'s');
+    strictEqual((await supervisor.sendToGroup('everyone', 'two')).seq, 2, 'a page that saw 1 is not shown a second 1');
 });

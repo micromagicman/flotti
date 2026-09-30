@@ -1,11 +1,14 @@
 import type {
     AdminSettings,
+    AnswerDeliverySettings,
     AgentConfig,
     AgentSummary,
     BroadcastResponse,
     Delivery,
     ErrorResponse,
     FleetInfo,
+    GroupConfig,
+    GroupSummary,
     MemoryBank,
     MemoryNote,
     NotificationSettings,
@@ -35,12 +38,18 @@ const post = <T>(path: string, body: object = {}): Promise<T> => call<T>('POST',
 function agentPath(agentId: string, action?: string): string {
     return `/api/agents/${encodeURIComponent(agentId)}${action === undefined ? '' : `/${action}`}`;
 }
+function groupPath(groupId: string): string {
+    return `/api/groups/${encodeURIComponent(groupId)}`;
+}
 const api = {
     /** A message to one agent; `extras` make it a reply, or a forward. */
     send: (agentId: string, text: string, extras: Omit<SendRequest, 'text' | 'agents'> = {}): Promise<Delivery> =>
         post(agentPath(agentId, 'messages'), { text, ...extras }),
     broadcast: (text: string, agents: readonly string[]): Promise<BroadcastResponse> =>
         post('/api/broadcast', { text, agents }),
+    /** A message to every member of a group (docs/groups.md); `extras` make it a reply, or a forward. */
+    sendToGroup: (groupId: string, text: string, extras: Omit<SendRequest, 'text' | 'agents' | 'retryOf'> = {}): Promise<BroadcastResponse> =>
+        post(`/api/groups/${encodeURIComponent(groupId)}/messages`, { text, ...extras }),
     /** Takes a message that waits in line back out of it. */
     withdraw: (agentId: string, messageId: string): Promise<object> =>
         call('DELETE', agentPath(agentId, `queue/${encodeURIComponent(messageId)}`)),
@@ -64,7 +73,14 @@ const api = {
         post(`/api/admin-actions/${encodeURIComponent(actionId)}`, { allow }),
     adminSettings: (): Promise<AdminSettings> => call('GET', '/api/admin-settings'),
     setAdminSettings: (settings: AdminSettings): Promise<AdminSettings> => call('PUT', '/api/admin-settings', settings),
+    answerDelivery: (): Promise<AnswerDeliverySettings> => call('GET', '/api/answer-delivery'),
+    setAnswerDelivery: (settings: AnswerDeliverySettings): Promise<AnswerDeliverySettings> => call('PUT', '/api/answer-delivery', settings),
     fleet: (): Promise<FleetInfo> => call('GET', '/api/fleet'),
+    /** The groups of the fleet (docs/groups.md): their file as it says it, made, changed and removed like agents. */
+    groupConfig: (groupId: string): Promise<GroupConfig> => call('GET', groupPath(groupId)),
+    createGroup: (config: GroupConfig): Promise<GroupSummary> => post('/api/groups', config),
+    updateGroup: (config: GroupConfig): Promise<GroupSummary> => call('PUT', groupPath(config.id), config),
+    removeGroup: (groupId: string): Promise<{ readonly trash?: string }> => call('DELETE', groupPath(groupId)),
     switchFleet: (path: string): Promise<FleetInfo> => call('PUT', '/api/fleet', { path }),
     notifications: (): Promise<NotificationSettings> => call('GET', '/api/notifications'),
     changeNotifications: (change: NotificationSettingsChange): Promise<NotificationSettings> => call('PUT', '/api/notifications', change),

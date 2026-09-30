@@ -2,7 +2,7 @@ import { deepStrictEqual, match, ok, strictEqual } from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { AgentEvent } from '../src/agent-events.js';
 import { Supervisor } from '../src/supervisor.js';
-import { FakeFleetAgent, fakeFleet } from './fake-fleet-agent.js';
+import { FakeFleetAgent, fakeFleet, group } from './fake-fleet-agent.js';
 import { eventually } from './local-agent-helpers.js';
 /** A fleet of fakes where `boss` is an administrator and the others are not. */
 function adminFleet(options: { confirm?: boolean } = {}) {
@@ -56,6 +56,20 @@ describe('administrators of the fleet: rights', () => {
         const outcome = await supervisor.administer('boss', 'restart', 'ghost');
         strictEqual(outcome.ok, false);
         match(outcome.text, /no agent "ghost"/);
+    });
+    it('acts on the agents it sees — those in a group with it — and on itself; any other is refused as no agent (docs/groups.md)', async () => {
+        const { fleet, fakes, createAgent } = fakeFleet('boss', 'worker', 'other');
+        const agents = fleet.agents.map((agent) => (agent.id === 'boss' ? { ...agent, admin: true as const } : agent));
+        const supervisor = new Supervisor({ ...fleet, agents, groups: [group('team', ['boss', 'worker'])] }, { createAgent });
+        await supervisor.start();
+        const outOfSight = await supervisor.administer('boss', 'restart', 'other');
+        strictEqual(outOfSight.ok, false);
+        strictEqual(outOfSight.text, 'Refused: there is no agent "other" among the agents you can write to; list_agents names them.');
+        deepStrictEqual(fakes.get('other')?.calls, ['start']);
+        deepStrictEqual(adminLines(supervisor, 'other'), []);
+        deepStrictEqual(supervisor.history('boss').flatMap((event) => (event.type === 'log' ? [event.text] : [])), ['"other" is not in a group with "boss"']);
+        strictEqual((await supervisor.administer('boss', 'restart', 'worker')).ok, true);
+        strictEqual((await supervisor.administer('boss', 'clear-context', 'boss')).ok, true, 'itself, in no group with itself');
     });
 });
 describe('administrators of the fleet: the actions', () => {

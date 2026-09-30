@@ -19,7 +19,12 @@ async function toolsFor(banks: Map<string, string>): Promise<FleetMcpServer> {
     servers.push(server);
     server.serve({
         agents: (): AgentSummary[] => [],
+        peers: () => [],
+        groupsOf: () => [],
+        mayWrite: () => false,
+        mayPost: () => false,
         send: () => Promise.reject(new Error('no messages here')),
+        sendToGroup: () => Promise.reject(new Error('no messages here')),
         delegate: () => Promise.reject(new Error('no tasks here')),
         cancelDelegation: () => {
             throw new Error('no tasks here');
@@ -169,7 +174,7 @@ describe('memory status (#101): when there is none', { timeout: 30_000 }, () => 
             kind: 'remote', id: 'far', name: 'far', directory: '/nowhere', manifestPath: '/nowhere/agent.json',
             url: 'https://example.org/a2a', protocol: 'a2a', auth: { type: 'none' }
         } as unknown as RemoteAgent;
-        const fleet = { location: { directory: '/nowhere', source: 'flag' }, exists: true, agents: [local.agent.agent, remote] } as unknown as Fleet;
+        const fleet = { location: { directory: '/nowhere', source: 'flag' }, exists: true, agents: [local.agent.agent, remote], groups: [] } as unknown as Fleet;
         const supervisor = new Supervisor(fleet, {
             createAgent: (agent) => agent.kind === 'local' ? local.agent : new A2AAgent(agent)
         });

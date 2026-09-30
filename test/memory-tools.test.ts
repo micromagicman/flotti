@@ -22,7 +22,12 @@ async function tools(): Promise<{ server: FleetMcpServer; bank: string; keeper: 
     servers.push(server);
     const fleet: FleetDirectory = {
         agents: (): AgentSummary[] => ['keeper', 'visitor'].map((id) => ({ id, name: id, kind: 'local', status: 'idle' })),
+        peers: () => [],
+        groupsOf: () => [],
+        mayWrite: () => false,
+        mayPost: () => false,
         send: () => Promise.reject(new Error('no messages here')),
+        sendToGroup: () => Promise.reject(new Error('no messages here')),
         delegate: () => Promise.reject(new Error('no tasks here')),
         cancelDelegation: () => {
             throw new Error('no tasks here');

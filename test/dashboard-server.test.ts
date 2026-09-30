@@ -222,6 +222,42 @@ test('without fleet settings the page cannot change the fleet', async () => {
     const { dashboard } = await serve('a');
     strictEqual((await call(dashboard.port, 'GET', '/api/fleet')).status, 404);
     strictEqual((await call(dashboard.port, 'POST', '/api/agents', { kind: 'local', id: 'b', command: 'x' })).status, 404);
+    deepStrictEqual((await call(dashboard.port, 'GET', '/api/groups')).body, [{ id: 'everyone', name: 'everyone', members: ['a'] }], 'the groups are listed all the same');
+    strictEqual((await call(dashboard.port, 'POST', '/api/groups', { id: 'g' })).status, 404);
+});
+test('the settings page lists, adds, reads, changes and removes groups, and the pages learn them with the fleet', async () => {
+    const home = mkdtempSync(join(webRoot, 'home-'));
+    const root = join(home, 'fleet');
+    mkdirSync(join(root, 'groups', 'docs'), { recursive: true });
+    writeFileSync(join(root, 'groups', 'docs', 'group.json'), '{"members": ["a"]}');
+    const env = { HOME: home };
+    const fleet = loadFleet({ argv: ['--fleet', root], env });
+    const supervisor = new Supervisor(fleet, { createAgent: (agent: { id: string }) => new FakeFleetAgent(agent.id) });
+    const settings = new FleetSettings(fleet, supervisor, { env });
+    const dashboard = await startDashboard(supervisor, { port: 0, webRoot, settings });
+    const sockets: WebSocket[] = [];
+    open.push({ dashboard, supervisor, sockets });
+    const { port } = dashboard;
+    const { messages } = await page(port, sockets, {});
+    await eventually(() => messages.length === 1);
+    deepStrictEqual(messages[0], { type: 'fleet', agents: [], groups: [{ id: 'docs', name: 'docs', members: ['a'] }] });
+    const created = await call(port, 'POST', '/api/groups', { id: 'release', name: 'Release', topic: 'Ship it.', members: ['a', 'b'] });
+    deepStrictEqual([created.status, created.body], [201, { id: 'release', name: 'Release', topic: 'Ship it.', members: ['a', 'b'] }]);
+    await eventually(() => messages.some((message) => message.type === 'fleet' && message.groups.length === 2));
+    deepStrictEqual((await call(port, 'GET', '/api/groups')).body, [{ id: 'docs', name: 'docs', members: ['a'] }, created.body]);
+    deepStrictEqual((await call(port, 'GET', '/api/groups/release')).body, created.body);
+    strictEqual((await call(port, 'POST', '/api/groups', { id: 'release' })).status, 409);
+    const broken = await call(port, 'POST', '/api/groups', { id: 'bad', members: 'a' });
+    strictEqual(broken.status, 400);
+    ok(/group\.json: members must be an array of agent ids/.test((broken.body as { error: string }).error), broken.text);
+    const changed = await call(port, 'PUT', '/api/groups/release', { members: ['b'] });
+    deepStrictEqual([changed.status, changed.body], [200, { id: 'release', name: 'release', members: ['b'] }]);
+    const removed = await call(port, 'DELETE', '/api/groups/release', {});
+    strictEqual(removed.status, 200, removed.text);
+    ok(typeof (removed.body as { trash?: string }).trash === 'string');
+    strictEqual((await call(port, 'GET', '/api/groups/release')).status, 404);
+    strictEqual((await call(port, 'PUT', '/api/groups/release', { members: [] })).status, 404);
+    deepStrictEqual((await call(port, 'GET', '/api/groups')).body, [{ id: 'docs', name: 'docs', members: ['a'] }]);
 });
 test('the settings page sets up the notifications, and never gets a secret back', async () => {
     const { dashboard: bare } = await serve('a');
@@ -287,6 +323,26 @@ test('the settings page adds, reads, changes and removes agents, and switches th
     const switched = await call(port, 'PUT', '/api/fleet', { path: '~/other' });
     deepStrictEqual([switched.status, (switched.body as { path: string }).path], [200, join(home, 'other')]);
     strictEqual((await call(port, 'PUT', '/api/fleet', { path: 'relative' })).status, 400);
+});
+test('the settings page chooses how answers reach the tabs (#157): read, changed, and only the two ways taken', async () => {
+    const bare = await serve('a');
+    strictEqual((await call(bare.dashboard.port, 'GET', '/api/answer-delivery')).status, 404);
+    const home = mkdtempSync(join(webRoot, 'home-'));
+    const root = join(home, 'fleet');
+    mkdirSync(root);
+    const env = { HOME: home };
+    const fleet = loadFleet({ argv: ['--fleet', root], env });
+    const supervisor = new Supervisor(fleet, { createAgent: (agent: { id: string }) => new FakeFleetAgent(agent.id) });
+    const settings = new FleetSettings(fleet, supervisor, { env });
+    const dashboard = await startDashboard(supervisor, { port: 0, webRoot, settings });
+    open.push({ dashboard, supervisor, sockets: [] });
+    const { port } = dashboard;
+    deepStrictEqual((await call(port, 'GET', '/api/answer-delivery')).body, { mode: 'streamed' });
+    const changed = await call(port, 'PUT', '/api/answer-delivery', { mode: 'whole' });
+    deepStrictEqual([changed.status, changed.body], [200, { mode: 'whole' }]);
+    deepStrictEqual((await call(port, 'GET', '/api/answer-delivery')).body, { mode: 'whole' });
+    strictEqual((await call(port, 'PUT', '/api/answer-delivery', { mode: 'bit by bit' })).status, 400);
+    deepStrictEqual((await call(port, 'GET', '/api/answer-delivery')).body, { mode: 'whole' });
 });
 test('tells the pages when it goes away', async () => {
     const { dashboard, sockets } = await serve('a');
@@ -356,4 +412,24 @@ test('shows the memory bank of a local agent, read-only, and nothing outside it'
     strictEqual((await call(dashboard.port, 'PUT', '/api/agents/claude/memory/index.md', { text: 'x' })).status, 405);
     const far = await call(dashboard.port, 'GET', '/api/agents/codex/memory');
     deepStrictEqual([far.status, (far.body as { available: boolean }).available], [200, false]);
+});
+test('a message to a group is answered like a broadcast, and is one message of the group on the socket, replayed after a number', async () => {
+    const { dashboard, fake, sockets } = await serve('a', 'b');
+    fake('b').busy = true;
+    const { messages } = await page(dashboard.port, sockets, {});
+    const posted = await call(dashboard.port, 'POST', '/api/groups/everyone/messages', { text: 'hello' });
+    deepStrictEqual([posted.status, posted.body], [200, { deliveries: [{ agentId: 'a', result: 'taken' }, { agentId: 'b', result: 'queued' }] }]);
+    const lines = () => messages.flatMap((message) => (message.type === 'group-message' ? [message.message] : []));
+    await eventually(() => lines().length === 2);
+    deepStrictEqual(lines().map((line) => [line.groupId, line.seq, line.from, line.text, line.turnAnswer]), [
+        ['everyone', 1, undefined, 'hello', undefined],
+        ['everyone', 2, 'a', 'you said: hello', true]
+    ]);
+    deepStrictEqual(lines()[0]?.deliveries, posted.body === undefined ? [] : (posted.body as { deliveries: unknown }).deliveries);
+    strictEqual((await call(dashboard.port, 'POST', '/api/groups/nowhere/messages', { text: 'hello' })).status, 404);
+    strictEqual((await call(dashboard.port, 'POST', '/api/groups/everyone/messages', { text: '' })).status, 400);
+    const later = await page(dashboard.port, sockets, { a: 100, b: 100, '_group:everyone': 1 });
+    await eventually(() => later.messages.some((message) => message.type === 'group-message'));
+    deepStrictEqual(later.messages.flatMap((message) => (message.type === 'group-message' ? [message.message.seq] : [])), [2]);
+    deepStrictEqual(events(later.messages), [], 'the page asked for nothing else');
 });

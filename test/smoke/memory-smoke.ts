@@ -53,7 +53,7 @@ const agent: LocalAgent = {
     skillsDirectory: join(directory, 'skills'),
     memoryDirectory: join(directory, 'memory')
 };
-const fleet = { location: { directory: root, source: 'flag' }, exists: true, agents: [agent] } as unknown as Fleet;
+const fleet = { location: { directory: root, source: 'flag' }, exists: true, agents: [agent], groups: [] } as unknown as Fleet;
 const tools = await FleetMcpServer.start();
 const supervisor = new Supervisor(fleet, { fleetTools: tools });
 tools.serve(supervisor);

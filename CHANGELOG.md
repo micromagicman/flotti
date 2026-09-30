@@ -2,6 +2,126 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-09-30
+
+Groups: agents see and message each other only inside a group, with a Groups section and a tab of
+every group in the dashboard and Settings → Groups; answers reach the dashboard streamed or whole by
+one rule; the sidebar as three tabs; a Storybook of the dashboard; and, from this version, a
+noncommercial license — PolyForm Noncommercial 1.0.0.
+
+### Added
+
+- **Answers reach the dashboard streamed or whole, one rule for every agent, chosen in Settings.**
+  **Answers** in Settings picks how an answer of an agent reaches its tab and the feed of the fleet:
+  piece by piece as it is written — the default, what the tabs did — or whole, once the agent has
+  finished it: at the end of the message, or of the turn when nothing marks the end of the message,
+  with nothing partial shown before. The rule is applied in one place, on the way of every event to
+  the history and the pages, so the chunks of a local agent over ACP and the artifacts of a remote
+  agent over A2A behave alike; what an agent says outside a turn, and what agents send one another,
+  are not held. Saved in `~/.flotti/settings.json` as `answerDelivery`, read and changed at
+  `GET/PUT /api/answer-delivery`; a change holds for the next message, with no restart. The history
+  keeps what the tab got, so a tab reads the same after a reload (#157).
+- **Groups: agents see and message each other only inside a group** — the main feature of 0.6.0
+  ([docs/groups.md](docs/groups.md), #144). A group is a topical conversation — a name, a topic, a set
+  of agents and a history of its own. An agent outside a group does not get its members as peers and
+  cannot write to them; a person is above the groups and sees and reaches everyone, as before. The
+  rule lives in flotti, on every path a message between agents takes, so no agent can get round it;
+  an agent that knows nothing of groups sees fewer peers, that is all. In six steps:
+  - **The model.** A group is `groups/<id>/group.json` next to the agents: a name, a topic and the
+    members, read with the fleet and checked like a manifest; a member not in the fleet is kept and
+    shown so. `GET/POST/PUT/DELETE /api/groups[/<id>]` make, change and remove groups the way agents
+    are — written atomically, deleted to `.trash/` — the `fleet` message of the socket carries them,
+    and deleting an agent takes it out of every group. An existing fleet starts without groups: none
+    is made for it (#149).
+  - **Visibility.** `list_agents` and the roster of a remote agent name the peers only — the members
+    of every group the agent is in, each with the `groups` it shares — and the roster carries the
+    agent's `groups` beside `agents` and goes out again when a group changes; the new read-only tool
+    `list_groups` names the caller's groups with their topic and members. `send_message`, `reply`,
+    `forward`, `delegate`, `to` of the inbox and the actions of an administrator reach a peer only; any
+    other agent is refused with the words for one that does not exist, and the tab of the sender says
+    the real reason. What comes back from an exchange that was allowed — the answer of a turn, the
+    outcome of a task — still reaches the agent that started it after a membership change. A person's
+    messages are not bound (#150).
+  - **Messages to a group.** `POST /api/groups/<id>/messages` takes the `SendRequest` of a broadcast
+    and answers member by member; `send_message` and `forward` take `group` instead of `to` (one of
+    the two, never both), `reply` answers the group when the last message came through one, and the
+    inbox of a remote agent takes `group` beside `to` (with `kind: message` only; a task goes to one
+    agent). The message reaches every member but the sender on its own, as a broadcast does, and is one
+    line of the group's history, `groups/<id>/.flotti-history.jsonl`, with how each member took it — a
+    `group-message` on the socket, asked for on `subscribe` under `_group:<id>`. A member gets it as a
+    `message` event with `group` beside `from`: `[from eva in group release] …` in the text of a local
+    agent and of a remote one without the inbox, `group` in the inbox metadata. What a member answers
+    in that turn is posted to the group as its own answer, marked `turnAnswer`, and gets no answer
+    back: one message, one round of answers. A group the sender is not in is refused with the words for
+    one that does not exist; the tab of the sender says the real reason (#151).
+  - **The Groups section and the tab of a group.** The rail of the sidebar gets a fourth section,
+    **Groups**, between Agents and Conversations: every group of the fleet with the marks of its
+    members in a row (a member not in the fleet a hollow grey square, more than four «+N»), its name,
+    how many members and messages, and the unread dot of a conversation; a closed section carries the
+    dot on its icon. The tab of a group, `_group:<id>`, is the agent's tab for a group: a one-line
+    header with the members by mark and name and Edit, which opens the group in Settings → Groups, the
+    topic under it; one lane in the order the messages were sent — the person's on the right, the
+    agents' as envelopes on the left, an answer of a round marked «answer» and quoting the message it
+    answers, forwards as in a conversation — and under every message, folded, how each member took it,
+    opening into the list of the broadcast page; a composer at the foot, Enter sends to the group,
+    Reply quotes. The feed of the fleet shows a message to a group as one row — who wrote it → the
+    marks and the name of the group, tagged `group`, and `answer` on what a member answered — that
+    opens the tab of the group at the message; the filter by an agent matches a group message it wrote
+    or got. A fleet with agents but no group says in the section that the agents do not see each other
+    yet, and one click **Everyone** makes one group of every agent (docs/groups.md, open question 2).
+    The details of an agent list its groups. The page asks the history of each group on `subscribe`
+    under its tab id, so a reconnect brings only what it has not seen (#152).
+  - **Settings → Groups.** The settings page lists the groups of the fleet next to the agents — id,
+    name, topic, members — with **Add group**, **Edit** and **Delete**. The form follows the agent
+    form: the id, picked once, names `groups/<id>/`; the name; the topic; the members as ticks over the
+    agents of the fleet, and ids typed by hand for agents that are not in it yet — a member the fleet
+    does not have is kept and shown as *not in the fleet*. A new or changed group is checked the way
+    `flotti run` checks it before the file is written and refused with the same sentence; Delete moves
+    the directory to `.trash/`; the list follows the fleet message of the socket, with no reload (#153).
+  - **Acceptance and the docs.** One e2e scenario runs the feature through: two groups, an agent of one
+    does not list a member of the other and is refused writing to it with the words for an agent that
+    does not exist, inside its own group it writes to a member and to the group, and the person reads
+    the conversation in the tab of the group. The README gets a «Groups» section — what a group is, who
+    sees whom, a message to a group and its one round of answers, the dashboard, an existing fleet
+    after the upgrade — and the fleet layout shows `groups/` (#154).
+- **Groups: how a member in line took a group message is written down once it is known.** A member
+  busy when a message is posted to its group is `queued` in the line of the history; when it takes
+  the message or fails it, the line is corrected on disk — written again under its number, the later
+  line counts — and goes out on the socket as a `group-message` once more, so the fold under the
+  message in the tab of the group, and a page opened later, say `taken` or `failed` with the reason
+  instead of «in line» for good (#162).
+- **A Storybook of the components of the dashboard.** `npm run storybook` opens the sidebar with its
+  rail, the feed of the fleet, a message and the tab of an agent on their own, in every state they
+  have — empty, waiting, in error, with long names, with many agents, on a phone, light and dark —
+  with no fleet running; `npm run build-storybook` writes the static pages (#139).
+
+### Changed
+
+- **The license is now PolyForm Noncommercial 1.0.0 — noncommercial use only.** flotti was under ISC,
+  which allows commercial use; from 0.6.0 it is licensed under the
+  [PolyForm Noncommercial License 1.0.0](LICENSE) (SPDX `PolyForm-Noncommercial-1.0.0`), and the package
+  ships a `LICENSE` file. Versions up to and including 0.5.0 stay under ISC (#141).
+- **The sidebar as three tabs: Fleet, Agents and Conversations.** A rail of icons at the left edge of the
+  sidebar switches between the sections, and only the chosen one is listed; on a phone the rail is a row
+  on top. The switch follows what opens (a message of the feed turns it to its agent or conversation),
+  the chosen section is remembered across reloads, and a closed section keeps its unread dot on its icon,
+  or the ochre dot of an agent waiting for you. Arrows, Home and End move along the switch (#136).
+- **The npm description is no longer the slogan.** `description` in `package.json` now says what flotti is
+  — a messenger for AI agents, local ones over ACP and remote ones over A2A, with a dashboard — instead of
+  repeating the first line of the README: npm hides a README paragraph that equals the package description,
+  so the subtitle under the logo was missing on npmjs.com. The README keeps its slogan (#145).
+- **The README renders on npm as on GitHub.** The logo and the links to `docs/*.md` in the README are
+  absolute addresses on `main`, so the page on npmjs.com shows one logo and links that lead to the docs,
+  the same as GitHub; the text of the README is unchanged. The page follows the README of the last
+  published version, so it changes with this release (#140).
+
+### Fixed
+
+- **A steady e2e test of web push.** The test of a push shown while the dashboard is out of sight now
+  waits until the service worker has shown the notification before it reads the list. Its first read
+  landed in a window where `getNotifications()` in Chromium drops a notification that is saved but not
+  yet on the screen, and the test lost it for good. Nothing changes in how flotti behaves (#132).
+
 ## [0.5.0] — 2026-09-28
 
 A messenger for AI agents: one feed of every message in the fleet, settings behind a gear icon with
@@ -273,6 +393,7 @@ The first release: a fleet of AI agents and one dashboard to work with them.
   ([micromagicman/eva#266](https://github.com/micromagicman/eva/issues/266)).
 - The A2A adapter of Cutie, on the same contract as Eva's (owners/quanthread-ai-hub#218, !194).
 
+[0.6.0]: https://github.com/micromagicman/flotti/releases/tag/v0.6.0
 [0.5.0]: https://github.com/micromagicman/flotti/releases/tag/v0.5.0
 [0.4.0]: https://github.com/micromagicman/flotti/releases/tag/v0.4.0
 [0.3.0]: https://github.com/micromagicman/flotti/releases/tag/v0.3.0

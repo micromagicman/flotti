@@ -16,13 +16,15 @@ import type {
     SendRequest,
     ServerMessage
 } from './dashboard-protocol.js';
+import { groupTabId } from './dashboard-protocol.js';
 import type { Forwarded, Quote, SendOptions } from './agent-events.js';
 import { describeError } from './describe-error.js';
 import { ConfigurationError } from './errors.js';
 import { MemoryError, readMemoryBank, readMemoryNote } from './memory-bank.js';
 import type { FleetSettings } from './fleet-settings.js';
 import type { NotificationService } from './notifications.js';
-import { UnknownAgentError } from './supervisor.js';
+import { UnknownAgentError, UnknownGroupError } from './supervisor.js';
+import type { GroupSendOptions } from './supervisor.js';
 import type { Supervisor, SupervisorNotice } from './supervisor.js';
 /** Port the dashboard listens on unless told otherwise. */
 const DEFAULT_PORT = 4870;
@@ -124,6 +126,37 @@ const NOTIFICATION_ROUTES: readonly Route[] = [
         handle: async (context) => [200, await requireNotifications(context).test()]
     }
 ];
+/** The groups of the fleet (docs/groups.md): listed, and made, changed and removed by the settings page. */
+const GROUP_ROUTES: readonly Route[] = [
+    {
+        method: 'GET',
+        pattern: /^\/api\/groups$/,
+        handle: async ({ supervisor }) => [200, supervisor.groups()]
+    },
+    {
+        method: 'POST',
+        pattern: /^\/api\/groups$/,
+        handle: async (context, _match, body) => [201, requireSettings(context).createGroup(body)]
+    },
+    {
+        method: 'GET',
+        pattern: /^\/api\/groups\/([^/]+)$/,
+        handle: async (context, [id]) => [200, requireSettings(context).groupConfig(id ?? '')]
+    },
+    {
+        method: 'PUT',
+        pattern: /^\/api\/groups\/([^/]+)$/,
+        handle: async (context, [id], body) => [200, requireSettings(context).updateGroup(id ?? '', body)]
+    },
+    {
+        method: 'DELETE',
+        pattern: /^\/api\/groups\/([^/]+)$/,
+        handle: async (context, [id]) => {
+            const trash = requireSettings(context).removeGroup(id ?? '');
+            return [200, trash === undefined ? {} : { trash }];
+        }
+    }
+];
 /** The memory bank of a local agent, read-only (#73): the list of its notes, and one note. */
 const MEMORY_ROUTES: readonly Route[] = [
     {
@@ -197,6 +230,16 @@ const ROUTES: readonly Route[] = [
         handle: async (context, _match, body) => [200, requireSettings(context).setAdminSettings(body)]
     },
     {
+        method: 'GET',
+        pattern: /^\/api\/answer-delivery$/,
+        handle: async (context) => [200, requireSettings(context).answerDelivery()]
+    },
+    {
+        method: 'PUT',
+        pattern: /^\/api\/answer-delivery$/,
+        handle: async (context, _match, body) => [200, requireSettings(context).setAnswerDelivery(body)]
+    },
+    {
         method: 'POST',
         pattern: /^\/api\/admin-actions\/([^/]+)$/,
         handle: async ({ supervisor }, [actionId], body) => {
@@ -219,6 +262,15 @@ const ROUTES: readonly Route[] = [
         pattern: /^\/api\/broadcast$/,
         handle: async ({ supervisor }, _match, body) => {
             const deliveries = await supervisor.broadcast(messageText(body), broadcastTargets(body));
+            return [200, { deliveries } satisfies BroadcastResponse];
+        }
+    },
+    {
+        method: 'POST',
+        pattern: /^\/api\/groups\/([^/]+)\/messages$/,
+        handle: async ({ supervisor }, [id], body) => {
+            const options = groupMessageOptions(body);
+            const { deliveries } = await supervisor.sendToGroup(id ?? '', messageText(body, options.forwarded !== undefined), options);
             return [200, { deliveries } satisfies BroadcastResponse];
         }
     },
@@ -356,6 +408,11 @@ function messageOptions(body: unknown): SendOptions {
         ...present('retryOf', optionalString(request.retryOf, 'retryOf'))
     };
 }
+/** What a message of a person to a group answers or sends on: as to one agent, but nothing is sent again this way. */
+function groupMessageOptions(body: unknown): GroupSendOptions {
+    const { replyTo, forwarded } = messageOptions(body);
+    return { ...present('replyTo', replyTo), ...present('forwarded', forwarded) };
+}
 function broadcastTargets(body: unknown): string[] | undefined {
     return unlessAbsent(fieldsOf<SendRequest>(body).agents, targetsOf);
 }
@@ -414,7 +471,7 @@ function collectChunks(request: IncomingMessage, reject: (reason: unknown) => vo
     return chunks;
 }
 /** Every route of the API, in the order they are tried. */
-const ALL_ROUTES: readonly Route[] = [...ROUTES, ...NOTIFICATION_ROUTES, ...MEMORY_ROUTES];
+const ALL_ROUTES: readonly Route[] = [...ROUTES, ...GROUP_ROUTES, ...NOTIFICATION_ROUTES, ...MEMORY_ROUTES];
 type Found = { readonly route: Route; readonly match: RegExpExecArray };
 async function handleApi(context: Context, request: IncomingMessage, url: URL): Promise<[number, unknown]> {
     const { route, match } = findRoute(request.method, url.pathname);
@@ -484,6 +541,7 @@ function errorResponse(error: unknown): [number, ErrorResponse] {
 /** The status of a configuration error by its kind; 400 for the kinds not here. */
 const STATUS_OF_KIND: Readonly<Partial<Record<ConfigurationError['kind'], number>>> = {
     'duplicate-agent-id': 409,
+    'duplicate-group-id': 409,
     'already-running': 409,
     'ssh-failed': 502
 };
@@ -493,12 +551,16 @@ function statusOf(error: unknown): number {
     }
     return fleetStatus(error);
 }
-/** The status of an error the fleet threw: an unknown agent, a refused configuration, or else a failure. */
+/** The status of an error the fleet threw: an unknown agent or group, a refused configuration, or else a failure. */
 function fleetStatus(error: unknown): number {
-    if (error instanceof UnknownAgentError) {
+    if (isUnknown(error)) {
         return 404;
     }
     return error instanceof ConfigurationError ? STATUS_OF_KIND[error.kind] ?? 400 : 500;
+}
+/** Whether the request named an agent or a group that is not in the fleet. */
+function isUnknown(error: unknown): boolean {
+    return error instanceof UnknownAgentError || error instanceof UnknownGroupError;
 }
 function errorText(error: unknown): string {
     return error instanceof ConfigurationError ? configurationText(error) : describeError(error);
@@ -565,7 +627,7 @@ function attachPage(supervisor: Supervisor, socket: WebSocket): () => void {
     const held: SupervisorNotice[] = [];
     const deliver = (notice: SupervisorNotice): void => post(socket, notice);
     const unsubscribe = supervisor.subscribe((notice) => (caughtUp ? deliver(notice) : held.push(notice)));
-    post(socket, { type: 'fleet', agents: supervisor.agents() });
+    post(socket, { type: 'fleet', agents: supervisor.agents(), groups: supervisor.groups() });
     socket.on('message', (data) => {
         const message = parseClientMessage(String(data));
         if (message === undefined || message.type !== 'subscribe' || caughtUp) {
@@ -593,13 +655,26 @@ function parseClientMessage(data: string): ClientMessage | undefined {
  */
 function replayMissed(supervisor: Supervisor, socket: WebSocket, message: ClientMessage): Map<string, number> {
     const last = new Map<string, number>();
+    replayAgents(supervisor, socket, message, last);
+    replayGroups(supervisor, socket, message, last);
+    return last;
+}
+function replayAgents(supervisor: Supervisor, socket: WebSocket, message: ClientMessage, last: Map<string, number>): void {
     for (const agent of supervisor.agents()) {
         for (const event of supervisor.history(agent.id, sinceOf(message, agent.id))) {
             post(socket, { type: 'event', event });
             last.set(agent.id, event.seq);
         }
     }
-    return last;
+}
+/** The messages of each group the page has not seen yet, asked for under the tab id of the group. */
+function replayGroups(supervisor: Supervisor, socket: WebSocket, message: ClientMessage, last: Map<string, number>): void {
+    for (const group of supervisor.groups()) {
+        for (const kept of supervisor.groupHistory(group.id, sinceOf(message, groupTabId(group.id)))) {
+            post(socket, { type: 'group-message', message: kept });
+            last.set(groupTabId(group.id), kept.seq);
+        }
+    }
 }
 /** The number of the last event of the agent the page has seen; 0 when it has seen none. */
 function sinceOf(message: ClientMessage, agentId: string): number {
@@ -617,9 +692,21 @@ function deliverHeld(
         }
     }
 }
-/** Whether the page has not been sent this notice yet: any notice but an event it got replayed. */
+/** Whether the page has not been sent this notice yet: any notice but an event or a group message it got replayed. */
 function isUnseen(notice: SupervisorNotice, last: ReadonlyMap<string, number>): boolean {
-    return notice.type !== 'event' || notice.event.seq > (last.get(notice.event.agentId) ?? 0);
+    const place = numberedAt(notice);
+    return place === undefined || place.seq > (last.get(place.id) ?? 0);
+}
+/** Where a notice that is replayed is numbered — the agent id, or the tab id of the group — and its number; nothing for any other. */
+function numberedAt(notice: SupervisorNotice): { readonly id: string; readonly seq: number } | undefined {
+    switch (notice.type) {
+        case 'event':
+            return { id: notice.event.agentId, seq: notice.event.seq };
+        case 'group-message':
+            return { id: groupTabId(notice.message.groupId), seq: notice.message.seq };
+        default:
+            return undefined;
+    }
 }
 function hostOf(origin: string): string {
     try {

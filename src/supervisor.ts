@@ -2,19 +2,25 @@ import { randomUUID } from 'node:crypto';
 import { A2AAgent } from './a2a-agent.js';
 import type { AdminRequest } from './a2a-agent.js';
 import { AgentAnswers } from './agent-answers.js';
+import type { Answer } from './agent-answers.js';
 import { waitingInLine } from './agent-events.js';
+import { AnswerDeliveryRule, DEFAULT_ANSWER_DELIVERY } from './answer-delivery.js';
+import type { AnswerDelivery } from './answer-delivery.js';
 import type { AdminAction, AgentEvent, AgentEventBody, FleetAgent, Quote, SendOptions } from './agent-events.js';
-import { HistoryFile } from './agent-history.js';
+import { HistoryFile, agentEvents } from './agent-history.js';
 import type { ConnectionHealth } from './connection-health.js';
 import { Delegations } from './delegations.js';
 import type { DelegationCancel, DelegationFleet, DelegationStart } from './delegations.js';
-import type { AgentSummary, Delivery, Harness, MemoryStatus } from './dashboard-protocol.js';
+import type { AgentSummary, Delivery, GroupMessage, GroupSummary, Harness, MemoryStatus } from './dashboard-protocol.js';
 import { FleetAdmin } from './fleet-admin.js';
 import type { AdminFleet, AdminOutcome } from './fleet-admin.js';
 import type { DeliveredMessage, FleetToolsAccess } from './fleet-mcp.js';
+import { GroupHistory } from './group-history.js';
+import { canReach, groupView, groupsOf, sharedGroups } from './groups.js';
+import type { GroupView, PeerSummary } from './groups.js';
 import { LocalAgentProcess } from './local-agent.js';
 import { present } from './present.js';
-import type { Agent, Fleet, LocalAgent, LocalAgentAdapter } from './types.js';
+import type { Agent, Fleet, Group, LocalAgent, LocalAgentAdapter } from './types.js';
 /** The harness each ACP adapter runs. */
 const ADAPTER_HARNESS: Readonly<Record<LocalAgentAdapter, Harness>> = {
     'claude-code': 'claude',
@@ -51,7 +57,7 @@ function memoryKey(running: FleetAgent): string {
     return JSON.stringify(running.memory ?? null);
 }
 /** The history of an agent that joins: where its numbers go on from, and its file. */
-type RestoredHistory = { offset: number; historyFile: HistoryFile | undefined; restoredAny: boolean };
+type RestoredHistory = { offset: number; historyFile: HistoryFile<AgentEvent> | undefined; restoredAny: boolean };
 /** What the supervisor says besides the agents' own events. */
 type SupervisorNotice =
     | { readonly type: 'event'; readonly event: AgentEvent }
@@ -59,7 +65,9 @@ type SupervisorNotice =
     /** The health of the connection of an agent changed. */
     | { readonly type: 'health'; readonly agentId: string; readonly health: ConnectionHealth }
     /** An agent was added, changed or removed, or the whole fleet was replaced. */
-    | { readonly type: 'fleet'; readonly agents: readonly AgentSummary[] };
+    | { readonly type: 'fleet'; readonly agents: readonly AgentSummary[]; readonly groups: readonly GroupSummary[] }
+    /** A message was posted to a group (docs/groups.md): one line of its history, with how each member took it. */
+    | { readonly type: 'group-message'; readonly message: GroupMessage };
 type SupervisorListener = (notice: SupervisorNotice) => void;
 type SupervisorOptions = {
     /** How an agent of the fleet becomes a running one; tests put their own in. */
@@ -91,6 +99,12 @@ type SupervisorOptions = {
      * allow it in the dashboard; asked at every action, off when absent.
      */
     readonly confirmAdminActions?: () => boolean;
+    /**
+     * How the answers of the agents reach the tabs (#157): piece by piece, or
+     * whole once complete. Asked when a message starts, so a change holds for
+     * the next one; `streamed` when absent.
+     */
+    readonly answerDelivery?: () => AnswerDelivery;
 };
 /** One agent of the fleet with what the dashboard needs of it. */
 type Member = {
@@ -104,7 +118,7 @@ type Member = {
      */
     offset: number;
     /** The history on disk; absent when it is kept in memory only. */
-    readonly file: HistoryFile | undefined;
+    readonly file: HistoryFile<AgentEvent> | undefined;
     /** What the agent answers to a message of another agent, to send back to it. */
     readonly answers: AgentAnswers;
     unsubscribe: () => void;
@@ -123,6 +137,21 @@ function freshMember(): Pick<Member, 'answers' | 'unsubscribe' | 'harness' | 'me
 }
 /** An agent the request names that is not in the fleet. */
 class UnknownAgentError extends Error {}
+/** A group the request names that is not in the fleet. */
+class UnknownGroupError extends Error {}
+function groupsById(groups: readonly Group[]): Map<string, Group> {
+    return new Map(groups.map((group: Group) => [group.id, group]));
+}
+/** Groups by id, the order of the fleet directory. */
+function groupOrder(left: Group, right: Group): number {
+    return left.id < right.id ? -1 : 1;
+}
+/** A group as the page lists it. */
+function groupSummary(group: Group): GroupSummary {
+    return { id: group.id, name: group.name, ...present('topic', group.topic), members: group.members };
+}
+/** The fleet as one remote agent is told of it (docs/a2a-fleet.md): its peers and its groups. */
+type FleetView = { readonly roster: () => PeerSummary[]; readonly groups: () => GroupView[] };
 /**
  * How an agent of the fleet runs: a local process, or a remote agent whose
  * requests as an administrator go to `onAdminRequest`.
@@ -130,11 +159,11 @@ class UnknownAgentError extends Error {}
 function defaultAgent(
     fleetTools: SupervisorOptions['fleetTools'],
     onAdminRequest: (agentId: string, request: AdminRequest) => void,
-    roster: () => AgentSummary[]
+    fleetOf: (agentId: string) => FleetView
 ): (agent: Agent) => FleetAgent {
     return (agent) => agent.kind === 'local'
         ? new LocalAgentProcess(agent, fleetTools === undefined ? {} : { fleetTools: fleetTools.access(agent.id) })
-        : new A2AAgent(agent, { onAdminRequest: (request) => onAdminRequest(agent.id, request), fleet: { roster } });
+        : new A2AAgent(agent, { onAdminRequest: (request) => onAdminRequest(agent.id, request), fleet: fleetOf(agent.id) });
 }
 function describeError(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -152,6 +181,10 @@ function compareIds(left: string, right: string): number {
 /** A local agent on this machine with an adapter: the memory tools have a bank for it (#101). */
 function hasMemoryBank(agent: Agent): agent is LocalAgent {
     return agent.kind === 'local' && agent.ssh === undefined && agent.adapter !== undefined;
+}
+/** The rule of the answer delivery (#157) over the choice given; `streamed` for every message when none is. */
+function answerRule(options: SupervisorOptions): AnswerDeliveryRule {
+    return new AnswerDeliveryRule(options.answerDelivery ?? (() => DEFAULT_ANSWER_DELIVERY));
 }
 /** How much history is kept, and whether it outlives flotti. */
 function historyTuning(options: SupervisorOptions): { readonly limit: number; readonly persist: boolean } {
@@ -178,12 +211,36 @@ function lastSeqOf(events: readonly AgentEvent[]): number {
 function isAgentMessage(event: AgentEvent): event is AgentEvent & { type: 'message'; to: string } {
     return event.type === 'message' && event.role === 'agent' && event.to !== undefined;
 }
+/** A message of an agent posted to a group. */
+function isGroupMessage(event: AgentEvent): event is AgentEvent & { type: 'message'; group: string } {
+    return event.type === 'message' && event.role === 'agent' && event.group !== undefined;
+}
+/** A message to a group: who posts it, when it is an agent, and what it answers or sends on. */
+type GroupSendOptions = Pick<SendOptions, 'from' | 'replyTo' | 'forwarded' | 'turnAnswer'>;
+/** A message handed to a member of a group: what is answered at once, and how the delivery ended in the end. */
+type Handed = { readonly answer: Promise<Delivery>; readonly outcome: Promise<Delivery> };
+/** A member the message did not reach: it is not in the fleet, or it did not take it. */
+function failed(agentId: string, error: string): Delivery {
+    return { agentId, result: 'failed', error };
+}
 /** After this event, no turn of the agent is going on. */
 function endsTurn(event: AgentEvent): boolean {
     return event.type === 'turn-end' || (event.type === 'status' && STOPPED_STATUSES.has(event.status));
 }
 function turnAnswerMark(turnAnswer: boolean): { turnAnswer?: true } {
     return turnAnswer ? { turnAnswer: true } : {};
+}
+/** The ids of the groups the agent shares with another one; with itself, the groups it is in. */
+function groupsShared(groups: readonly Group[], agentId: string, other: string): string[] {
+    return agentId === other ? groupsOf(groups, agentId).map((group) => group.id) : sharedGroups(groups, agentId, other);
+}
+/** The real reason a message was refused, as the tab of the sender says it to a person (docs/groups.md). */
+function notInAGroup(from: string, to: string): string {
+    return `"${to}" is not in a group with "${from}"`;
+}
+/** The real reason a message to a group was refused, as the tab of the sender says it to a person. */
+function notInGroup(from: string, groupId: string): string {
+    return `"${from}" is not in group "${groupId}"`;
 }
 /**
  * The fleet at work: every agent started, its events numbered and kept, so a
@@ -209,10 +266,25 @@ class Supervisor {
     private readonly delegations: Delegations;
     /** What administrators of the fleet do to the agents. */
     private readonly admin: FleetAdmin;
+    /** The one place the rule of #157 is applied: on the way of every event to the history and the pages. */
+    private readonly delivery: AnswerDeliveryRule;
+    /** The groups of the fleet (docs/groups.md), by id. */
+    private groupList = new Map<string, Group>();
+    /** The messages of each group, by id; opened when a group is first written to or read. */
+    private readonly groupHistories = new Map<string, GroupHistory>();
+    /** Last number given to a message of each group, kept when the group goes: numbers of a group only grow. */
+    private readonly lastGroupSeq = new Map<string, number>();
+    /**
+     * The message being posted to each group, by id: the next one waits for
+     * it, so the lines of a group are in the order the messages were sent —
+     * an answer to a message never stands above it.
+     */
+    private readonly posting = new Map<string, Promise<unknown>>();
     constructor(fleet: Fleet, options: SupervisorOptions = {}) {
         this.createAgent = options.createAgent
-            ?? defaultAgent(options.fleetTools, (agentId, request) => void this.adminRequest(agentId, request), () => this.agents());
+            ?? defaultAgent(options.fleetTools, (agentId, request) => void this.adminRequest(agentId, request), (agentId) => this.fleetView(agentId));
         this.admin = new FleetAdmin(this.adminFleet(), adminOptions(options.confirmAdminActions));
+        this.delivery = answerRule(options);
         const history = historyTuning(options);
         this.historyLimit = history.limit;
         this.persistHistory = history.persist;
@@ -224,6 +296,7 @@ class Supervisor {
         for (const agent of fleet.agents) {
             this.join(agent, []);
         }
+        this.groupList = groupsById(fleet.groups);
     }
     /** The agents in fleet order: local first, then remote, each by id. */
     agents(): AgentSummary[] {
@@ -255,6 +328,188 @@ class Supervisor {
     /** The agent as its manifest describes it. */
     agent(agentId: string): Agent {
         return this.member(agentId).agent;
+    }
+    /** The groups of the fleet, by id. */
+    groups(): GroupSummary[] {
+        return this.groupsInOrder().map(groupSummary);
+    }
+    /**
+     * The agents this one sees (docs/groups.md): the members of every group it
+     * is in — with the ids of the groups the two share — and itself; none at
+     * all when it is in no group with anyone, so that it does not take the
+     * fleet for empty by mistake.
+     */
+    peers(agentId: string): PeerSummary[] {
+        if (!this.hasPeers(agentId)) {
+            return [];
+        }
+        const groups = this.groupsInOrder();
+        return this.agents().flatMap((agent) => {
+            const shared = groupsShared(groups, agentId, agent.id);
+            return shared.length === 0 ? [] : [{ ...agent, groups: shared }];
+        });
+    }
+    /** The groups the agent is in, as it sees them: the members by id and name. */
+    groupsOf(agentId: string): GroupView[] {
+        return groupsOf(this.groupsInOrder(), agentId).map((group) => groupView(group, (id) => this.members.get(id)?.agent.name));
+    }
+    /** Whether `from` may write to `to`: the two share a group (docs/groups.md). */
+    canReach(from: string, to: string): boolean {
+        return canReach(this.groupsInOrder(), from, to);
+    }
+    /**
+     * Whether `from` may write to `to`; when it may not because of the groups,
+     * the tab of `from` says so, for a person to read — the agent itself is
+     * told only that there is no such agent among those it can write to.
+     */
+    mayWrite(from: string, to: string): boolean {
+        if (this.canReach(from, to)) {
+            return true;
+        }
+        const sender = this.members.get(from);
+        if (sender !== undefined && this.members.has(to)) {
+            this.say(sender, notInAGroup(from, to));
+        }
+        return false;
+    }
+    /**
+     * Whether `from` may post to the group: it is a member. When it may not,
+     * the tab of `from` says the real reason, for a person to read — the agent
+     * itself is told only that there is no such group among its own.
+     */
+    mayPost(from: string, groupId: string): boolean {
+        const why = this.postRefusal(from, groupId);
+        if (why !== undefined && this.groupList.has(groupId)) {
+            this.tell(from, why);
+        }
+        return why === undefined;
+    }
+    /** Why the agent cannot post to the group at all; nothing when it can. */
+    private postRefusal(from: string, groupId: string): string | undefined {
+        const group = this.groupList.get(groupId);
+        if (group === undefined) {
+            return 'there is no such group in the fleet';
+        }
+        return group.members.includes(from) ? undefined : notInGroup(from, groupId);
+    }
+    /** A line of flotti's own in the tab of the agent, when it is in the fleet. */
+    private tell(agentId: string, text: string): void {
+        const member = this.members.get(agentId);
+        if (member !== undefined) {
+            this.say(member, text);
+        }
+    }
+    /**
+     * The messages of the group that came after `afterSeq`, oldest first.
+     *
+     * @throws UnknownGroupError when there is no such group.
+     */
+    groupHistory(groupId: string, afterSeq = 0): GroupMessage[] {
+        return this.historyOf(this.group(groupId)).since(afterSeq);
+    }
+    /**
+     * Posts a message to a group (docs/groups.md): to every member but the
+     * one who posts it, each on its own, as a broadcast goes — a member that
+     * is down or busy holds nobody up, and one not in the fleet fails — and
+     * into the history of the group, with how each member took it. A person
+     * posts with no `from`; an agent that posts is checked at the door it came
+     * through, not here. Resolves with the message as the history keeps it,
+     * within the time a message may take to reach an agent.
+     *
+     * @throws UnknownGroupError when there is no such group.
+     */
+    async sendToGroup(groupId: string, text: string, options: GroupSendOptions = {}): Promise<GroupMessage> {
+        const group = this.group(groupId);
+        const posted = (this.posting.get(groupId) ?? Promise.resolve()).then(() => this.postToGroup(group, text, options));
+        this.posting.set(groupId, posted.catch(() => undefined));
+        return posted;
+    }
+    /**
+     * Hands the message to every other member and writes it down with how each
+     * took it; a member in line gets its outcome written to the line later
+     * (#162), once the message is there to write it to.
+     */
+    private async postToGroup(group: Group, text: string, options: GroupSendOptions): Promise<GroupMessage> {
+        const receivers = group.members.filter((id) => id !== options.from);
+        const handed = receivers.map((id) => this.deliverToMember(id, text, { ...options, group: group.id }));
+        const deliveries = await Promise.all(handed.map(({ answer }) => answer));
+        const message = this.post(group, text, options, deliveries);
+        for (const [index, { outcome }] of handed.entries()) {
+            if (deliveries[index]?.result === 'queued') {
+                void outcome.then((delivery) => this.settle(group.id, message.seq, delivery));
+            }
+        }
+        return message;
+    }
+    /** Writes down how a delivery of a group message that was in line ended, and tells the pages the line as it is now (#162). */
+    private settle(groupId: string, seq: number, delivery: Delivery): void {
+        const settled = this.groupHistories.get(groupId)?.settle(seq, delivery);
+        if (settled !== undefined) {
+            this.notify({ type: 'group-message', message: settled });
+        }
+    }
+    /** Whether the agent is in a group with anyone of the fleet. */
+    private hasPeers(agentId: string): boolean {
+        return this.agents().some((agent) => canReach(this.groupsInOrder(), agentId, agent.id));
+    }
+    private groupsInOrder(): Group[] {
+        return [...this.groupList.values()].sort(groupOrder);
+    }
+    /** The fleet as a remote agent is told of it. */
+    private fleetView(agentId: string): FleetView {
+        return { roster: () => this.peers(agentId), groups: () => this.groupsOf(agentId) };
+    }
+    /**
+     * The group as its file describes it.
+     *
+     * @throws UnknownGroupError when there is no such group.
+     */
+    group(groupId: string): Group {
+        const group = this.groupList.get(groupId);
+        if (group === undefined) {
+            throw new UnknownGroupError(`There is no group "${groupId}" in the fleet.`);
+        }
+        return group;
+    }
+    /** Takes a new group into the fleet; the pages and the agents learn it with the fleet. */
+    addGroup(group: Group): void {
+        if (this.groupList.has(group.id)) {
+            throw new Error(`There is a group "${group.id}" in the fleet already.`);
+        }
+        this.groupList.set(group.id, group);
+        this.announce();
+    }
+    /** Puts a changed group file to work. */
+    replaceGroup(group: Group): void {
+        this.group(group.id);
+        this.groupList.set(group.id, group);
+        this.announce();
+    }
+    /** Lets the group go: it is no longer in the fleet; the numbers of its messages are kept in case it is made again. */
+    removeGroup(groupId: string): void {
+        this.group(groupId);
+        this.groupList.delete(groupId);
+        this.forgetHistory(groupId);
+        this.announce();
+    }
+    /** The history of the group, opened on first use: from its file when the run keeps histories. */
+    private historyOf(group: Group): GroupHistory {
+        const known = this.groupHistories.get(group.id);
+        if (known !== undefined) {
+            return known;
+        }
+        const directory = this.persistHistory ? group.directory : undefined;
+        const history = new GroupHistory(group.id, directory, this.historyLimit, this.warn, this.lastGroupSeq.get(group.id) ?? 0);
+        this.groupHistories.set(group.id, history);
+        return history;
+    }
+    /** Closes the book on the history of a group that goes: where its numbers got to is kept. */
+    private forgetHistory(groupId: string): void {
+        const history = this.groupHistories.get(groupId);
+        if (history !== undefined) {
+            this.lastGroupSeq.set(groupId, history.last);
+            this.groupHistories.delete(groupId);
+        }
     }
     /** Kept events of the agent that came after `afterSeq`, oldest first. */
     history(agentId: string, afterSeq = 0): AgentEvent[] {
@@ -342,6 +597,10 @@ class Supervisor {
         for (const agent of fleet.agents) {
             this.join(agent, []);
         }
+        for (const groupId of [...this.groupHistories.keys()]) {
+            this.forgetHistory(groupId);
+        }
+        this.groupList = groupsById(fleet.groups);
         this.announce();
         void this.start();
     }
@@ -401,7 +660,8 @@ class Supervisor {
                 if (member !== undefined) {
                     this.put(member, body);
                 }
-            }
+            },
+            mayWrite: (from, to) => this.mayWrite(from, to)
         };
     }
     /**
@@ -457,6 +717,7 @@ class Supervisor {
     private adminFleet(): AdminFleet {
         return {
             agents: () => this.agents(),
+            mayWrite: (from, to) => this.mayWrite(from, to),
             restart: (agentId) => this.restart(agentId),
             clearContext: (agentId) => this.clearContext(agentId),
             note: (agentId, body) => {
@@ -499,7 +760,7 @@ class Supervisor {
      * history it had; any other reads what its directory kept from the runs
      * before, and a line says where that ends.
      */
-    private join(agent: Agent, history: AgentEvent[], file?: HistoryFile): Member {
+    private join(agent: Agent, history: AgentEvent[], file?: HistoryFile<AgentEvent>): Member {
         const { offset, historyFile, restoredAny } = this.restoreHistory(agent, history, file);
         const member: Member = {
             agent,
@@ -547,15 +808,51 @@ class Supervisor {
         this.delegations.take(member.agent.id, event);
         const answer = member.answers.take(event);
         if (answer !== undefined) {
+            this.sendBack(member, answer);
+        }
+    }
+    /**
+     * The answer of a turn goes back where the message came from: to the
+     * group it was posted to, or to the agent that sent it. It goes even when
+     * the answering agent is no longer in the group, or in a group with the
+     * sender: the exchange was allowed on its way in (docs/groups.md).
+     */
+    private sendBack(member: Member, answer: Answer): void {
+        if (answer.group !== undefined) {
+            this.answerGroup(member, answer.group, answer.text, answer.replyTo);
+        } else if (answer.to !== undefined) {
             this.forward(member, answer.to, answer.text, answer.replyTo, true);
         }
     }
-    /** What the agent says to another one goes there: a message, a task, taking a task back. */
+    /** The answer of a turn posted back to the group as a message of the agent, marked so; a group that is gone is a line in its tab. */
+    private answerGroup(member: Member, groupId: string, text: string, replyTo: Quote): void {
+        if (!this.groupList.has(groupId)) {
+            this.say(member, `could not post the answer to group "${groupId}": there is no such group in the fleet`);
+            return;
+        }
+        void this.sendToGroup(groupId, text, { from: member.agent.id, replyTo, turnAnswer: true });
+    }
+    /** What the agent says to another one goes there: a message, a task, taking a task back; what it says to a group is posted there. */
     private pass(member: Member, event: AgentEvent): void {
         if (event.type === 'cancel-delegation') {
             this.takeBack(member, event.delegationId);
         } else if (isAgentMessage(event)) {
             this.sendOn(member, event);
+        } else if (isGroupMessage(event)) {
+            this.postOn(member, event);
+        }
+    }
+    /**
+     * A message of the agent to a group: posted to it when the agent is a
+     * member; a line in the tab of the agent otherwise, saying why, as for a
+     * message to an agent it cannot write to.
+     */
+    private postOn(member: Member, event: AgentEvent & { type: 'message'; group: string }): void {
+        const why = this.postRefusal(member.agent.id, event.group);
+        if (why === undefined) {
+            void this.sendToGroup(event.group, event.text, { from: member.agent.id });
+        } else {
+            this.say(member, `could not post the message to group "${event.group}": ${why}`);
         }
     }
     /** The agent takes back a task it gave. */
@@ -597,7 +894,7 @@ class Supervisor {
     private restoreHistory(
         agent: Agent,
         history: AgentEvent[],
-        file: HistoryFile | undefined
+        file: HistoryFile<AgentEvent> | undefined
     ): RestoredHistory {
         const offset = this.lastSeq.get(agent.id) ?? 0;
         if (file !== undefined || !this.persistHistory) {
@@ -607,7 +904,7 @@ class Supervisor {
     }
     /** Opens the history file of the agent and puts what it kept into an empty history. */
     private openHistory(agent: Agent, history: AgentEvent[], offset: number): RestoredHistory {
-        const historyFile = new HistoryFile(agent.id, agent.directory, this.historyLimit, this.warn);
+        const historyFile = new HistoryFile(`agent "${agent.id}"`, agent.directory, this.historyLimit, this.warn, agentEvents(agent.id));
         const restored = restorable(historyFile.load(), history, offset);
         history.push(...restored);
         return { offset: restored.length === 0 ? offset : lastSeqOf(restored), historyFile, restoredAny: restored.length > 0 };
@@ -647,7 +944,7 @@ class Supervisor {
         }
     }
     private announce(): void {
-        this.notify({ type: 'fleet', agents: this.agents() });
+        this.notify({ type: 'fleet', agents: this.agents(), groups: this.groups() });
         this.rosterChanged();
     }
     /** The agents that are told who is in the fleet learn it changed (docs/a2a-fleet.md). */
@@ -656,8 +953,20 @@ class Supervisor {
             running.fleetChanged?.();
         }
     }
+    /**
+     * Keeps an event for the tab, through the rule of the answer delivery: a
+     * piece of an answer held back is not kept yet, and the whole answer, once
+     * complete, is kept as a line of flotti's own before the event that
+     * completed it — it takes the next number, as {@link put} numbers.
+     */
     private keep(member: Member, received: AgentEvent): void {
-        this.store(member, member.offset === 0 ? received : { ...received, seq: received.seq + member.offset });
+        const { released, kept } = this.delivery.take(member, received, member.inTurn);
+        if (released !== undefined) {
+            this.put(member, released);
+        }
+        if (kept) {
+            this.store(member, member.offset === 0 ? received : { ...received, seq: received.seq + member.offset });
+        }
     }
     /**
      * Puts a line of flotti's own into the tab of an agent, between its events:
@@ -699,29 +1008,42 @@ class Supervisor {
      * Sends on what an agent said to another one — a message of its own, or,
      * with `replyTo`, its answer to a message of that one. `turnAnswer` marks
      * the answer flotti sends back at the end of a turn: the receiver owes none
-     * to it. The sender does not wait for the receiver: a message that cannot
-     * be delivered is a line in the tab of the sender, saying why.
+     * to it, and it goes back even when the two no longer share a group — the
+     * exchange was allowed on its way in (docs/groups.md); a message of the
+     * agent's own is checked at this door. The sender does not wait for the
+     * receiver: a message that cannot be delivered is a line in the tab of the
+     * sender, saying why.
      */
     private forward(sender: Member, to: string, text: string, replyTo?: Quote, turnAnswer = false): void {
-        const from = sender.agent.id;
         const receiver = this.members.get(to);
-        const failed = (why: string): void => {
-            // Still in the fleet: it may have been removed while the message went.
-            if (this.members.get(from) === sender) {
-                this.say(sender, `could not deliver the ${replyTo === undefined ? 'message' : 'answer'} to "${to}": ${why}`);
-            }
-        };
         if (receiver === undefined) {
-            failed('there is no such agent in the fleet');
-        } else if (receiver === sender) {
-            failed('an agent does not send messages to itself');
-        } else {
-            void this.handOn(receiver, from, text, replyTo, turnAnswer).then((error) => {
-                if (error !== undefined) {
-                    failed(error);
-                }
-            });
+            this.undelivered(sender, to, replyTo, 'there is no such agent in the fleet');
+            return;
         }
+        const refusal = this.forwardRefusal(sender, receiver, turnAnswer);
+        if (refusal !== undefined) {
+            this.undelivered(sender, to, replyTo, refusal);
+            return;
+        }
+        void this.handOn(receiver, sender.agent.id, text, replyTo, turnAnswer).then((error) => {
+            if (error !== undefined) {
+                this.undelivered(sender, to, replyTo, error);
+            }
+        });
+    }
+    /** A message that did not reach the receiver is a line in the tab of the sender, saying why. */
+    private undelivered(sender: Member, to: string, replyTo: Quote | undefined, why: string): void {
+        // Still in the fleet: it may have been removed while the message went.
+        if (this.members.get(sender.agent.id) === sender) {
+            this.say(sender, `could not deliver the ${replyTo === undefined ? 'message' : 'answer'} to "${to}": ${why}`);
+        }
+    }
+    /** Why the message cannot be sent on to the receiver at all; nothing when it can. */
+    private forwardRefusal(sender: Member, receiver: Member, turnAnswer: boolean): string | undefined {
+        if (receiver === sender) {
+            return 'an agent does not send messages to itself';
+        }
+        return turnAnswer || this.canReach(sender.agent.id, receiver.agent.id) ? undefined : notInAGroup(sender.agent.id, receiver.agent.id);
     }
     /**
      * Hands a message of one agent to another and, once it is taken, tells the
@@ -756,8 +1078,48 @@ class Supervisor {
      * for that — a `delivery` notice tells how it ended.
      */
     private deliver(member: Member, text: string, options: SendOptions = {}): Promise<Delivery> {
-        const agentId = member.agent.id;
-        const sent = this.hand(member, text, options);
+        return this.answerWithin(member.agent.id, this.hand(member, text, options));
+    }
+    /**
+     * Hands a message posted to a group to one member, under a `messageId` of
+     * its own tab: `answer` within `queuedAfterMs` as {@link deliver} does,
+     * `outcome` once the agent took it or it failed, however long that takes.
+     * Once an agent's message is taken, the fleet tools are told, so `reply`
+     * of the member answers the group. A member not in the fleet fails at once.
+     */
+    private deliverToMember(agentId: string, text: string, options: SendOptions & { group: string }): Handed {
+        const member = this.members.get(agentId);
+        if (member === undefined) {
+            const outcome = Promise.resolve(failed(agentId, 'not in the fleet'));
+            return { answer: outcome, outcome };
+        }
+        const messageId = randomUUID();
+        const outcome = this.hand(member, text, { ...options, messageId });
+        void outcome.then((delivery) => this.tellTaken(delivery, agentId, messageId, text, options));
+        return { answer: this.answerWithin(agentId, outcome), outcome };
+    }
+    /** Tells the fleet tools of a message of an agent that a member took: its `reply` and `forward` act on it. */
+    private tellTaken(delivery: Delivery, to: string, messageId: string, text: string, options: SendOptions & { group: string }): void {
+        if (delivery.result === 'taken' && options.from !== undefined) {
+            this.delivered?.({ to, from: options.from, messageId, text, group: options.group, ...present('forwarded', options.forwarded) });
+        }
+    }
+    /** Writes the message down as the line of the group and tells the pages. */
+    private post(group: Group, text: string, options: GroupSendOptions, deliveries: readonly Delivery[]): GroupMessage {
+        const message = this.historyOf(group).add({
+            messageId: randomUUID(),
+            ...present('from', options.from),
+            text,
+            ...present('replyTo', options.replyTo),
+            ...present('forwarded', options.forwarded),
+            ...turnAnswerMark(options.turnAnswer === true),
+            deliveries
+        });
+        this.notify({ type: 'group-message', message });
+        return message;
+    }
+    /** The delivery as it ends, or `queued` after `queuedAfterMs`: a `delivery` notice then tells how it ended. */
+    private answerWithin(agentId: string, sent: Promise<Delivery>): Promise<Delivery> {
         return new Promise((resolve) => {
             let answered = false;
             const timer = setTimeout(() => {
@@ -776,5 +1138,5 @@ class Supervisor {
     }
 }
 export { UnknownDelegationError } from './delegations.js';
-export { Supervisor, UnknownAgentError };
-export type { SupervisorListener, SupervisorNotice, SupervisorOptions };
+export { Supervisor, UnknownAgentError, UnknownGroupError };
+export type { GroupSendOptions, SupervisorListener, SupervisorNotice, SupervisorOptions };

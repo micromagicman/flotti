@@ -348,7 +348,7 @@ input[type="checkbox"]:disabled { cursor: not-allowed; }
 .badge:not(.status-idle, .status-working, .status-starting, .status-waiting, .status-error) .dot { height: 2px; width: 8px; border-radius: 1px; }
 .app {
     display: grid;
-    grid-template-columns: 240px 1fr;
+    grid-template-columns: 308px 1fr;
     grid-template-rows: auto 1fr;
     height: 100vh;
 }
@@ -377,9 +377,22 @@ input[type="checkbox"]:disabled { cursor: not-allowed; }
     flex-direction: column;
     gap: 2px;
     padding: 8px;
-    border-right: 1px solid var(--border);
     overflow-y: auto;
 }
+/* The sidebar is a rail of its three sections, then the one in sight (#136). */
+.side { display: flex; min-width: 0; min-height: 0; border-right: 1px solid var(--border); }
+.side-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.side-panel[hidden] { display: none; }
+.side-panel > .sidebar { flex: 1; min-height: 0; }
+.side-rail { width: 88px; flex: none; display: flex; flex-direction: column; gap: 4px; padding: 8px 4px; border-right: 1px solid var(--border); }
+.rail-tab { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-width: 0; padding: 8px 0 7px; border: 0; border-radius: var(--nav-r); background: transparent; color: var(--muted); font: inherit; font-size: 10px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: var(--ctl-tr); }
+.rail-tab svg { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.rail-tab:hover { color: var(--text); background: var(--nav-bg-hover); }
+.rail-tab[aria-selected="true"] { color: var(--text); background: var(--nav-bg-selected); }
+.rail-tab:focus-visible { outline: var(--ring); outline-offset: -2px; }
+/* The dot of a closed section, on the corner of its icon: new output, or an agent waiting for you in its place. */
+.rail-mark { position: absolute; top: 5px; right: 20px; display: inline-flex; }
+.rail-wait { width: 7px; height: 7px; border-radius: 50%; background: var(--dot-wait); box-shadow: 0 0 0 2px color-mix(in srgb, var(--dot-wait) 25%, transparent); }
 .tab {
     display: flex;
     flex-direction: column;
@@ -396,14 +409,11 @@ input[type="checkbox"]:disabled { cursor: not-allowed; }
 .tab[aria-selected="true"] { background: var(--nav-bg-selected); }
 .tab:focus-visible { outline: var(--ring); outline-offset: -2px; }
 .tab-broadcast { margin-bottom: 8px; }
-/* The two tabs of the whole fleet stand under a heading of their own (#114), the agents under the next one. */
 .tab-broadcast.tab-fleet { margin-bottom: 0; }
 .tab-name { font-weight: 600; display: flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; }
 .tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-/* The conversations of agents (#50): a heading, the newest pairs, and the list of them all when they do not fit. */
-.side-head { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 10px 10px 2px; }
+/* The conversations of agents (#50): the newest pairs, and the list of them all when they do not fit. */
 .tab-pair { max-width: 100%; }
-.tab-narrow-only { display: none; }
 .tab-hint { font-size: 12px; color: var(--muted); }
 .tab-waiting .tab-name { color: var(--wait-text); }
 /* An agent waiting for a person stands out until it is answered (#27). */
@@ -766,20 +776,17 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
 .conversation-card:focus-visible { outline: var(--ring); outline-offset: 2px; }
 @media (max-width: 700px) {
     .app { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr; }
-    .sidebar { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+    /* On a phone the rail is a row on top, and the section a row under it that scrolls sideways (#136). */
+    .side { flex-direction: column; border-right: 0; border-bottom: 1px solid var(--border); }
+    .side-rail { width: auto; flex-direction: row; border-right: 0; border-bottom: 1px solid var(--border); padding: 6px 8px; }
+    .rail-tab { flex: 1 1 auto; flex-direction: row; gap: 6px; font-size: 12px; padding: 6px 8px; }
+    .rail-tab svg { width: 16px; height: 16px; }
+    .rail-mark { position: static; }
+    .sidebar { flex-direction: row; overflow-x: auto; }
+    .sidebar .tab { flex: none; }
+    .sidebar .tab-name, .sidebar .tab-hint { white-space: nowrap; }
     .tab-broadcast { margin-bottom: 0; }
-    /* A row of pairs would run off a narrow screen: one tab leads to the list of them all instead. */
-    .side-head, .tab-pair { display: none; }
-    .tab-narrow-only { display: flex; }
-    /* Next to All agents, in sight without scrolling the row. */
-    .tab-broadcast { order: -2; }
-    .tab-conversations { order: -1; }
-    /* Both tabs of the whole fleet lead the row (#114). */
-    .tab-fleet { order: -3; }
-    .tab-fleet .tab-name, .tab-fleet .tab-hint { white-space: nowrap; }
-    .tab-conversations .tab-name, .tab-conversations .tab-hint { white-space: nowrap; }
     .lane-title { flex-basis: 100%; font-size: 16px; }
-    .tab.tab-holds-open { background: var(--nav-bg-selected); }
     .tab-label { max-width: 40vw; }
     .lane .message-row { max-width: 92%; }
 }
@@ -954,3 +961,38 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
 .fleet-text { color: var(--muted); font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 @media (max-width: 700px) { .fleet-open-text { display: none; } }
 @media (prefers-reduced-motion: reduce) { .fleet-row, .fleet-open { transition: none; } }
+/*
+ * The groups of the fleet (docs/groups.md, #152): the marks of the members in
+ * a row, a member not in the fleet hollow and grey, the tab of a group with its
+ * header and lane, how the members took a message, the offer of one group.
+ */
+.group-marks { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.group-marks-sm .agent-mark { width: 8px; height: 8px; }
+.group-more { font-size: 10px; font-weight: 600; color: var(--muted); margin-left: 2px; }
+.agent-mark.mark-gone { background: transparent; box-shadow: inset 0 0 0 1.5px var(--off); border-radius: 3px; }
+.name-gone { color: var(--muted); text-decoration: underline dashed; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+.tab-group { max-width: 100%; }
+.group-members { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--muted); min-width: 0; }
+.member { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.group-topic { margin: 0; flex-basis: 100%; font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.agent-groups { display: flex; flex-wrap: wrap; gap: 4px; }
+/* Under a message of the group: who took it, folded; open, the list of the broadcast page. */
+.took { font-size: 12px; color: var(--muted); max-width: min(900px, 100%); }
+.message-row-user > .took { text-align: right; }
+.took summary { cursor: pointer; list-style: none; display: inline-flex; gap: 6px; align-items: center; border-radius: 4px; padding: 1px 2px; }
+.took summary::-webkit-details-marker { display: none; }
+.took summary::before { content: ""; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); flex: none; margin-right: 2px; }
+.took[open] summary::before { transform: rotate(45deg); }
+.took summary:hover { color: var(--text); }
+.took summary:focus-visible { outline: var(--ring); outline-offset: 2px; }
+.took .deliveries { margin-top: 4px; padding-left: 14px; text-align: left; }
+.took .delivery-name { min-width: 90px; }
+/* A fleet with agents but no group: the section says why they are quiet, and one click fixes it. */
+.side-empty { padding: 6px 10px 10px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.side-empty p { margin: 0; }
+.side-empty .btn { align-self: flex-start; }
+.fleet-who-group .group-marks { margin-right: 1px; }
+@media (max-width: 700px) {
+    .side-empty { flex: none; max-width: 260px; }
+    .group-members { max-width: 100%; }
+}

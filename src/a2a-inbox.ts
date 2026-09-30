@@ -8,6 +8,8 @@ type SaidParams = {
     readonly kind: 'message' | 'progress';
     readonly busy?: boolean;
     readonly to?: string;
+    /** Id of a group of the fleet the message is posted to (docs/groups.md); one of `to` and `group`. */
+    readonly group?: string;
     /** The message gives `to` a task; the id of the task is the id of the message. */
     readonly task?: { readonly deadline?: string };
     /** Id of a task the agent gave and takes back. */
@@ -29,11 +31,12 @@ function inboxParams(message: Message): InboxParams {
     return params['kind'] === 'admin' ? { kind: 'admin', request: adminRequestOf(params) } : saidParams(params);
 }
 function saidParams(params: Record<string, unknown>): SaidParams {
-    const { kind, busy, to, task, cancel } = params;
+    const { kind, busy, to, group, task, cancel } = params;
     return {
         kind: kind === 'progress' ? 'progress' : 'message',
         ...(typeof busy === 'boolean' ? { busy } : {}),
         ...field('to', nonEmpty(to)),
+        ...field('group', nonEmpty(group)),
         ...(isRecord(task) ? { task: taskParams(task) } : {}),
         ...field('cancel', nonEmpty(cancel))
     };
@@ -48,9 +51,10 @@ function adminRequestOf(params: Record<string, unknown>): AdminRequest | undefin
     return ADMIN_ACTIONS.includes(action) && target !== undefined ? { action: action as AdminAction, target } : undefined;
 }
 /**
- * How a message to the agent says who sent it and what task it gives: under
- * the inbox extension URI, for a message of another agent of the fleet or one
- * that gives a task; a message of a person carries nothing.
+ * How a message to the agent says who sent it, which group it was posted to
+ * and what task it gives: under the inbox extension URI, for a message of
+ * another agent of the fleet, one posted to a group or one that gives a task;
+ * a message of a person to the agent itself carries nothing.
  */
 function senderMarks(options: SendOptions): Pick<Message, 'metadata' | 'extensions'> {
     const params = senderParams(options);
@@ -59,7 +63,7 @@ function senderMarks(options: SendOptions): Pick<Message, 'metadata' | 'extensio
         : { metadata: { [INBOX_EXTENSION]: params }, extensions: [INBOX_EXTENSION] };
 }
 function senderParams(options: SendOptions): Record<string, unknown> {
-    return { ...field('from', options.from), ...field('task', options.delegation) };
+    return { ...field('from', options.from), ...field('group', options.group), ...field('task', options.delegation) };
 }
 /** `{ [key]: value }`, or nothing when there is no value. */
 function field<K extends string, V>(key: K, value: V | undefined): { readonly [P in K]?: V } {

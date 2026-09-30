@@ -11,6 +11,8 @@ import { Supervisor } from '../src/supervisor.js';
 import type { SupervisorOptions } from '../src/supervisor.js';
 import type { RemoteAgent, RemoteAuth } from '../src/types.js';
 import { FakeAgent, agentMessage, artifact, gate, said, statusUpdate, task } from './a2a-fake-server.js';
+import { everyone, group } from './fake-fleet-agent.js';
+import type { Group } from '../src/types.js';
 import type { FakeAgentOptions, Received, Script } from './a2a-fake-server.js';
 import { Harness } from './local-agent-helpers.js';
 const running: FakeAgent[] = [];
@@ -719,7 +721,7 @@ describe('A2AAgent: answering another agent of the fleet', () => {
         const agents = [{ ...manifest(sender.agent.url), id: 'a' }, { ...manifest(receiver.agent.url), id: 'b' }];
         const running = new Map(agents.map(agent => [agent.id, new A2AAgent(agent, { reconnectDelayMs: 10, pollIntervalMs: 10 })]));
         clients.push(...running.values());
-        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents }, {
+        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents, groups: [everyone(agents.map(agent => agent.id))] }, {
             createAgent: agent => running.get(agent.id) as A2AAgent
         });
         await supervisor.start();
@@ -739,7 +741,7 @@ describe('A2AAgent: answering another agent of the fleet', () => {
 /** A supervisor over these running agents, as a fleet of their ids. */
 async function fleetOf(agents: ReadonlyMap<string, A2AAgent | Harness>, options: SupervisorOptions = {}): Promise<Supervisor> {
     const manifests = [...agents].map(([id, agent]) => agent instanceof Harness ? { ...agent.agent.agent, id } : { ...manifest('http://127.0.0.1/'), id });
-    const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents: manifests }, {
+    const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents: manifests, groups: [everyone(manifests.map(agent => agent.id))] }, {
         ...options,
         createAgent: agent => {
             const found = agents.get(agent.id);
@@ -802,7 +804,7 @@ describe('A2AAgent: tasks agents give one another', { timeout: 20_000 }, () => {
         await eventually(() => conversation(sender.agent).length === 1);
         const [[text, params]] = conversation(sender.agent) as [[string, unknown]];
         deepStrictEqual(taskParams(params), { id: 'task-3', state: 'failed' });
-        match(text, /The task task-3 you gave has failed\.\n\nthere is no agent "ghost" in the fleet$/);
+        match(text, /The task task-3 you gave has failed\.\n\nthere is no agent "ghost" among the agents you can write to; list_agents names them$/);
         await supervisor.stop();
     });
 });
@@ -967,7 +969,7 @@ describe('A2AAgent: requests of an administrator through the inbox', () => {
         const other = await inboxAgent();
         const agents = [{ ...manifest(admin.agent.url), id: 'a', admin: true as const }, { ...manifest(other.agent.url), id: 'b' }];
         // No createAgent: the supervisor wires the inbox requests to its administrators itself.
-        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents });
+        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents, groups: [everyone(agents.map(agent => agent.id))] });
         t.after(() => supervisor.stop());
         await supervisor.start();
         await eventually(() => admin.isOpen() && other.isOpen());
@@ -983,7 +985,12 @@ describe('A2AAgent: requests of an administrator through the inbox', () => {
 });
 /** The URI of the fleet extension (docs/a2a-fleet.md). */
 const FLEET = 'https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md';
-type Roster = { version?: number; agents?: Record<string, unknown>[]; text?: string };
+type Roster = {
+    version?: number;
+    agents?: Record<string, unknown>[];
+    groups?: { id: string; name: string; topic?: string; members: { id: string; name: string }[] }[];
+    text?: string;
+};
 /** The roster the agent got when flotti opened its inbox. */
 function subscribedRoster(agent: FakeAgent): Roster | undefined {
     const request = agent.received.find(received => received.method === 'SendStreamingMessage');
@@ -998,13 +1005,13 @@ function rosterUpdates(agent: FakeAgent): { request: Received; roster: Roster & 
         return roster?.action === 'fleet' ? [{ request, roster }] : [];
     });
 }
-/** A supervisor over A2A agents that are told the roster, gathered for `debounceMs`. */
-async function rosterFleet(fakes: ReadonlyMap<string, FakeAgent>, debounceMs: number): Promise<{ supervisor: Supervisor; running: Map<string, A2AAgent> }> {
+/** A supervisor over A2A agents that are told the roster, gathered for `debounceMs`; all in one group unless `groups` says otherwise. */
+async function rosterFleet(fakes: ReadonlyMap<string, FakeAgent>, debounceMs: number, groups?: Group[]): Promise<{ supervisor: Supervisor; running: Map<string, A2AAgent> }> {
     const agents = [...fakes].map(([id, agent]) => ({ ...manifest(agent.url), id }));
-    const fleetOptions = { rosterDebounceMs: debounceMs, fleet: { roster: () => supervisor.agents() } };
-    const running = new Map(agents.map(agent => [agent.id, new A2AAgent(agent, { reconnectDelayMs: 10, pollIntervalMs: 10, ...fleetOptions })]));
+    const fleetOptions = (id: string) => ({ rosterDebounceMs: debounceMs, fleet: { roster: () => supervisor.peers(id), groups: () => supervisor.groupsOf(id) } });
+    const running = new Map(agents.map(agent => [agent.id, new A2AAgent(agent, { reconnectDelayMs: 10, pollIntervalMs: 10, ...fleetOptions(agent.id) })]));
     clients.push(...running.values());
-    const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents }, {
+    const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents, groups: groups ?? [everyone(agents.map(agent => agent.id))] }, {
         createAgent: (agent): A2AAgent => running.get(agent.id) as A2AAgent
     });
     await supervisor.start();
@@ -1016,7 +1023,7 @@ describe('A2AAgent: the fleet roster with the inbox request', () => {
         const other = await inboxAgent({ extensions: [INBOX_EXTENSION, FLEET] });
         const agents = [{ ...manifest(admin.agent.url), id: 'a', admin: true as const }, { ...manifest(other.agent.url), id: 'b' }];
         // No createAgent: the supervisor hands its roster to the remote agents itself.
-        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents });
+        const supervisor = new Supervisor({ location: { path: '/fleet', source: 'argument' }, exists: true, agents, groups: [everyone(agents.map(agent => agent.id))] });
         t.after(() => supervisor.stop());
         await supervisor.start();
         await eventually(() => admin.isOpen() && other.isOpen());
@@ -1066,7 +1073,7 @@ describe('A2AAgent: the fleet roster when the fleet changes', () => {
         strictEqual(updates.length, 1, 'the changes close together go out as one');
         const [update] = updates;
         ok(update !== undefined);
-        deepStrictEqual(update.roster.agents?.map(agent => [agent['id'], agent['you']]), [['a', true]]);
+        deepStrictEqual(update.roster.agents, [], 'alone in the fleet, the agent has no peer: the roster is empty');
         const versions = [subscribedRoster(watcher.agent)?.version ?? 0, ...rosterUpdates(watcher.agent).map(item => item.roster.version ?? 0)];
         deepStrictEqual([...versions].sort((left, right) => left - right), versions, 'the version only grows');
         ok((update.roster.version ?? 0) > (subscribedRoster(watcher.agent)?.version ?? 0));
@@ -1078,6 +1085,31 @@ describe('A2AAgent: the fleet roster when the fleet changes', () => {
         const after = supervisor.history('a').slice(history);
         deepStrictEqual(after.filter(event => ['message', 'queued', 'turn-end', 'progress'].includes(event.type)), [], 'the roster is not a turn and not shown');
         strictEqual(running.get('a')?.status, 'idle');
+    });
+});
+describe('A2AAgent: the fleet roster lists the peers only (docs/groups.md)', () => {
+    it('hands over the agents in a group with it and its groups, an empty roster to one in no group, and the roster again when a group changes', async (t) => {
+        const [a, b, c] = await Promise.all([1, 2, 3].map(() => inboxAgent({ extensions: [INBOX_EXTENSION, FLEET] })));
+        ok(a !== undefined && b !== undefined && c !== undefined);
+        const team = group('team', ['a', 'b'], { name: 'Team', topic: 'Ship it.' });
+        const { supervisor } = await rosterFleet(new Map([['a', a.agent], ['b', b.agent], ['c', c.agent]]), 20, [team]);
+        t.after(() => supervisor.stop());
+        await eventually(() => a.isOpen() && b.isOpen() && c.isOpen());
+        const first = subscribedRoster(a.agent);
+        deepStrictEqual(first?.agents?.map(agent => [agent['id'], agent['groups'], agent['you']]), [['a', ['team'], true], ['b', ['team'], undefined]]);
+        deepStrictEqual(first?.groups, [{ id: 'team', name: 'Team', topic: 'Ship it.', members: [{ id: 'a', name: 'Fake' }, { id: 'b', name: 'Fake' }] }]);
+        match(first?.text ?? '', /those in a group with you/);
+        match(first?.text ?? '', /"topic": "Ship it\."/);
+        deepStrictEqual(subscribedRoster(c.agent)?.agents, [], 'in no group: no agent to write to');
+        match(subscribedRoster(c.agent)?.text ?? '', /^You are not in a group with anyone yet/);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        const before = rosterUpdates(c.agent).length;
+        supervisor.replaceGroup(group('team', ['a', 'b', 'c'], { name: 'Team', topic: 'Ship it.' }));
+        await eventually(() => rosterUpdates(c.agent).length > before);
+        const update = rosterUpdates(c.agent).at(-1)?.roster;
+        deepStrictEqual(update?.agents?.map(agent => [agent['id'], agent['you']]), [['a', undefined], ['b', undefined], ['c', true]]);
+        deepStrictEqual(update?.groups?.map(found => found.members.map(member => member.id)), [['a', 'b', 'c']]);
+        await eventually(() => rosterUpdates(a.agent).some(item => item.roster.agents?.some(agent => agent['id'] === 'c') === true), 2_000);
     });
 });
 describe('A2AAgent: the fleet roster and the line of messages', () => {
@@ -1102,11 +1134,11 @@ describe('A2AAgent: the fleet roster and the line of messages', () => {
                 await echo(context, bus);
             }
         });
-        let roster = [{ id: 'fake', name: 'Fake', kind: 'remote' as const, status: 'idle' as const }];
-        const { client, events } = connect(agent, { rosterDebounceMs: 10, fleet: { roster: () => roster } });
+        let roster = [{ id: 'fake', name: 'Fake', kind: 'remote' as const, status: 'idle' as const, groups: ['all'] }];
+        const { client, events } = connect(agent, { rosterDebounceMs: 10, fleet: { roster: () => roster, groups: () => [] } });
         await client.start();
         await eventually(() => open);
-        roster = [...roster, { id: 'other', name: 'Other', kind: 'remote' as const, status: 'idle' as const }];
+        roster = [...roster, { id: 'other', name: 'Other', kind: 'remote' as const, status: 'idle' as const, groups: ['all'] }];
         client.fleetChanged();
         await eventually(() => release !== undefined);
         await client.send('hi');
@@ -1128,5 +1160,54 @@ describe('cardLocation', () => {
             base: 'https://eva.example.org/cards/eva.json',
             path: ''
         });
+    });
+});
+describe('A2AAgent: messages to a group through the inbox (docs/groups.md)', () => {
+    it('says which group a message of its own is for, and does not send one addressed both ways or giving a group a task', async () => {
+        const { agent, post, isOpen } = await inboxAgent();
+        const { client, events } = connect(agent);
+        await client.start();
+        await eventually(isOpen);
+        post('ship it', 'g-1', { [INBOX_EXTENSION]: { group: 'release' } });
+        post('both', 'g-2', { [INBOX_EXTENSION]: { to: 'builder', group: 'release' } });
+        post('a task', 'g-3', { [INBOX_EXTENSION]: { group: 'release', task: {} } });
+        const logs = () => events.flatMap(event => event.type === 'log' && event.source === 'flotti' ? [event.text] : []);
+        await eventually(() => logs().length === 2);
+        deepStrictEqual(events.flatMap(event => event.type === 'message' ? [[event.role, event.text, event.to, event.group]] : []), [
+            ['agent', 'ship it', undefined, 'release']
+        ]);
+        deepStrictEqual(logs(), [
+            'the message was not sent: it names both "to" ("builder") and "group" ("release"); a message goes to an agent or to a group, not both',
+            'the message was not sent: a task goes to one agent: "task" goes with "to", not with "group" ("release")'
+        ]);
+    });
+    it('tells the agent which group a message was posted to, in the metadata beside the sender', async () => {
+        const { agent, isOpen } = await inboxAgent();
+        const { client, events } = connect(agent);
+        await client.start();
+        await eventually(isOpen);
+        await client.send('ship it', { from: 'reviewer', group: 'release' });
+        await eventually(() => turnEnds(events).length === 1);
+        const metadata = () => (agent.received.at(-1)?.params['message'] as { metadata?: Record<string, unknown> }).metadata?.[INBOX_EXTENSION];
+        deepStrictEqual(metadata(), { from: 'reviewer', group: 'release' });
+        await client.send('all hands', { group: 'release' });
+        await eventually(() => turnEnds(events).length === 2);
+        deepStrictEqual(metadata(), { group: 'release' }, 'a message of a person to the group names no sender');
+        deepStrictEqual(events.flatMap(event => event.type === 'message' && event.role === 'user' ? [[event.text, event.from, event.group]] : []), [
+            ['ship it', 'reviewer', 'release'],
+            ['all hands', undefined, 'release']
+        ]);
+    });
+    it('names the sender and the group in the text to an agent without the inbox', async () => {
+        const agent = await fake({ script: echo });
+        const { client, events } = connect(agent);
+        await client.start();
+        await client.send('ship it', { from: 'reviewer', group: 'release' });
+        await client.send('all hands', { group: 'release' });
+        await eventually(() => turnEnds(events).length === 2);
+        deepStrictEqual(events.flatMap(event => event.type === 'message' && event.role === 'agent' ? [event.text] : []), [
+            'echo: [from reviewer in group release] ship it',
+            'echo: [in group release] all hands'
+        ]);
     });
 });

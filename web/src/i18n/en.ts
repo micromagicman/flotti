@@ -129,7 +129,17 @@ const en = {
         fleet: 'Fleet',
         agents: 'Agents',
         allMessages: 'All messages',
-        allMessagesHint: (n: number) => `The latest ${f.number(n)} of the fleet`
+        allMessagesHint: (n: number) => `The latest ${f.number(n)} of the fleet`,
+        sections: 'Sections of the sidebar',
+        waitsForYou: (names: string, n: number) => `${names} wait${n === 1 ? 's' : ''} for you`,
+        withNew: (n: number) => `${f.number(n)} with something new`,
+        groups: 'Groups',
+        groupHint: (members: number, messages: number) => `${f.number(members)} member${s(members)} · ${f.number(messages)} message${s(messages)}`,
+        groupTab: (name: string, members: number, messages: number) => `Group ${name}, ${f.number(members)} member${s(members)}, ${f.number(messages)} message${s(messages)}`,
+        noGroups: 'Your agents don\'t see each other yet.',
+        noGroupsWhy: 'An agent reaches only the members of its groups. One group of everyone lets them talk; split them later in Settings.',
+        everyone: 'Everyone',
+        makingEveryone: 'Making the group…'
     },
     health: {
         label: 'SSH connection',
@@ -184,7 +194,10 @@ const en = {
         role: 'Role',
         connection: 'Connection',
         actions: 'Actions',
-        noHarness: 'not known'
+        noHarness: 'not known',
+        groups: 'Groups',
+        noGroups: 'in no group: it sees no other agent',
+        openGroup: (name: string) => `Open the group ${name}`
     },
     composer: {
         toSend: 'to send',
@@ -266,6 +279,8 @@ const en = {
         noneOf: (name: string) => `No messages of ${name} yet.`,
         unseen: (n: number) => `↓ ${f.number(n)} new`,
         kind: { forwarded: 'forwarded', task: 'task', result: 'task result' },
+        group: 'group',
+        answer: 'answer',
         openIn: (place: string) => `Open in ${place}`,
         opens: (place: string) => `Opens ${place}`,
         tabOf: (name: string) => `the tab of ${name}`,
@@ -273,6 +288,23 @@ const en = {
         row: (from: string, to: string, when: string, place: string) => `${from} to ${to}, ${when}. Opens ${place}`,
         when: (time: Date, today: boolean) => (today ? f.time(time) : f.weekdayTime(time)),
         whenFull: (time: Date) => f.dateTime(time)
+    },
+    group: {
+        of: (name: string) => `Group ${name}`,
+        members: (n: number) => `${f.number(n)} member${s(n)}`,
+        notInFleet: 'not in the fleet',
+        editHint: 'Members, name and topic — in Settings → Groups',
+        notYet: (name: string) => `Nothing said in ${name} yet. Every member gets what you write here.`,
+        answer: 'answer',
+        toGroup: (from: string, name: string) => `${from} → ${name}`,
+        answerFromTo: (from: string, name: string) => `Answer from ${from} to ${name}`,
+        took: 'How the members took it',
+        gotIt: (names: string) => `${names} got it`,
+        inLine: (names: string) => `${names} in line`,
+        failed: (names: string) => `${names} failed`,
+        nobody: 'no other member',
+        messageTo: (name: string) => `Message to ${name}`,
+        messagePlaceholder: (name: string) => `Message ${name}…`
     },
     conversation: {
         of: (names: string) => `Conversation of ${names}`,
@@ -349,9 +381,26 @@ const en = {
         readingAdmin: 'Reading the settings…',
         adminConfirm: 'Ask me before an administrator restarts an agent or clears its context',
         adminHint: 'An administrator is an agent with Administrator ticked in its settings. When this is on, each of its actions waits for Allow in the dashboard; a refusal reaches it as one. When off, it is done at once.',
+        answersTitle: 'Answers',
+        answersLabel: 'How an answer of an agent reaches its tab',
+        answersStreamed: 'As it is written, piece by piece',
+        answersWhole: 'Whole, once the agent has finished it',
+        answersHint: 'One rule for every agent, local and remote, in the tabs and in the feed of the fleet. Holds for the next message, with no restart; saved in ~/.flotti/settings.json.',
+        readingAnswers: 'Reading the settings…',
         languageTitle: 'Language',
         languageLabel: 'Language of the dashboard',
         languageHint: 'Kept in this browser. Messages of agents and people are shown as they were written.'
+    },
+    groups: {
+        title: 'Groups',
+        noGroups: 'No groups yet: the agents do not see each other until they are in one.',
+        addGroup: 'Add group',
+        members: (n: number) => `${f.number(n)} member${s(n)}`,
+        noMembers: 'no members',
+        notInFleet: 'not in the fleet',
+        confirmDelete: (name: string) => `Move the group ${name} and its history to .trash in the fleet directory? Its members stop seeing each other through it.`,
+        keep: 'Keep',
+        reading: 'Reading the group…'
     },
     form: {
         newAgent: (kind: 'local' | 'remote') => `New ${kind} agent`,
@@ -407,6 +456,23 @@ const en = {
         administratorHint: 'May restart the agents of the fleet and clear their context, itself included, with the tools of an administrator. Only a person gives and takes this role.',
         restartsOnSave: 'Saving restarts the agent with the new settings, unless it is stopped.',
         addAgent: 'Add agent'
+    },
+    groupForm: {
+        newGroup: 'New group',
+        groupLabel: (id: string) => `Group ${id}`,
+        id: 'Id',
+        idNewHint: 'Names the group directory: letters, digits, ".", "_" and "-", starting with a letter or a digit. Groups and agents may share an id.',
+        idHint: 'The id is the directory name and stays.',
+        name: 'Name',
+        nameHint: 'Empty: the id.',
+        topic: 'Topic',
+        topicHint: 'What the group is for, and what its members are expected to do there; the agents get it as it is.',
+        members: 'Members',
+        membersHint: 'The agents in the group see and write to each other. A member the fleet does not have is kept and marked so.',
+        noAgents: 'No agents in the fleet yet: add one, or name the members by id below.',
+        others: 'Other members',
+        othersHint: 'Ids of agents that are not in the fleet yet, one per line.',
+        addGroup: 'Add group'
     },
     notifications: {
         title: 'Notifications',

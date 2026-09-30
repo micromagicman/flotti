@@ -6,7 +6,7 @@ import type { AdminOutcome } from '../src/fleet-admin.js';
 import { FleetMcpServer } from '../src/fleet-mcp.js';
 import type { FleetDirectory } from '../src/fleet-mcp.js';
 import { Supervisor } from '../src/supervisor.js';
-import { fakeFleet } from './fake-fleet-agent.js';
+import { fakeFleet, seeingEachOther } from './fake-fleet-agent.js';
 const servers: FleetMcpServer[] = [];
 after(async () => {
     await Promise.all(servers.map((server) => server.close()));
@@ -46,7 +46,9 @@ function directory(withAdmin = true): FleetDirectory & { asked: string[] } {
     return {
         asked,
         agents,
+        ...seeingEachOther(['boss', 'worker'], agents),
         send: async (agentId: string): Promise<Delivery> => ({ agentId, result: 'taken' }),
+        sendToGroup: () => Promise.reject(new Error('no groups here')),
         delegate: () => Promise.reject(new Error('no tasks here')),
         cancelDelegation: () => {
             throw new Error('no tasks here');
@@ -57,8 +59,8 @@ function directory(withAdmin = true): FleetDirectory & { asked: string[] } {
 describe('fleet tools of an administrator', () => {
     it('are listed to an administrator only, and list_agents marks it', async () => {
         const server = await toolsServer(directory());
-        deepStrictEqual(await toolNames(server, 'boss'), ['list_agents', 'send_message', 'reply', 'delegate', 'cancel_delegation', 'forward', 'restart_agent', 'clear_context']);
-        deepStrictEqual(await toolNames(server, 'worker'), ['list_agents', 'send_message', 'reply', 'delegate', 'cancel_delegation', 'forward']);
+        deepStrictEqual(await toolNames(server, 'boss'), ['list_agents', 'list_groups', 'send_message', 'reply', 'delegate', 'cancel_delegation', 'forward', 'restart_agent', 'clear_context']);
+        deepStrictEqual(await toolNames(server, 'worker'), ['list_agents', 'list_groups', 'send_message', 'reply', 'delegate', 'cancel_delegation', 'forward']);
         const listed = JSON.parse((await callTool(server, 'worker', 'list_agents', {})).text) as AgentSummary[];
         deepStrictEqual(listed.map((agent) => [agent.id, agent.admin]), [['boss', true], ['worker', undefined]]);
         const initialized = await rpc(server, 'boss', 'initialize', { protocolVersion: '2025-06-18' });

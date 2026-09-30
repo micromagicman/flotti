@@ -107,6 +107,25 @@ type RemoteAgent = AgentBase & {
     readonly auth: RemoteAuth;
 };
 type Agent = LocalAgent | RemoteAgent;
+/**
+ * A group of agents, from `<fleet>/groups/<id>/`: the agents in it see and
+ * reach one another (docs/groups.md). A member is named by id only, and one
+ * that is not in the fleet is kept as it is written.
+ */
+type Group = {
+    /** Name of the group directory; ids of groups and of agents are separate namespaces. */
+    readonly id: string;
+    /** Human-readable name; the id when the file says nothing. */
+    readonly name: string;
+    /** What the group is about, a line or a paragraph, given to the agents as it is. */
+    readonly topic?: string;
+    /** Ids of the agents in the group, in the order they were added; may be empty. */
+    readonly members: readonly string[];
+    /** Absolute path of the group directory. */
+    readonly directory: string;
+    /** Absolute path of `group.json` inside it. */
+    readonly filePath: string;
+};
 /** Which of the four ways gave flotti the fleet directory: `settings` is the one the dashboard saved. */
 type FleetSource = 'argument' | 'environment' | 'settings' | 'default';
 /** Fleet directory flotti decided to read, and why that one. */
@@ -122,6 +141,8 @@ type Fleet = {
     readonly exists: boolean;
     /** Local agents first, then remote ones, each group ordered by id. */
     readonly agents: readonly Agent[];
+    /** The groups of agents, ordered by id; none until a person makes one. */
+    readonly groups: readonly Group[];
 };
 export type {
     Agent,
@@ -129,6 +150,7 @@ export type {
     Fleet,
     FleetLocation,
     FleetSource,
+    Group,
     LocalAgent,
     LocalAgentAdapter,
     RemoteAgent,
