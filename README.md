@@ -351,7 +351,7 @@ the same way opens that directory again, since those two win over the saved one.
 
 ## Groups
 
-**Agents see and write to each other only inside a group** ([docs/groups.md](https://github.com/micromagicman/flotti/blob/main/docs/groups.md), #144).
+**Agents see and write to each other only inside a group** ([docs/groups.md](https://github.com/micromagicman/flotti/blob/main/docs/groups.md), #144; the requirements as built are in [`openspec/specs/groups`](https://github.com/micromagicman/flotti/blob/main/openspec/specs/groups/spec.md)).
 A group is a topical conversation — a name, a topic, a set of agents and a history of its own. An
 agent outside a group does not get its members as peers and cannot write to them; you are above the
 groups and see and reach everyone, as before. The rule lives in flotti, on every path a message
@@ -975,8 +975,27 @@ The page is React, built by Vite from `web/` into `build/web`, which the server 
 uses Playwright's Chromium — `npx playwright install chromium` once; `FLOTTI_E2E_CHROMIUM=<path>`
 points it at another Chromium instead.
 
-The `checks` workflow runs lint, types, the build, `npm test` and `test:e2e` on every pull request
-and on pushes to `main` and `develop`.
+The `checks` workflow runs lint, types, the build, `npm test`, `test:e2e` and the validation of the
+specs (below) on every pull request and on pushes to `main` and `develop`.
+
+### Specs
+
+What flotti does is written down in [OpenSpec](https://github.com/Fission-AI/OpenSpec) under
+`openspec/`: `openspec/specs/<capability>/spec.md` is the record of what is built — the source of
+truth for the requirements — and `openspec/changes/<id>/` is a change that is proposed and not built
+yet: a proposal with its open questions, a design, the tasks and the deltas to the specs. **A change is
+reviewed in a pull request before its implementation starts**; when it ships, it is archived into the
+specs. The documents under `docs/` explain and keep the reasons — what was rejected and why — and where
+a document and a spec disagree, the spec is right. The specs are in English, like everything else here.
+
+```bash
+npx --yes @fission-ai/openspec@1.4.1 validate --all --strict   # what the openspec job of checks runs
+npx --yes @fission-ai/openspec@1.4.1 list --specs              # the capabilities
+npx --yes @fission-ai/openspec@1.4.1 show <change>             # a change with its deltas
+```
+
+The version of the CLI is pinned — in the workflow as one variable — because the rules of validation
+move between releases; bumping it is a commit of its own.
 
 ### Storybook
 

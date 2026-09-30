@@ -2,10 +2,16 @@
 
 Spec of #144, the main feature of 0.6.0. Status: **built in 0.6.0** — the [sub-issues](#sub-issues)
 #149–#154 are the code, as reviewed here; the [open questions](#open-questions) keep the decisions taken.
-**0.7.0 changes it** — agents talk only inside groups, one message is read in one place, mentions, a
-group managed from its tab: the spec of #171–#175 is the section [0.7.0: groups only](#070-groups-only)
-at the end, with its own open questions and sub-issues; the sections before it are 0.6.0 as built, and a
-line under each one 0.7.0 touches says what changes.
+This document is the record of 0.6.0 as built and of the reasons — what was decided, what was rejected
+and why. **The requirements themselves live in OpenSpec** ([`openspec/specs/groups/spec.md`](../openspec/specs/groups/spec.md),
+with `direct-messages`, `fleet-feed` and `dashboard-rail` beside it): where this document and a spec
+disagree, the spec is right. **0.7.0 changes it** — agents talk only inside groups, one message is read
+in one place, mentions, a group managed from its tab: the spec of #171–#175 is the OpenSpec change
+[`openspec/changes/groups-only/`](../openspec/changes/groups-only/) (its
+[proposal](../openspec/changes/groups-only/proposal.md) with the open questions, its
+[design](../openspec/changes/groups-only/design.md) with what was rejected, its
+[tasks](../openspec/changes/groups-only/tasks.md) with the order of the sub-issues, and the spec deltas);
+a line under each section below that 0.7.0 touches says what changes and points there.
 
 Today every agent of the fleet sees every other one — `list_agents` for a local agent, the roster of
 [the fleet extension](a2a-fleet.md) for a remote one — and can write to any of them: `send_message`,
@@ -20,7 +26,7 @@ them. The person sees and reaches everyone, as before.
   (#114) and the conversations of pairs (#50) stay fleet-wide: groups are a rule for agents, not a
   filter on the dashboard.
   *0.7.0:* the feed (#173) and the conversations (#171) go; the person reads a group in its tab and an
-  agent in its tab, and the broadcast stays — [0.7.0](#070-groups-only).
+  agent in its tab, and the broadcast stays — [0.7.0](../openspec/changes/groups-only/proposal.md).
 - **The rule lives in flotti, not in the agents.** Every message between agents already goes through
   the supervisor — a tool of the fleet, the inbox of a remote agent, a task — and that is where the
   check goes. An agent cannot get round it, and an agent that knows nothing of groups is not broken by
@@ -177,7 +183,7 @@ busy holds nobody up — and is written to the history of the group with how eac
 ### A message to one agent inside a group
 
 *0.7.0:* gone — a message between agents goes through a group, addressed with `@<id>` when it is for
-one of them (#171, #174); what becomes of a task is [open question 1 of 0.7.0](#open-questions-070).
+one of them (#171, #174); what becomes of a task is [open question 1 of 0.7.0](../openspec/changes/groups-only/proposal.md#open-questions).
 
 Exactly what an agent-to-agent message is today — `send_message` with `to`, `to` of the inbox, a task —
 checked once at the door with `canReach`. It lands in the conversation of the pair, not in a group: a
@@ -205,7 +211,7 @@ writes it for the agents: what the group is for, and what its members are expect
 
 The rail of #136 gets a fourth section — **Groups** — between Agents and Conversations: Fleet, Agents,
 Groups, Conversations. *0.7.0:* Conversations and the feed go (#171, #173); the shape of what is left is
-[open question 3 of 0.7.0](#open-questions-070). It lists the groups of the fleet with the marks of their
+[open question 3 of 0.7.0](../openspec/changes/groups-only/proposal.md#open-questions). It lists the groups of the fleet with the marks of their
 members; a group with something new carries the dot a conversation carries, and a closed section its
 marker. Where exactly the
 tab sits and how a group is drawn on it are chosen through variants.
@@ -349,306 +355,12 @@ built. Every sub-issue updates the README and the CHANGELOG for what it brings, 
 
 Asked by the owner on 30.09.2026, after a day with 0.6.0: five changes, one spec — #171 (agents talk
 only inside groups), #172 (isolation by chat), #173 (no feed of the fleet), #174 (mentions), #175 (a
-group is managed from its own tab). Two of them were decided by the owner in the issues and are not
-open here: a mention **addresses** and does not narrow delivery (#174, variant a), and **Settings →
-Groups goes away** (#175). What is decided below, what was rejected and why, the
-[open questions](#open-questions-070) and the [sub-issues](#sub-issues-070) follow the form of 0.6.0.
-The sections above stay as the record of 0.6.0; where 0.7.0 changes one of them, a line under it says
-so and points here.
-
-### The idea
-
-0.6.0 made groups the boundary of what an agent sees, and left three fleet-wide views beside them: the
-conversations of pairs, the feed of every message, and the tab of an agent that shows the group traffic
-too. The first day with it showed the person reading the same exchange in three places and the agents keeping
-a private channel next to every group. 0.7.0 closes that: **an agent says something to another agent
-in a group, or not at all**, and **every message is read in one place** — the tab of the group for what
-was said in a group, the tab of the agent for what the person and the agent say to each other.
-
-### Agents talk only inside groups (#171)
-
-- **The tools.** `send_message` and `forward` take `group` only; `to` goes out of their schema. A call
-  that still names `to` — an agent with old instructions — is refused with a sentence that names the
-  way: `"to" is gone: a message to another agent goes through a group — name the group in "group" and
-  the agent with @<id> in the text`. `reply` answers in the group the last message came from; when no
-  message came through a group yet it says so and names `send_message` with `group`, as it does today
-  when nobody wrote. `list_agents`, `list_groups`, the roster and the peers stay exactly as in 0.6.0:
-  what an agent *sees* does not change, only how it *writes*.
-- **The inbox.** `to` with `kind: message` is refused: a line in the tab of the sender, as an
-  undeliverable `to` is today — `could not deliver the message to "x": a message to another agent goes
-  through a group; name it in "group"` — and the agent is not told, since the inbox has no answer to
-  give it. `group` is the one address of a message. Whether `to` keeps a meaning for a task is
-  [open question 1](#open-questions-070).
-- **The doors.** The check of 0.6.0 stays where it is — `sendRefusal` (`src/fleet-mcp.ts`),
-  `Supervisor.forward` (`src/supervisor.ts`), `Delegations.delegate` (`src/delegations.ts`) — and gets
-  one rule more in front of it: a *message* with `to` between agents is refused before `canReach` is
-  asked. `canReach` itself is still needed: for the task (open question 1), for the administrators
-  (`restart_agent`, `clear_context`, `kind: admin`), and for the answer flotti sends back at the end of a
-  turn, which goes back even after a membership edit, as in 0.6.0. `mayPost` is the check of every
-  message from now on.
-- **The answer of a turn** goes to the group the message came through, as today. Nothing ever goes
-  back to one agent straight: `sendBack` with `to` (`src/supervisor.ts`) is left for the task only, or
-  removed with it.
-- **The Conversations section** and the pair tabs (`_pair:<a>:<b>`, `web/src/conversations.ts`,
-  `ConversationPanel`, `conversationsId`, the section `conversations` of `web/src/sidebar-sections.ts`,
-  their tests, story and the i18n keys) go: nothing lands there any more. The pairs of 0.6.x were never
-  a store of their own — a lane was gathered from the tabs of the two agents — so nothing is migrated
-  and nothing is lost: what a pair said is still in the tabs of both, as rows from one agent to another.
-  Whether those rows stay in sight is [open question 2](#open-questions-070).
-- **The refusals for a non-peer** stay as #150 made them: the same words as for an agent that does not
-  exist. A mention of an agent outside the group is refused the same way — see #174 below.
-
-Rejected: *`to` kept as a shorthand for «a message to the group, addressed to this one»* — the message
-would then land in a group the sender did not name, and an agent in two groups with the receiver
-would not know which; *a pair conversation kept as a group of two made by flotti* — a group is the
-person's decision, and a group the person did not make is what open question 2 of 0.6.0 refused;
-*`to` accepted and rewritten into a mention by flotti* — same as the first: which group.
-
-### Isolation by chat (#172)
-
-**The tab of an agent shows what the person and the agent say to each other; the tab of a group shows
-what was said in the group.** One message, one place.
-
-- **What stays in the tab of an agent:** the person's messages to it (its own tab, the broadcast, a
-  forward the person made, a reply), everything the agent does in the turns they start, what the agent
-  says of its own (`kind: message` of the inbox without `group`, a local agent's message outside a
-  turn), the lines of flotti, the status and the harness, the actions of an administrator on it.
-- **What leaves it:** a message that came through a group — the `message` event with `group` — and
-  **the whole turn it started**: the agent's messages (the answer, which is in the group), its thoughts,
-  its tool calls, the `turn-end`. What the agent did for the group is the group's business; its status
-  badge still says `working` while it does it, since a status is not traffic. One exception, decided
-  here: **a permission request raised in a group turn stays in the tab of the agent**, marked with the
-  group — it waits for the person, and the person answers it where every permission is answered; the
-  `waiting` mark of the sidebar follows it as today. The same for a request of an administrator that
-  waits for the person. Whether thoughts and tool calls of a group turn should stay too is
-  [open question 6](#open-questions-070).
-- **Where the rule lives — the supervisor marks, the page filters.** The supervisor already knows which
-  turn a group message started (`followTurn` and `AgentAnswers.asked`, `src/supervisor.ts`,
-  `src/agent-answers.ts`); in `keep`, before `store`, it puts `group` on every event of that turn, not
-  on the first message only. The history file keeps every event, as it keeps what the tab got today —
-  **the file is the record of what the agent was told and did, and a hidden line is still a line** —
-  and a page written before 0.7.0 shows them as it does now. The page drops the events that carry
-  `group` on the way into the tab, in the reducer of `web/src/feed.ts`, one pure rule with a unit test:
-  a group message and the turn it started produce no items; a permission request of that turn does.
-  The unread mark of an agent's tab (`hasUnread`, `web/src/sidebar-sections.ts`) follows the last event
-  *shown*, not the last event kept, or a group turn would light a tab that has nothing new in it.
-- **The tab of a group** already shows the message and the answers of the members as one lane
-  (#152); nothing changes there except that the answer is now read in one place. How each member took
-  the message stays under it.
-- **The broadcast** is the person's message: it reaches every agent in its tab and the answers stay
-  there, as today. It is not a group.
-- **Old rows** — a group message of 0.6.x in the tab of a member carries `group` on the message and
-  nothing on the answer that followed: the message is hidden, the answer stays as a row of the agent
-  until it ages out. Rewriting histories is not done.
-
-Rejected: *not writing group traffic to the history of the agent at all* — the file would no longer say
-what the agent was told, a reloaded page and a page of 0.6.x would disagree with the live one, and the
-`AgentAnswers` and the delegations follow live events, not the file, so nothing is saved by it;
-*filtering on the server, in `history()` and the `event` notice* — the page then cannot show the traffic
-on purpose later (a «show group turns» switch is a page decision), and two pages of different versions
-would read different histories of the same agent; *hiding the answer only and keeping the tool calls* —
-see open question 6; *hiding permission requests with the turn* — an agent waiting for the person in a
-turn nobody can see is a hang.
-
-### No feed of the fleet (#173)
-
-- **The «All messages» tab goes**, and with it `web/src/fleet-feed.ts`, `FleetFeedPanel.tsx`, its
-  story and test, the filter by agent, the jump from a row to the tab it lives in (`feedOpen` in
-  `web/src/App.tsx`), the `_feed` id, `feedId` in `sidebar-sections.ts` and `Sidebar.tsx`, the i18n keys
-  `sidebar.allMessages*` and `fleetFeed.*`, the e2e of #114, the README paragraph. The `group` and
-  `answer` tags of a feed row go with the feed; the lane of a group keeps its own «answer» mark.
-- **Nothing else read the feed.** The socket, the histories and `group` on a `message` event stay —
-  #172 needs the field. The jump from the feed to a group message (#152) goes with the feed;
-  `found` and the quote jumps inside a lane stay.
-- **The Fleet section** is left with «All agents» alone. The broadcast stays — it is the one way to
-  reach every agent at once, and a group never holds every agent and the person. Where it sits when it
-  is alone is [open question 3](#open-questions-070); the recommendation is a rail of **two sections,
-  Agents and Groups**, with «All agents» the first tab of Agents.
-
-Rejected: *one feed per group instead* — the tab of the group is that already, as 0.6.0 said; *the feed
-kept for messages between a person and an agent only* — that is the tab of the agent, N times.
-
-### Mentions: `@agent` in a group (#174)
-
-The owner decided **variant (a), addressing**: a message with a mention reaches every member as today;
-only the mentioned members answer in the round, the others get it for context and owe no answer.
-
-- **The form: `@<id>`** in the text, the id as `list_groups` gives it. A mention is `@` at the start of
-  the text or after a space, a bracket or a comma, followed by an id — so `eva@example.com` is a mail
-  address, not a mention. Whether `@<name>` is read too is [open question 4](#open-questions-070); the
-  spec assumes not.
-- **One parser, every path.** `src/mentions.ts`, pure: `mentionsIn(text, members) → ids`, shared by the
-  server and the page (`web/src` imports from `src/` as it imports `groupTabId`). It runs where a group
-  message is taken in: `POST /api/groups/<id>/messages`, `send_message` and `forward` with `group`,
-  `reply` to a group, the inbox with `group`, and the answer flotti posts at the end of a turn.
-- **A mention of a non-member is refused** with one sentence, whether the id is an agent of another
-  group or nobody at all — an agent in a group learns nothing of the fleet outside it, as in 0.6.0:
-  the tool answers `there is no "x" among the members of group "release"; list_groups names them`, the
-  person gets `400` with `"x" is not a member of group "release"`, the inbox a line in the tab of the
-  sender. A message with a refused mention is not posted at all.
-- **What the history keeps:** `mentions: [ids]` on the line of the group, in the order they appear in
-  the text; absent when there is none. The `group-message` of the socket carries it.
-- **What a member gets.** Over the inbox, `mentions` beside `from` and `group` in the metadata —
-  `{"from": "eva", "group": "release", "mentions": ["codex"]}` — the same array for every member; the
-  mentioned one finds itself in it. In the text, for a local agent over ACP and a remote one without the
-  inbox: `[from eva in group release, to you] …` for a mentioned member, `[from eva in group release,
-  to codex] …` for the others, `[in group release, to you] …` when the person wrote. The `message`
-  event of the tab carries `mentions` too.
-- **Who answers.** `AgentAnswers.wantsAnswer` (`src/agent-answers.ts`) asks for an answer from a
-  mentioned member, and from every member when there is no mention — as today. A member not
-  mentioned takes the message as a turn — its model has to read it to have it in context — and what
-  it says in that turn is not posted to the group; by #172 it is not shown in its tab either, and rests in
-  its history. That is the cost of variant (a), N−1 turns for the message as before, and it is the
-  owner's choice: the message is for the group, the question is for one.
-- **The answer is a group message like any other:** a mentioned member's answer quotes the message
-  (`replyTo`) and mentions nobody by itself; a member that wants a particular agent to answer next
-  writes `@id` on purpose. So a round is still one round: an answer flotti posts earns no answer.
-- **The composer** of a group tab: `@` offers the members — mark, name, id — with the arrows and
-  Enter, and inserts `@<id> `; Escape closes the list. The picker is a pure list over the members and
-  the text before the caret (`web/src/mentions...`, tested), the field stays the `Composer` of today.
-  An agent posts with `@<id>` in the text of `send_message`; nothing is added to the tool schema.
-- **The row** of the lane shows a mention as a chip with the mark and the name of the agent in place
-  of `@id`; a click opens the tab of that agent. A mentioned member that is not in the fleet any more is
-  shown by id, as in the members line.
-
-Rejected: *variant (b), delivery to the mentioned only* — decided against by the owner: the others
-would read the exchange only in the history of the group and lose the context of the round;
-*`mentions` given by the sender in the metadata or a tool argument* — two ways to say one thing, and
-the text is what every path has; *an automatic mention of the sender on the answer* — every answer
-would then ask the sender for another round; *a mention resolved by the display name in the text* — see
-open question 4; *`@all` / `@here`* — a message without a mention already reaches everyone; it is the
-default, not a word.
-
-### A group is managed from its tab (#175)
-
-The owner decided: **Settings → Groups goes away**; a group is made in the Groups section and changed
-in its own tab.
-
-- **Edit** in the header of the group tab opens the form **in place**, over the lane: the same
-  `GroupForm` (`web/src/components/GroupForm.tsx`, the draft of `web/src/group-draft.ts`) with the id
-  read-only, the name, the topic, the members as ticks, ids not in the fleet as *not in the fleet* and
-  the line for ids typed by hand; **Save** puts `PUT /api/groups/<id>` and the lane comes back with the
-  header changed; **Cancel** drops the draft. The check is the server's, `parseGroup`, with its
-  sentences, as today.
-- **Delete** stands in the editor, with a confirmation naming the group; `DELETE /api/groups/<id>`
-  moves the directory to `.trash/` as today, and the page goes to the next tab of the Groups section —
-  or to its empty state with the «Everyone» offer when none is left.
-- **Add group** is a tab at the end of the Groups section, as **Add agent** is in Agents: it opens the
-  same form for a new group (the id picked once) as a panel, and a saved group opens its tab. The
-  «Everyone» offer of an empty section stays and stays one click.
-- **Settings** loses the Groups list, `GroupSettings.tsx`, `GroupEditor`, `atGroup` and
-  `editGroupOf` (`web/src/App.tsx`), and the sentence in the empty state of the Groups section that
-  points to Settings (`sidebar.noGroupsWhy`). The API of groups does not change.
-- **The agents** see the change on their next `list_agents`, and a remote one gets the roster again, as
-  in 0.6.0.
-
-Rejected: *a separate page for a group* — the tab is the place of the group, the form is small, and the
-agent form of Settings stays where it is because agents have a settings page for other reasons
-(harness, memory, admin); *Settings → Groups kept as a read-only list* — a list of what the rail
-already lists; *Add group in the header, next to Add agent* — a group is born in its section, the owner
-said, and the header is full on a phone (#102).
-
-### What stays in 0.7.0
-
-The model of a group, its files and API; the peers, `list_agents`, `list_groups`, the roster and its
-`groups`; `canReach` at the doors for what still goes between agents; the message to a group, its
-history with the deliveries, the one round of answers; the tab of a group as #152 built it, plus the
-mentions and the editor; the broadcast; the migration of 0.6.0 (no group made on upgrade, the
-«Everyone» offer); administrators bound by groups (open question 4 of 0.6.0).
-
-### Compatibility (0.7.0)
-
-- **Adapters of remote agents** ([a2a-inbox.md](a2a-inbox.md), [a2a-fleet.md](a2a-fleet.md)) — a
-  message with `to` between agents is refused with a line in the tab of the sender; an adapter that
-  posts with `group` needs nothing. `mentions` is one optional field more on the way in, ignored by an
-  adapter written before; on the way out a mention is `@<id>` in the text, nothing to learn. The roster
-  is unchanged; `id` is what a mention names. The two documents are updated in this PR for the parts
-  decided here; the task ([open question 1](#open-questions-070)) after the answer.
-- **Local agents** — `send_message` and `forward` lose `to`; `reply` is unchanged; the sentence of the
-  refusal teaches an agent with old instructions the new way.
-- **Events, socket, files** gain optional fields only: `mentions` on the line of a group and on a
-  `message` event, `group` on the events of a group turn. A page of 0.6.x shows the group turns in the
-  tab of the agent, as it does now, and knows nothing of mentions: it loses nothing.
-- **A fleet of 0.6.x** needs nothing. Its pair conversations were derived, not stored.
-
-### Open questions (0.7.0)
-
-Decisions the owner takes. Each has a recommendation, which is what the spec assumes above; a different
-answer changes the sub-issue it names.
-
-1. **What becomes of a task between agents — `delegate`, `cancel_delegation`, `task` and `cancel` of
-   the inbox?** A task is a direct exchange, and #171 removes those. Three ways: **(a)** a task to one
-   member *inside a group* — `delegate` takes `group` and `to`, the inbox `task` goes with `group` and
-   `to`; the task is posted to the group as a message from the giver addressed to the doer (a mention),
-   with the task mark and the deadline, the doer's turn is the task as today, and the outcome is posted
-   to the group as a message from the doer with `task.state`; the group tab shows the task card the
-   agent tab shows now; `canReach` is asked of the doer as a member of that group. **(b)** remove the
-   task for 0.7.0 — a task is `@doer do this` and the answer of the round is the result; deadline and
-   taking back come later, if missed. **(c)** keep the task direct, in the tabs of the two — against #171.
-   *Recommended: (a).* A task is the one thing agents do together that has a state and a deadline,
-   and the group is where the person reads it; (b) is the lean fallback if 0.7.0 must be small. Changes
-   sub-issue #171 (the largest part of it) and the two adapter documents.
-2. **The rows of 0.6.x between two agents in the tabs — a message with `from` or `to` an agent and no
-   `group`, and the tasks of a pair — stay in sight, or are hidden like group traffic?** *Recommended:
-   they stay.* They are history, they age out with the limit of the history, and the filter of #172 stays
-   one rule about `group`; hiding them would hide the tasks too, until open question 1 is built. Changes
-   sub-issue #172.
-3. **The rail once Conversations and the feed are gone: three sections with Fleet holding «All
-   agents» alone, two sections — Agents with «All agents» first, and Groups — or no broadcast at
-   all?** *Recommended: two sections, and the broadcast stays.* A section of one tab is a heading for
-   nothing; the broadcast is still the one way to reach every agent at once, since no group holds every
-   agent and the person is in none. The pick of a section survives a reload (#136) and `fleet` and
-   `conversations` become unknown values, which fall back to the first section. Changes sub-issue #173
-   (and the e2e of #136 that counts four tabs).
-4. **A mention by id only, or by name too?** *Recommended: `@<id>` in the text; the picker offers the
-   names and inserts the id; the row shows the name.* Names have spaces and change, ids do neither; a
-   parser of names would guess where a mention ends. Changes sub-issue #174.
-5. **Does an agent need a list of where it was mentioned — an inbox of mentions in its details or its
-   tab?** *Recommended: no in 0.7.0.* The group tab shows the chip and the history keeps `mentions`, so
-   the list can be built later without a migration. Changes sub-issue #174.
-6. **In the tab of an agent, does the whole group turn go — thoughts, tool calls, the turn end — or the
-   messages only, with the work kept?** *Recommended: the whole turn, permission requests excepted.*
-   Isolation is the point: a tab that shows tool calls without the message that caused them is a
-   puzzle. The status badge still says `working`; a «show group turns» switch on the tab is a follow-up
-   if the work is missed. Changes sub-issue #172.
-
-### Sub-issues (0.7.0)
-
-The five issues of the milestone are the sub-issues; no new one is made here. The order and the arrows;
-`∥` may run at the same time. Every issue updates the README («The dashboard», «Groups», «The fleet
-tools») and the CHANGELOG for what it brings.
-
-1. **#173 No feed of the fleet, and the shape of the rail.** Nothing depends on it and it touches the
-   rail first: remove the feed (module, panel, story, tests, i18n, README), settle the sections per open
-   question 3 (`SECTIONS`, `sectionOf`, the markers, `useSidebarSection` on an unknown saved value),
-   keep the broadcast. *Acceptance:* e2e — the rail has no «All messages»; the unit tests of
-   `fleet-feed` are gone with the module; the tests of the sections pass on the new set.
-2. **#175 A group is managed from its tab.** ∥ 1 (both touch `Sidebar.tsx`: Add group is a tab of the
-   Groups section; whichever lands second rebases). The inline editor from `GroupForm`, Delete with the
-   confirmation, Add group in the section, Settings → Groups removed. *Acceptance:* e2e — from the tab
-   of a group: rename, change members, delete, and the file follows; Add group in the section makes a
-   group and opens its tab; Settings has no Groups; unit for the draft shared with the form.
-3. **#171 Agents talk only inside groups.** → 1 (the rail without Conversations lands on the new
-   sections); the server part ∥ 1 and 2. `to` refused for a message on the three doors with the
-   sentences above, `send_message`/`forward` without `to`, `reply` to the group only, the task per open
-   question 1, Conversations removed from the page. The e2e of #144 («inside its group an agent writes
-   to a member and to the group») is rewritten: an agent writes to the group and mentions the member.
-   *Acceptance:* unit — an agent cannot reach another with `to` on the tools, the inbox and (if kept) a
-   message; through a group it can; `list_agents` and the roster unchanged; e2e — no Conversations,
-   two agents in a group talk in the tab of the group only.
-4. **#172 Isolation by chat.** ∥ 3 (it is a rule about `group`, and 0.6.0 already puts it on the
-   message; the mark on the whole turn is new). The supervisor marks the turn, the reducer filters,
-   the unread mark follows what is shown, permission requests stay. *Acceptance:* unit — a group message
-   and the member's answer produce no rows in the member's tab, a permission request of that turn does,
-   a direct message produces no row in any group; e2e — after a group message and a direct message the
-   agent tab has one message and the group tab has one.
-5. **#174 Mentions.** → 3 (the tool surface and the refusal sentences) and → 4 (without it the turn of a
-   member that owes no answer would show in its tab). The parser ∥ everything: `src/mentions.ts` and
-   its tests can start on day one. *Acceptance:* unit — the parser (ids, the mail address, the
-   non-member), `mentions` on the history line and in the metadata, the answering rule; e2e — a group
-   message with `@codex`: codex answers, the others do not; the `@` picker of the composer; the chip in
-   the row. a2a-inbox.md is finished for `mentions`.
-
-If the owner prefers smaller PRs, #171 splits along the line above — the server (the doors, the tools,
-the task) and the page (Conversations) — and the page part could go into #173, which already reshapes
-the rail; this spec makes no sixth issue for it.
+group is managed from its own tab). The spec is the OpenSpec change
+[`openspec/changes/groups-only/`](../openspec/changes/groups-only/): the
+[proposal](../openspec/changes/groups-only/proposal.md) (what changes per issue, the decisions the owner
+took in #174 and #175, the six open questions with a recommendation each), the
+[design](../openspec/changes/groups-only/design.md) (where each rule lands, what was rejected and why),
+the [tasks](../openspec/changes/groups-only/tasks.md) (the five issues as sub-issues, in order, with
+the dependencies) and the deltas to the specs of `groups`, `direct-messages`, `fleet-feed` and
+`dashboard-rail`. When the change ships it is archived into `openspec/specs/`, and this document stays
+the record of 0.6.0.

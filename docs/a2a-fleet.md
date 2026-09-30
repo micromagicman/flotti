@@ -4,7 +4,7 @@ URI: `https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md`
 
 An agent of the fleet can write to another one through its inbox ([a2a-inbox.md](a2a-inbox.md)): `to`
 names the agent, `group` a group it is in — from 0.7.0 `group` only, with the agent named in the text as
-`@<id>` ([groups.md](groups.md), #171, #174). A local agent learns the names with the `list_agents` and
+`@<id>` ([groups.md](groups.md), the change [groups-only](../openspec/changes/groups-only/proposal.md), #171, #174). A local agent learns the names with the `list_agents` and
 `list_groups` tools of the fleet MCP server; a remote one has no such server and, without this
 extension, learns the id of another agent only when that one writes to it first. With this extension
 flotti tells it who it can write to — the agents in a group with it ([groups.md](groups.md)) — and which

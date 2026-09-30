@@ -82,11 +82,13 @@ The message may say what it is, under the extension URI in its own metadata:
   agent's tab as sent there. A message that cannot be delivered — no such agent, the agent is stopped —
   is a line in this agent's tab saying why; the agent itself is not told. `to` goes with `kind: message`
   only.
-  **From 0.7.0 a message between agents goes through a group only** ([groups.md](groups.md), #171):
+  **From 0.7.0 a message between agents goes through a group only** (the OpenSpec change
+  [groups-only](../openspec/changes/groups-only/proposal.md), #171):
   `to` with `kind: message` is refused the way an undeliverable one is — a line in this agent's tab,
   `could not deliver the message to "x": a message to another agent goes through a group; name it in
   "group"` — and the agent is not told. A message for one member of the group names it in the text,
-  `@<id>` (#174, below). What `to` means for a task from 0.7.0 is decided in groups.md, open question 1.
+  `@<id>` (#174, below). What `to` means for a task from 0.7.0 is open question 1 of
+  [the change](../openspec/changes/groups-only/proposal.md#open-questions).
 - `group` — optional: the id of a group of the fleet the agent is in ([groups.md](groups.md)) the
   message is posted to; **one of `to` and `group`, never both**. flotti sends the text to every other
   member of the group, each on its own, as a message from this agent — see below — writes it to the
@@ -150,7 +152,7 @@ over ACP, get the group in the text: `[from reviewer in group release] …`, and
 for a message of a person. The dashboard shows the message in the receiver's tab marked with the group
 (until 0.7.0: from then on it is read in the tab of the group only, #172).
 
-From 0.7.0 a message that mentions members ([groups.md](groups.md), #174) carries them too, the same
+From 0.7.0 a message that mentions members ([groups-only](../openspec/changes/groups-only/proposal.md), #174) carries them too, the same
 array for every member — `{"from": "reviewer", "group": "release", "mentions": ["builder"]}` — and an
 agent that finds its own id in `mentions` is the one asked: what it answers in the task of that message
 is posted to the group; a member not in `mentions` gets the message for context, and what it answers is
@@ -165,7 +167,8 @@ after a reconnect — repeats the history.
 ## Tasks
 
 *From 0.7.0 the form of a task changes with the direct messages: whether it goes with `group` beside
-`to`, or goes away, is open question 1 of [groups.md](groups.md); this section is 0.6.x until then.*
+`to`, or goes away, is open question 1 of [the change groups-only](../openspec/changes/groups-only/proposal.md#open-questions);
+this section is 0.6.x until then.*
 
 A message with `to` and `task` gives the other agent a task (#51):
 
