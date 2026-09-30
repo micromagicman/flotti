@@ -10,6 +10,16 @@ import { EMPTY_GROUP_FEED, withGroupMessage } from './groups.js';
 import type { GroupFeed } from './groups.js';
 /** Where the socket is: `gone` — the server said it stops, and nothing reconnects. */
 type Link = 'connecting' | 'open' | 'closed' | 'gone';
+type FleetMessage = Extract<ServerMessage, { type: 'fleet' }>;
+/**
+ * The fleet as the socket may bring it. A server older than the page names no
+ * `groups`: `npm install -g flotti` puts the new files under a `flotti run`
+ * that is still going, which serves the new page from disk but speaks as it
+ * did (#167). Such a fleet has no groups until that server is restarted.
+ */
+type FleetOnWire = Omit<FleetMessage, 'groups'> & Partial<Pick<FleetMessage, 'groups'>>;
+/** What the socket may bring: any message of the server, and the fleet of an older one. */
+type WireMessage = Exclude<ServerMessage, FleetMessage> | FleetOnWire;
 type FleetState = {
     readonly link: Link;
     readonly agents: readonly AgentSummary[];
@@ -22,7 +32,7 @@ type FleetState = {
 };
 type FleetAction =
     | { readonly type: 'link'; readonly link: Link }
-    | { readonly type: 'server'; readonly message: ServerMessage }
+    | { readonly type: 'server'; readonly message: WireMessage }
     | { readonly type: 'permission-answered'; readonly agentId: string; readonly requestId: string }
     /** An action of an administrator allowed or refused here: it shows in two tabs, and both settle. */
     | { readonly type: 'admin-answered'; readonly actionId: string };
@@ -57,10 +67,14 @@ function withGroupMessageOf(state: FleetState, message: GroupMessage): FleetStat
     }
     return { ...state, groupFeeds: { ...state.groupFeeds, [message.groupId]: withGroupMessage(feed, message) } };
 }
-function fromServer(state: FleetState, message: ServerMessage): FleetState {
+/** The groups the fleet names; none from a server older than the page. */
+function groupsOf(fleet: FleetOnWire): readonly GroupSummary[] {
+    return fleet.groups ?? [];
+}
+function fromServer(state: FleetState, message: WireMessage): FleetState {
     switch (message.type) {
         case 'fleet':
-            return withFleet(state, message.agents, message.groups);
+            return withFleet(state, message.agents, groupsOf(message));
         case 'event':
             return withEvent(state, message.event);
         case 'group-message':
