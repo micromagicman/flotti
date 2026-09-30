@@ -3,7 +3,8 @@
 URI: `https://github.com/micromagicman/flotti/blob/main/docs/a2a-fleet.md`
 
 An agent of the fleet can write to another one through its inbox ([a2a-inbox.md](a2a-inbox.md)): `to`
-names the agent, `group` a group it is in. A local agent learns the names with the `list_agents` and
+names the agent, `group` a group it is in — from 0.7.0 `group` only, with the agent named in the text as
+`@<id>` ([groups.md](groups.md), #171, #174). A local agent learns the names with the `list_agents` and
 `list_groups` tools of the fleet MCP server; a remote one has no such server and, without this
 extension, learns the id of another agent only when that one writes to it first. With this extension
 flotti tells it who it can write to — the agents in a group with it ([groups.md](groups.md)) — and which
@@ -46,7 +47,8 @@ not sent the roster:
 
 - `agents` — the agents the roster's agent can write to: the members of every group it is in
   ([groups.md](groups.md)), the agent itself too, in the order of the dashboard; **empty when the agent is
-  in no group with anyone**, and `text` says so. `id` is what goes in `to`; `name`, `description` and
+  in no group with anyone**, and `text` says so. `id` is what goes in `to` (from 0.7.0, what a mention
+  `@<id>` names); `name`, `description` and
   `harness` are there when flotti knows them; `status` is one of `starting`, `idle`, `working`,
   `waiting`, `error`, `stopped`; `groups` — the ids of the groups the two share (the agent's own groups
   on its own entry). `you` marks the entry of the agent the roster is for, `admin` an administrator of
