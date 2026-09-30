@@ -2,7 +2,12 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.6.0] — 2026-09-30
+
+Groups: agents see and message each other only inside a group, with a Groups section and a tab of
+every group in the dashboard and Settings → Groups; answers reach the dashboard streamed or whole by
+one rule; the sidebar as three tabs; a Storybook of the dashboard; and, from this version, a
+noncommercial license — PolyForm Noncommercial 1.0.0.
 
 ### Added
 
@@ -105,6 +110,17 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
   — a messenger for AI agents, local ones over ACP and remote ones over A2A, with a dashboard — instead of
   repeating the first line of the README: npm hides a README paragraph that equals the package description,
   so the subtitle under the logo was missing on npmjs.com. The README keeps its slogan (#145).
+- **The README renders on npm as on GitHub.** The logo and the links to `docs/*.md` in the README are
+  absolute addresses on `main`, so the page on npmjs.com shows one logo and links that lead to the docs,
+  the same as GitHub; the text of the README is unchanged. The page follows the README of the last
+  published version, so it changes with this release (#140).
+
+### Fixed
+
+- **A steady e2e test of web push.** The test of a push shown while the dashboard is out of sight now
+  waits until the service worker has shown the notification before it reads the list. Its first read
+  landed in a window where `getNotifications()` in Chromium drops a notification that is saved but not
+  yet on the screen, and the test lost it for good. Nothing changes in how flotti behaves (#132).
 
 ## [0.5.0] — 2026-09-28
 
@@ -377,6 +393,7 @@ The first release: a fleet of AI agents and one dashboard to work with them.
   ([micromagicman/eva#266](https://github.com/micromagicman/eva/issues/266)).
 - The A2A adapter of Cutie, on the same contract as Eva's (owners/quanthread-ai-hub#218, !194).
 
+[0.6.0]: https://github.com/micromagicman/flotti/releases/tag/v0.6.0
 [0.5.0]: https://github.com/micromagicman/flotti/releases/tag/v0.5.0
 [0.4.0]: https://github.com/micromagicman/flotti/releases/tag/v0.4.0
 [0.3.0]: https://github.com/micromagicman/flotti/releases/tag/v0.3.0
