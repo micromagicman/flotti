@@ -5,10 +5,11 @@ import type { AgentSummary, Delivery, GroupMessage, GroupSummary } from '../../.
 import { groupTabId } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import { api } from '../api.js';
-import { groupMessageKey, laneItem, quotedInLane, tookNames } from '../groups.js';
+import { groupMessageKey, laneItem, outcomeOf, quotedInLane, taskOf, tookNames } from '../groups.js';
 import type { GroupFeed, Took } from '../groups.js';
 import { GroupMarks, Member, nameOf } from './AgentMark.js';
 import { Composer } from './Composer.js';
+import { DelegationCard } from './DelegationCard.js';
 import { usePinnedScroll } from './Feed.js';
 import { MessageBody, MessageToolbar, ReplyPreview } from './Message.js';
 import type { MessageActions, QuoteActions } from './Message.js';
@@ -102,33 +103,51 @@ function DeliveryLine({ delivery, agents }: { readonly delivery: Delivery; reado
         </li>
     );
 }
-type RowProps = Fleet & { readonly message: GroupMessage; readonly group: GroupSummary; readonly actions: MessageActions };
-/** The bar of an agent's message: who wrote it → the group, and «answer» when flotti posted it for the member. */
+type RowProps = Fleet & { readonly message: GroupMessage; readonly messages: readonly GroupMessage[]; readonly group: GroupSummary; readonly actions: MessageActions };
+/** What the bar adds after who wrote it: «answer» when flotti posted it for the member, how the task ended on the line of an outcome (#171). */
+function barMark(message: GroupMessage, t: Messages): string {
+    const outcome = outcomeOf(message);
+    if (outcome !== undefined) {
+        return ` · ${t.delegation.task} ${t.delegation.state[outcome]}`;
+    }
+    return message.turnAnswer === true ? ` · ${t.group.answer}` : '';
+}
+/** The bar of an agent's message: who wrote it → the group, and what kind of message it is. */
 function EnvelopeBar({ message, group, agents }: Pick<RowProps, 'message' | 'group' | 'agents'> & { readonly message: GroupMessage & { readonly from: string } }) {
     const t = useT();
     const from = nameOf(agents, message.from);
     const answer = message.turnAnswer === true;
     return (
         <div className="envelope-bar">
-            <span aria-hidden="true">{t.group.toGroup(from, group.name)}{answer ? ` · ${t.group.answer}` : ''}</span>
+            <span aria-hidden="true">{t.group.toGroup(from, group.name)}{barMark(message, t)}</span>
             <span className="visually-hidden">{answer ? t.group.answerFromTo(from, group.name) : t.common.fromTo(from, group.name)}</span>
         </div>
     );
 }
-/** One message of the lane (#152): the person's on the right, an agent's as an envelope on the left; under it, how the members took it. */
-function LaneRow({ message, group, actions, agents, colors }: RowProps) {
+/** The message itself: the person's, an agent's envelope, or the card of a task given in the group (#171), as the task stands now. */
+function LaneMessage({ message, messages, group, actions, agents, colors }: RowProps) {
     const t = useT();
     const item = laneItem(message);
-    const tab = groupTabId(group.id);
+    const task = taskOf(messages, message);
     const from = message.from;
+    if (task !== undefined) {
+        return <DelegationCard item={{ kind: 'delegation', key: item.key, ...task }} agents={agents} colors={colors} />;
+    }
+    return from === undefined
+        ? <div className="item message message-user"><div className="item-label">{t.common.you}</div><MessageBody item={item} agents={agents} colors={colors} actions={actions} /></div>
+        : <div className={`item message message-agent message-peer agent-color-${colors[from] ?? 0}`}>
+            <EnvelopeBar message={{ ...message, from }} group={group} agents={agents} />
+            <div className="envelope-body"><MessageBody item={item} agents={agents} colors={colors} actions={actions} /></div>
+        </div>;
+}
+/** One message of the lane (#152): the person's on the right, an agent's as an envelope on the left; under it, how the members took it. */
+function LaneRow(props: RowProps) {
+    const { message, group, actions, agents, colors } = props;
+    const item = laneItem(message);
+    const tab = groupTabId(group.id);
     return (
-        <div className={`message-row${from === undefined ? ' message-row-user' : ''}`} data-key={item.key}>
-            {from === undefined
-                ? <div className="item message message-user"><div className="item-label">{t.common.you}</div><MessageBody item={item} agents={agents} colors={colors} actions={actions} /></div>
-                : <div className={`item message message-agent message-peer agent-color-${colors[from] ?? 0}`}>
-                    <EnvelopeBar message={{ ...message, from }} group={group} agents={agents} />
-                    <div className="envelope-body"><MessageBody item={item} agents={agents} colors={colors} actions={actions} /></div>
-                </div>}
+        <div className={`message-row${message.from === undefined ? ' message-row-user' : ''}`} data-key={item.key}>
+            <LaneMessage {...props} />
             <MessageToolbar item={item} agentId={tab} agentName={group.name} agents={agents} colors={colors} actions={actions} />
             <Took deliveries={message.deliveries} agents={agents} />
         </div>
@@ -142,7 +161,7 @@ function Lane({ group, messages, actions, found, ...fleet }: LaneProps) {
     return (
         <div className="feed lane-group" role="log" aria-label={t.group.of(group.name)} ref={list} onScroll={onScroll}>
             {messages.length === 0 ? <p className="muted empty">{t.group.notYet(group.name)}</p> : null}
-            {messages.map((message) => <LaneRow key={message.seq} message={message} group={group} actions={actions} {...fleet} />)}
+            {messages.map((message) => <LaneRow key={message.seq} message={message} messages={messages} group={group} actions={actions} {...fleet} />)}
         </div>
     );
 }

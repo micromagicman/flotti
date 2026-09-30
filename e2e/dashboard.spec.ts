@@ -62,8 +62,9 @@ async function streamed(directory: string, ...[context, bus]: Parameters<Script>
 /**
  * What the remote agent says of its own when asked to `write later`: a line of
  * progress and then a message, through the inbox — after the turn is over.
- * Asked to `write to claude`, it sends a message to that agent the same way;
- * asked to `give claude a task`, it gives that agent a task.
+ * Asked to `write to claude`, it sends a message to that agent by `to`, which
+ * 0.7.0 refuses (#171); asked to `give claude a task`, it gives that agent a
+ * task in the group they share.
  */
 async function remoteAgent(fleet: string, id: string): Promise<void> {
     const directory = join(fleet, 'remote', id);
@@ -102,7 +103,7 @@ async function remoteAgent(fleet: string, id: string): Promise<void> {
                 setTimeout(() => inbox?.('Please rerun the e2e job', 'message', 'claude'), 100);
             }
             if (said(context) === 'give claude a task') {
-                setTimeout(() => inbox?.('Collect the failing tests', 'message', 'claude', { task: {} }), 100);
+                setTimeout(() => inbox?.('Collect the failing tests', 'message', 'claude', { group: 'team', task: {} }), 100);
             }
             if (said(context) === 'clear codex') {
                 setTimeout(() => admin?.('clear-context', 'codex'), 100);
@@ -171,7 +172,7 @@ test.afterAll(async () => {
 });
 /** A tab of the open section of the sidebar. */
 const tab = (page: Page, name: string) => page.locator('.sidebar').getByRole('tab', { name: new RegExp(`^${name}`) });
-/** A tab of the switch of the sections of the sidebar (#136): Agents, Groups, Conversations. */
+/** A tab of the switch of the sections of the sidebar (#136): Agents and Groups. */
 const section = (page: Page, name: string) => page.getByRole('tablist', { name: 'Sections of the sidebar' }).getByRole('tab', { name: new RegExp(`^${name}`) });
 /** The section a tab of the sidebar is in: the broadcast and the agents in Agents (#173); none for Add agent, which is under every one. */
 function sectionOfTab(name: string): string | undefined {
@@ -195,7 +196,7 @@ async function say(page: Page, name: string, text: string): Promise<void> {
 }
 test('every agent has a tab with its status', async ({ page }) => {
     await page.goto(url);
-    await expect(page.getByRole('tablist', { name: 'Sections of the sidebar' }).getByRole('tab')).toHaveText(['Agents', 'Groups', 'Conversations']);
+    await expect(page.getByRole('tablist', { name: 'Sections of the sidebar' }).getByRole('tab')).toHaveText(['Agents', 'Groups']);
     await expect(page.locator('.sidebar').getByRole('tab')).toHaveText([/All agents/, /claude/, /codex/, /relay/, /Add agent/]);
     for (const name of ['claude', 'codex', 'relay']) {
         await expect(tab(page, name).locator('[data-status]')).toHaveAttribute('data-status', 'idle');
@@ -281,38 +282,16 @@ test('what an agent says of its own shows in its tab, local and remote alike', a
     await expect(feed(page, 'relay').locator('.progress')).toHaveText('Checking the pipeline');
     await expect(feed(page, 'relay').locator('.message-agent').last()).toContainText('The merge request is ready');
 });
-test('an agent writes to another: both tabs show who wrote to whom, apart from what a person typed', async ({ page }) => {
+test('an agent that writes to another by "to" is refused: its tab shows the message and why it went nowhere, and the other agent gets nothing (#171)', async ({ page }) => {
     await page.goto(url);
     await say(page, 'relay', 'write to claude');
     const sent = feed(page, 'relay').locator('.message-sent');
     await expect(sent.locator('.envelope-bar')).toContainText('relay → claude');
     await expect(sent).toContainText('Please rerun the e2e job');
+    await expect(feed(page, 'relay').locator('.log').filter({ hasText: 'could not deliver the message to "claude"' }))
+        .toHaveText(['flotti: could not deliver the message to "claude": a message to another agent goes through a group; name it in "group"']);
     await openTab(page, 'claude');
-    const received = feed(page, 'claude').locator('.message-peer');
-    await expect(received.locator('.envelope-bar')).toContainText('relay → claude');
-    await expect(received).toContainText('Please rerun the e2e job');
-    await expect(feed(page, 'claude')).toContainText('you said: [from relay] Please rerun the e2e job');
-});
-const lane = (page: Page) => page.getByRole('log', { name: 'Conversation of relay and claude' });
-const pairTab = (page: Page) => page.getByRole('tab', { name: /^Conversation of relay and claude/ });
-async function openPair(page: Page): Promise<void> {
-    await section(page, 'Conversations').click();
-    await pairTab(page).click();
-}
-test('the conversation of two agents has a tab of its own: one lane, read-only, with the way to write to either', async ({ page }) => {
-    await page.goto(url);
-    await openPair(page);
-    // The message of relay, and the answer claude sends back to it (#45): it says the same words.
-    const [message, answer] = [lane(page).locator('.lane-row').nth(0), lane(page).locator('.lane-row').nth(1)];
-    await expect(message.locator('.envelope-bar')).toContainText('relay → claude');
-    await expect(message).toContainText('Please rerun the e2e job');
-    await expect(message).toHaveClass(/lane-first/);
-    await expect(answer.locator('.envelope-bar')).toContainText('claude → relay');
-    await expect(answer).toContainText('you said: [from relay] Please rerun the e2e job');
-    await expect(answer).toHaveClass(/lane-second/);
-    await expect(page.getByRole('textbox')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Write to claude' }).click();
-    await expect(page.getByRole('textbox', { name: 'Message to claude' })).toBeVisible();
+    await expect(feed(page, 'claude')).not.toContainText('Please rerun the e2e job');
 });
 /** The channels of a colour, 0–255: `#rrggbb`, `rgb()`, or the `color(srgb …)` a `color-mix()` computes to. */
 function channels(color: string): number[] {
@@ -358,12 +337,11 @@ async function relayColors(page: Page): Promise<{ marks: string[]; bars: Bar[] }
     await openTab(page, 'relay');
     const marks = [await paint(tab(page, 'relay').locator('.agent-mark')), await paint(page.locator('.agent-header .agent-mark'))];
     const bars = [await bar(feed(page, 'relay').locator('.message-sent').first())];
-    await openPair(page);
-    marks.push(await paint(page.locator('.lane-title .agent-mark').first()));
-    bars.push(await bar(lane(page).locator('.lane-first .message-sent').first()));
+    await openTab(page, 'Group team', 'Groups');
+    marks.push(await paint(page.locator('.group-header .member').filter({ hasText: 'relay' }).locator('.agent-mark')));
     return { marks, bars };
 }
-test('an agent has one hue on its mark in the sidebar, in the header of its tab and in a conversation, and a tone of it on its envelopes, in both themes (#96)', async ({ page }) => {
+test('an agent has one hue on its mark in the sidebar, in the header of its tab and in a group, and a tone of it on its envelopes, in both themes (#96)', async ({ page }) => {
     for (const colorScheme of ['light', 'dark'] as const) {
         await page.emulateMedia({ colorScheme });
         await page.goto(url);
@@ -381,19 +359,11 @@ test('an agent has one hue on its mark in the sidebar, in the header of its tab 
         }
     }
 });
-test('on a narrow screen the conversations are one tab away: the pairs have a row of their own under Conversations', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 800 });
-    await page.goto(url);
-    await expect(pairTab(page)).toBeHidden();
-    await openPair(page);
-    await expect(lane(page)).toContainText('Please rerun the e2e job');
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-});
 const viewButton = (page: Page, name: 'Chat' | 'Memory') => page.getByRole('group', { name: 'View' }).getByRole('button', { name, exact: true });
 const rail = (page: Page) => page.getByRole('tablist', { name: 'Sections of the sidebar' });
-test('the sidebar is three tabs, with no Fleet and no All messages: a click shows its section and hides the others, what is open stays open, and the pick survives a reload (#136, #152, #173)', async ({ page }) => {
+test('the sidebar is two tabs, with no Fleet, no All messages and no Conversations: a click shows its section and hides the other, what is open stays open, and the pick survives a reload (#136, #152, #173, #171)', async ({ page }) => {
     await page.goto(`${url}#/claude`);
-    await expect(rail(page).getByRole('tab')).toHaveText(['Agents', 'Groups', 'Conversations']);
+    await expect(rail(page).getByRole('tab')).toHaveText(['Agents', 'Groups']);
     await expect(section(page, 'Agents'), 'the first time the sidebar opens on Agents').toHaveAttribute('aria-selected', 'true');
     await expect(page.locator('.sidebar').getByRole('tab').first(), 'All agents is the first tab of Agents').toHaveText(/^All agents/);
     await expect(tab(page, 'claude')).toBeVisible();
@@ -403,24 +373,22 @@ test('the sidebar is three tabs, with no Fleet and no All messages: a click show
     await expect(tab(page, 'Group team')).toBeVisible();
     await expect(tab(page, 'All agents')).toHaveCount(0);
     await expect(tab(page, 'claude')).toHaveCount(0);
-    await expect(pairTab(page)).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: /^Conversation of/ })).toHaveCount(0);
     await expect(page.getByRole('textbox', { name: 'Message to claude' }), 'the chat open stays open').toBeVisible();
-    await section(page, 'Conversations').click();
-    await expect(pairTab(page)).toBeVisible();
-    await expect(tab(page, 'All agents')).toHaveCount(0);
-    await expect(tab(page, 'claude')).toHaveCount(0);
     await expect(tab(page, 'Add agent'), 'Add agent is under every section').toBeVisible();
     await page.reload();
-    await expect(section(page, 'Conversations')).toHaveAttribute('aria-selected', 'true');
-    await expect(pairTab(page)).toBeVisible();
+    await expect(section(page, 'Groups')).toHaveAttribute('aria-selected', 'true');
+    await expect(tab(page, 'Group team')).toBeVisible();
 });
-test('a saved pick of the Fleet section of 0.6.x opens the first section, Agents (#173)', async ({ page }) => {
-    await page.addInitScript(() => window.localStorage.setItem('flotti.sidebar-section', 'fleet'));
-    await page.goto(`${url}#/claude`);
-    await expect(rail(page).getByRole('tab')).toHaveText(['Agents', 'Groups', 'Conversations']);
-    await expect(section(page, 'Agents')).toHaveAttribute('aria-selected', 'true');
-    await expect(tab(page, 'All agents')).toBeVisible();
-});
+for (const saved of ['fleet', 'conversations']) {
+    test(`a saved pick of the ${saved} section of 0.6.x opens the first section, Agents (#173, #171)`, async ({ page }) => {
+        await page.addInitScript((pick) => window.localStorage.setItem('flotti.sidebar-section', pick), saved);
+        await page.goto(`${url}#/claude`);
+        await expect(rail(page).getByRole('tab')).toHaveText(['Agents', 'Groups']);
+        await expect(section(page, 'Agents')).toHaveAttribute('aria-selected', 'true');
+        await expect(tab(page, 'All agents')).toBeVisible();
+    });
+}
 test('the switch is one stop of Tab; the arrows, Home and End move along it and open what they reach (#136)', async ({ page }) => {
     await page.goto(`${url}#/claude`);
     await section(page, 'Agents').focus();
@@ -430,14 +398,10 @@ test('the switch is one stop of Tab; the arrows, Home and End move along it and 
     await expect(section(page, 'Groups')).toHaveAttribute('aria-selected', 'true');
     await expect(tab(page, 'Group team')).toBeVisible();
     await page.keyboard.press('ArrowDown');
-    await expect(section(page, 'Conversations')).toBeFocused();
-    await expect(section(page, 'Conversations')).toHaveAttribute('aria-selected', 'true');
-    await expect(pairTab(page)).toBeVisible();
-    await page.keyboard.press('ArrowDown');
     await expect(section(page, 'Agents')).toBeFocused();
     await expect(tab(page, 'All agents')).toBeVisible();
     await page.keyboard.press('End');
-    await expect(section(page, 'Conversations')).toBeFocused();
+    await expect(section(page, 'Groups')).toBeFocused();
     await page.keyboard.press('Home');
     await expect(section(page, 'Agents')).toBeFocused();
     await page.keyboard.press('ArrowRight');
@@ -458,12 +422,11 @@ test('the switch follows what opens: a tab of another section turns it to that s
     await expect(section(page, 'Agents')).toHaveAttribute('aria-selected', 'true');
     await expect(tab(page, 'relay')).toHaveAttribute('aria-selected', 'true');
 });
-test('a closed section keeps its markers on the switch: new output, an agent waiting for you in its place, new messages of a conversation (#136)', async ({ page, context }) => {
+test('a closed section keeps its markers on the switch: new output, an agent waiting for you in its place (#136)', async ({ page, context }) => {
     await page.goto(url);
     for (const name of ['claude', 'codex', 'relay']) {
         await openTab(page, name);
     }
-    await openPair(page);
     await openTab(page, 'Group team', 'Groups');
     const agents = section(page, 'Agents');
     await expect(agents.locator('.unread, .rail-wait'), 'every agent seen: nothing new').toHaveCount(0);
@@ -478,11 +441,6 @@ test('a closed section keeps its markers on the switch: new output, an agent wai
     await expect(agents).toHaveAccessibleName(/^Agents, codex waits for you/);
     await feed(other, 'codex').getByRole('button', { name: 'Allow' }).click();
     await expect(agents.locator('.rail-wait')).toHaveCount(0);
-    const conversations = section(page, 'Conversations');
-    await expect(conversations.locator('.unread')).toHaveCount(0);
-    await say(other, 'relay', 'write to claude');
-    await expect(conversations.locator('.unread')).toBeVisible();
-    await expect(conversations).toHaveAccessibleName('Conversations, 1 with something new');
     await other.close();
 });
 for (const width of [1280, 390]) {
@@ -492,10 +450,10 @@ for (const width of [1280, 390]) {
             await page.addInitScript((code) => window.localStorage.setItem('flotti.language', code), language);
             await page.goto(`${url}#/claude`);
             const labels = rail(page).or(page.getByRole('tablist', { name: 'Разделы боковой панели' })).locator('.rail-label');
-            await expect(labels).toHaveCount(3);
+            await expect(labels).toHaveCount(2);
             const cut = await labels.evaluateAll((spans) => spans.filter((span) => span.scrollWidth > span.clientWidth).map((span) => span.textContent));
             expect(cut, `${language}: labels cut`).toEqual([]);
-            for (const key of ['agents', 'groups', 'conversations']) {
+            for (const key of ['agents', 'groups']) {
                 await page.locator(`[data-section="${key}"]`).click();
                 expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${language} ${key}`).toBe(true);
             }
@@ -543,19 +501,24 @@ test('on a narrow screen the Memory view is the list, then a note with the way b
     await expect(notes).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
-test('an agent gives another a task: both tabs show who gave it to whom and how it ended, and the outcome comes back', async ({ page }) => {
+test('an agent gives another a task in their group: both tabs and the tab of the group show who gave it to whom and how it ended, and the outcome comes back (#171)', async ({ page }) => {
     await page.goto(url);
     await say(page, 'relay', 'give claude a task');
     const card = feed(page, 'relay').getByRole('group', { name: 'Task from relay to claude: completed' });
     await expect(card.locator('.delegation-bar')).toContainText('task · relay → claude');
     await expect(card).toContainText('Collect the failing tests');
-    await expect(card.locator('.delegation-result')).toContainText('you said: [from relay] Task');
-    const outcome = feed(page, 'relay').locator('.message-peer').filter({ hasText: 'you said: [from relay] Task' }).last();
-    await expect(outcome.locator('.envelope-bar')).toContainText('claude → relay');
+    await expect(card.locator('.delegation-result')).toContainText('you said: [from relay in group team] Task');
+    const outcome = feed(page, 'relay').locator('.message-peer').filter({ hasText: 'you said: [from relay in group team] Task' }).last();
     await expect(outcome.locator('.quote')).toContainText('Collect the failing tests');
     await openTab(page, 'claude');
     await expect(feed(page, 'claude').getByRole('group', { name: 'Task from relay to claude: completed' })).toBeVisible();
-    await expect(feed(page, 'claude')).toContainText(/you said: \[from relay\] Task \S+, given to you\./);
+    await expect(feed(page, 'claude')).toContainText(/you said: \[from relay in group team\] Task \S+, given to you\./);
+    await openTab(page, 'Group team', 'Groups');
+    const lane = page.getByRole('log', { name: 'Group team' });
+    await expect(lane.getByRole('group', { name: 'Task from relay to claude: completed' })).toContainText('Collect the failing tests');
+    const posted = lane.locator('.message-peer').filter({ hasText: 'you said: [from relay in group team] Task' });
+    await expect(posted.locator('.envelope-bar')).toContainText('claude → team · task completed');
+    await expect(posted.locator('.quote')).toContainText('@claude Collect the failing tests');
 });
 /** The row of the last message of the tab that says `text`, with its Reply and Forward. */
 const messageRow = (page: Page, name: string, text: string, side: 'user' | 'agent' = 'agent') =>
@@ -973,7 +936,7 @@ test('the language is picked in the settings: the page speaks it at once, and af
     await page.goto(`${url}#/_settings`);
     await page.getByRole('combobox', { name: 'Language of the dashboard' }).selectOption('ru');
     await expect(page.getByRole('heading', { name: 'Настройки флота' })).toBeVisible();
-    await expect(page.getByRole('tablist', { name: 'Разделы боковой панели' }).getByRole('tab')).toHaveText(['Агенты', 'Группы', 'Переписки']);
+    await expect(page.getByRole('tablist', { name: 'Разделы боковой панели' }).getByRole('tab')).toHaveText(['Агенты', 'Группы']);
     await expect(tab(page, 'claude').locator('[data-status]')).toHaveText(/^(запускается|свободен|работает|ждёт вас|ошибка|остановлен)/);
     expect(await page.evaluate(() => document.documentElement.lang)).toBe('ru');
     await page.reload();

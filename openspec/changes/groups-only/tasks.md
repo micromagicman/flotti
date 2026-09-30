@@ -23,14 +23,14 @@ May run with 1 (both touch `Sidebar.tsx`; whichever lands second rebases).
 
 The server part may run with 1 and 2; the page part after 1 (the rail without Conversations lands on the new sections). Assumes open question 1 = (a).
 
-- [ ] 3.1 `send_message` and `forward` lose `to` in the tool schema; a call with `to` is refused with `"to" is gone: a message to another agent goes through a group — name the group in "group" and the agent with @<id> in the text`
-- [ ] 3.2 `reply` answers in the group the last message came from; when none came through a group yet it says so and names `send_message` with `group`
-- [ ] 3.3 The inbox: `to` with `kind: message` is refused with `could not deliver the message to "x": a message to another agent goes through a group; name it in "group"` in the sender's tab; the agent is not told
-- [ ] 3.4 The rule in front of `canReach` at the three doors (`sendRefusal`, `Supervisor.forward`, `Delegations.delegate`): a message with `to` between agents is refused before `canReach` is asked; `canReach` stays for the task, the administrators and the answer sent back at the end of a turn
-- [ ] 3.5 The task per open question 1: `delegate` takes `group` and `to`, the inbox `task` goes with `group` and `to`; the task is posted to the group as a message from the giver mentioning the doer, with the task mark and the deadline; the outcome is posted to the group with `task.state`; the group tab shows the task card; `sendBack` with `to` is kept for the task only
-- [ ] 3.6 Remove Conversations from the page: `web/src/conversations.ts`, `ConversationPanel`, `conversationsId`, the section `conversations` of `sidebar-sections.ts`, their tests, story and i18n keys
-- [ ] 3.7 Unit — an agent cannot reach another with `to` on the tools, the inbox and a message; through a group it can; `list_agents` and the roster unchanged; e2e — no Conversations, two agents in a group talk in the tab of the group only; the e2e of #144 rewritten: an agent writes to the group and mentions the member
-- [ ] 3.8 `docs/a2a-inbox.md` Tasks section finished per open question 1; README («The fleet tools», «Groups») and CHANGELOG
+- [x] 3.1 `send_message` and `forward` lose `to` in the tool schema; a call with `to` is refused with `"to" is gone: a message to another agent goes through a group — name the group in "group" and the agent with @<id> in the text`
+- [x] 3.2 `reply` answers in the group the last message came from; when none came through a group yet it says so and names `send_message` with `group`
+- [x] 3.3 The inbox: `to` with `kind: message` is refused with `could not deliver the message to "x": a message to another agent goes through a group; name it in "group"` in the sender's tab; the agent is not told
+- [x] 3.4 The rule in front of `canReach` at the three doors (`sendRefusal`, `Supervisor.forward`, `Delegations.delegate`): a message with `to` between agents is refused before `canReach` is asked; `canReach` stays for the task, the administrators and the answer sent back at the end of a turn
+- [x] 3.5 The task per open question 1: `delegate` takes `group` and `to`, the inbox `task` goes with `group` and `to`; the task is posted to the group as a message from the giver mentioning the doer, with the task mark and the deadline; the outcome is posted to the group with `task.state`; the group tab shows the task card; `sendBack` with `to` is kept for the task only
+- [x] 3.6 Remove Conversations from the page: `web/src/conversations.ts`, `ConversationPanel`, `conversationsId`, the section `conversations` of `sidebar-sections.ts`, their tests, story and i18n keys
+- [x] 3.7 Unit — an agent cannot reach another with `to` on the tools, the inbox and a message; through a group it can; `list_agents` and the roster unchanged; e2e — no Conversations, two agents in a group talk in the tab of the group only; the e2e of #144 rewritten: an agent writes to the group and mentions the member
+- [x] 3.8 `docs/a2a-inbox.md` Tasks section finished per open question 1; README («The fleet tools», «Groups») and CHANGELOG
 
 ## 4. #172 Isolation by chat
 

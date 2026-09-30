@@ -47,8 +47,8 @@ describe('the languages of the dashboard', () => {
     });
     it('writes numbers, counts and dates the way the language does', () => {
         const ru = languageOf('ru').messages;
-        deepStrictEqual([1, 2, 5, 21, 1_000].map((n) => ru.common.messages(n)), ['1 сообщение', '2 сообщения', '5 сообщений', '21 сообщение', '1 000 сообщений']);
-        deepStrictEqual([1, 2].map((n) => en.common.messages(n)), ['1 message', '2 messages']);
+        deepStrictEqual([1, 2, 5, 21, 1_000].map((n) => ru.group.members(n)), ['1 участник', '2 участника', '5 участников', '21 участник', '1 000 участников']);
+        deepStrictEqual([1, 2].map((n) => en.group.members(n)), ['1 member', '2 members']);
         strictEqual(en.common.inLine(1_000), '1,000 in line');
         strictEqual(ru.health.duration(3_725_000), '1 ч 2 мин');
         const time = new Date(2026, 8, 24, 15, 30);

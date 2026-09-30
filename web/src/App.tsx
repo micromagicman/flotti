@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { JSX } from 'react';
 import type { Quote } from '../../src/agent-events.js';
 import { AgentPanel } from './components/AgentPanel.js';
 import type { Jump } from './components/Feed.js';
 import { BroadcastPanel } from './components/BroadcastPanel.js';
-import { ConversationPanel, ConversationsPanel } from './components/ConversationPanel.js';
 import { GroupPanel } from './components/GroupPanel.js';
 import { Logo } from './components/Logo.js';
 import { SettingsPanel } from './components/SettingsPanel.js';
@@ -12,8 +11,6 @@ import { Sidebar } from './components/Sidebar.js';
 import { api } from './api.js';
 import { useFleet } from './connection.js';
 import { useT } from './i18n/I18n.js';
-import { conversations as conversationsOf, pairOf } from './conversations.js';
-import type { Conversation } from './conversations.js';
 import { quotedMessage } from './feed.js';
 import type { AgentFeed } from './feed.js';
 import type { Link } from './fleet-state.js';
@@ -29,8 +26,6 @@ const BROADCAST = 'all';
 const SETTINGS = '_settings';
 /** The settings opened at the agents, to add one (#116). */
 const ADD_AGENT = '_add-agent';
-/** The list of every conversation of agents; a conversation of two has a tab of its own, `_pair:…`. */
-const CONVERSATIONS = '_conversations';
 /** The settings opened at the form of a group (#152), from Edit in its tab: `_edit-group:<id>`. */
 const EDIT_GROUP = '_edit-group:';
 function editGroupOf(tab: string): string | undefined {
@@ -72,7 +67,7 @@ function SettingsButton({ open, onOpen }: { readonly open: boolean; readonly onO
         </button>
     );
 }
-/** What the open tab has shown: the last event of an agent, or how many messages of a conversation. */
+/** What the open tab has shown: the last event of an agent, or the last message of a group. */
 function useSeen(tab: string | undefined, shown: number | undefined): Record<string, number> {
     const [seen, setSeen] = useState<Record<string, number>>({});
     useEffect(() => {
@@ -106,18 +101,6 @@ function useQuotes(feeds: Readonly<Record<string, AgentFeed>>, tab: string, setT
     };
     return { quotes, jump };
 }
-/** The conversations of the fleet, and the one open, if a conversation tab is. */
-function useConversations(state: ReturnType<typeof useFleet>[0], tab: string) {
-    const ids = state.agents.map((summary) => summary.id);
-    const all = useMemo(() => conversationsOf(ids, state.feeds), [ids.join('\n'), state.feeds]);
-    const pair = pairOf(tab);
-    const open = pair === undefined ? undefined : all.find((conversation) => conversation.id === tab);
-    return { all, open, pair: knownPair(open === undefined ? pair : [open.first, open.second] as const, ids) };
-}
-/** The two agents of a conversation tab, while both are in the fleet. */
-function knownPair(pair: readonly [string, string] | undefined, ids: readonly string[]): readonly [string, string] | undefined {
-    return pair !== undefined && pair.every((id) => ids.includes(id)) ? pair : undefined;
-}
 /** The group whose tab is open (#152), while it is in the fleet, and what the page has of it. */
 function useOpenGroup(state: FleetState, tab: string) {
     const id = groupOf(tab);
@@ -125,33 +108,25 @@ function useOpenGroup(state: FleetState, tab: string) {
     return { open, feed: open === undefined ? undefined : state.groupFeeds[open.id] };
 }
 type OpenGroup = ReturnType<typeof useOpenGroup>;
-function isPanelTab(tab: string, pair: unknown, group: unknown): boolean {
-    return [BROADCAST, ADD_AGENT, CONVERSATIONS].includes(tab) || isSettingsTab(tab) || pair !== undefined || group !== undefined;
+function isPanelTab(tab: string, group: unknown): boolean {
+    return [BROADCAST, ADD_AGENT].includes(tab) || isSettingsTab(tab) || group !== undefined;
 }
 type FleetState = ReturnType<typeof useFleet>[0];
 type AgentSummary = FleetState['agents'][number];
 /** The agent whose tab is open: the one the tab names, else the first one, unless another panel is open. */
-function openAgent(state: FleetState, tab: string, pair: unknown, group: unknown): AgentSummary | undefined {
-    return state.agents.find((candidate) => candidate.id === tab) ?? (isPanelTab(tab, pair, group) ? undefined : state.agents[0]);
+function openAgent(state: FleetState, tab: string, group: unknown): AgentSummary | undefined {
+    return state.agents.find((candidate) => candidate.id === tab) ?? (isPanelTab(tab, group) ? undefined : state.agents[0]);
 }
 function feedOf(state: FleetState, agent: AgentSummary | undefined): AgentFeed | undefined {
     return agent === undefined ? undefined : state.feeds[agent.id];
 }
-/** The open lane that marks what it has shown: a conversation or a group. */
-function seenLane(open: Conversation | undefined, group: OpenGroup): string | undefined {
-    return open?.id ?? (group.open === undefined ? undefined : groupTabId(group.open.id));
+/** The open tab that marks what it has shown: an agent or a group. */
+function seenTab(agent: AgentSummary | undefined, group: OpenGroup): string | undefined {
+    return agent?.id ?? (group.open === undefined ? undefined : groupTabId(group.open.id));
 }
-/** The open tab that marks what it has shown: an agent, a conversation or a group. */
-function seenTab(agent: AgentSummary | undefined, open: Conversation | undefined, group: OpenGroup): string | undefined {
-    return agent?.id ?? seenLane(open, group);
-}
-/** What the open lane has shown: how many messages of the conversation, or the last message of the group. */
-function seenLaneCount(open: Conversation | undefined, group: OpenGroup): number | undefined {
-    return open?.messages.length ?? group.feed?.lastSeq;
-}
-/** What the open tab has shown: the last event of the agent, or what the open lane has shown. */
-function seenCount(feed: AgentFeed | undefined, open: Conversation | undefined, group: OpenGroup): number | undefined {
-    return feed?.lastSeq ?? seenLaneCount(open, group);
+/** What the open tab has shown: the last event of the agent, or the last message of the group. */
+function seenCount(feed: AgentFeed | undefined, group: OpenGroup): number | undefined {
+    return feed?.lastSeq ?? group.feed?.lastSeq;
 }
 /** The one click of the Groups section (docs/groups.md, open question 2): every agent of the fleet in one group, and its tab opens. */
 function useEveryone(state: FleetState, setTab: (tab: string) => void) {
@@ -165,15 +140,14 @@ function useAppModel() {
     const [tab, setTab] = useTab();
     const attention = useAttention(state, setTab, useT());
     const colors = useAgentColors(state.agents.map((summary) => summary.id));
-    const conversations = useConversations(state, tab);
     const group = useOpenGroup(state, tab);
-    const agent = openAgent(state, tab, conversations.pair, group.open);
+    const agent = openAgent(state, tab, group.open);
     const feed = feedOf(state, agent);
-    const seenSeq = useSeen(seenTab(agent, conversations.open, group), seenCount(feed, conversations.open, group));
+    const seenSeq = useSeen(seenTab(agent, group), seenCount(feed, group));
     const live = state.agents.map((summary) => ({ ...summary, status: state.feeds[summary.id]?.status ?? summary.status }));
     const { quotes, jump } = useQuotes(state.feeds, tab, setTab);
     const onEveryone = useEveryone(state, setTab);
-    return { state, dispatch, tab, setTab, attention, colors, conversations, group, seenSeq, agent, feed, live, quotes, jump, onEveryone };
+    return { state, dispatch, tab, setTab, attention, colors, group, seenSeq, agent, feed, live, quotes, jump, onEveryone };
 }
 type AppModel = ReturnType<typeof useAppModel>;
 function Topbar({ link, settingsOpen, onSettings }: { readonly link: Link; readonly settingsOpen: boolean; readonly onSettings: () => void }) {
@@ -187,13 +161,6 @@ function Topbar({ link, settingsOpen, onSettings }: { readonly link: Link; reado
             </span>
         </header>
     );
-}
-function ConversationMain({ model }: { readonly model: AppModel }) {
-    const { state, tab, setTab, colors, conversations, quotes } = model;
-    const fleet = { agents: state.agents, colors };
-    return conversations.pair === undefined || tab === CONVERSATIONS
-        ? <ConversationsPanel conversations={conversations.all} onOpen={setTab} {...fleet} />
-        : <ConversationPanel key={tab} pair={conversations.pair} conversation={conversations.open} feeds={state.feeds} quotes={quotes} onOpen={setTab} conversationsId={CONVERSATIONS} {...fleet} />;
 }
 type Panel = (props: { readonly model: AppModel }) => JSX.Element;
 function SettingsMain({ model }: { readonly model: AppModel }) {
@@ -224,13 +191,9 @@ const PANELS: ReadonlyMap<string, Panel> = new Map([
     [ SETTINGS, SettingsMain ],
     [ ADD_AGENT, SettingsMain ]
 ]);
-/** Whether the open tab is the list of conversations or one of them, and not an agent. */
-function isConversationMain({ tab, agent, conversations }: AppModel): boolean {
-    return agent === undefined && (tab === CONVERSATIONS || conversations.pair !== undefined);
-}
-/** The panel of a tab that is none of the groups': one of its own, a conversation, else an agent or the broadcast. */
+/** The panel of a tab that is none of the groups': one of its own, else an agent or the broadcast. */
 function plainPanelOf(model: AppModel): Panel {
-    return PANELS.get(model.tab) ?? (isConversationMain(model) ? ConversationMain : AgentMain);
+    return PANELS.get(model.tab) ?? AgentMain;
 }
 /** The panel the open tab opens: the settings at a group, the tab of a group, or one of the others. */
 function panelOf(model: AppModel): Panel {
@@ -243,36 +206,30 @@ function Main({ model }: { readonly model: AppModel }) {
     const Panel = panelOf(model);
     return <main className="main"><Panel model={model} /></main>;
 }
-/** The tab the sidebar marks: an agent, a group, a conversation, or one of the others. */
-function selectedTab({ tab, agent, group, conversations }: AppModel): string {
+/** The tab the sidebar marks: an agent, a group, or one of the others. */
+function selectedTab({ tab, agent, group }: AppModel): string {
     if (agent !== undefined) {
         return agent.id;
     }
-    if (group.open !== undefined) {
-        return groupTabId(group.open.id);
-    }
-    return conversations.pair === undefined ? otherTab(tab) : conversationTab(conversations.open, tab);
+    return group.open === undefined ? otherTab(tab) : groupTabId(group.open.id);
 }
-function conversationTab(open: Conversation | undefined, tab: string): string {
-    return open?.id ?? tab;
-}
-/** One of the tabs that are neither an agent, a group nor a conversation; the broadcast when the tab is none of them. */
+/** One of the tabs that are neither an agent nor a group; the broadcast when the tab is none of them. */
 function otherTab(tab: string): string {
     if (editGroupOf(tab) !== undefined) {
         return SETTINGS;
     }
-    return [SETTINGS, ADD_AGENT, CONVERSATIONS].includes(tab) ? tab : BROADCAST;
+    return [SETTINGS, ADD_AGENT].includes(tab) ? tab : BROADCAST;
 }
 function App() {
     const model = useAppModel();
-    const { state, tab, setTab, colors, conversations, seenSeq, onEveryone } = model;
-    const tabs = { broadcastId: BROADCAST, addAgentId: ADD_AGENT, conversationsId: CONVERSATIONS };
+    const { state, tab, setTab, colors, seenSeq, onEveryone } = model;
+    const tabs = { broadcastId: BROADCAST, addAgentId: ADD_AGENT };
     const selected = selectedTab(model);
     const [section, setSection] = useSidebarSection(tab, sectionOf(selected, state.agents.map((summary) => summary.id), tabs));
     return (
         <div className="app">
             <Topbar link={state.link} settingsOpen={isSettingsTab(tab)} onSettings={() => setTab(SETTINGS)} />
-            <Sidebar agents={state.agents} feeds={state.feeds} colors={colors} conversations={conversations.all} groups={state.groups} groupFeeds={state.groupFeeds}
+            <Sidebar agents={state.agents} feeds={state.feeds} colors={colors} groups={state.groups} groupFeeds={state.groupFeeds}
                 onEveryone={onEveryone} seenSeq={seenSeq} selected={selected} onSelect={setTab} section={section} onSection={setSection} {...tabs} />
             <Main model={model} />
         </div>

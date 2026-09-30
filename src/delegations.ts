@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentEvent, AgentEventBody, AgentStatus, Delegation, DelegationMark, DelegationState, Quote, SendOptions } from './agent-events.js';
 import { describeError } from './describe-error.js';
-import { noSuchAgent } from './groups.js';
+import { noSuchAgent, noSuchGroup } from './groups.js';
 import { present } from './present.js';
 /** What the tasks need of the fleet: the supervisor gives it. */
 interface DelegationFleet {
@@ -15,8 +15,20 @@ interface DelegationFleet {
     cancel(agentId: string): Promise<void>;
     /** Puts an event of flotti's own into the tab of the agent, when it is in the fleet. */
     note(agentId: string, body: AgentEventBody): void;
-    /** Whether `from` may write to `to` — the two share a group (docs/groups.md); the tab of `from` says why not. */
-    mayWrite(from: string, to: string): boolean;
+    /** Whether `from` may post to the group — it is a member (docs/groups.md); the tab of `from` says why not. */
+    mayPost(from: string, groupId: string): boolean;
+    /**
+     * Whether `from` may give `to` a task in the group: `to` is a member of it
+     * (0.7.0, #171); the tab of `from` says why not.
+     */
+    mayTask(from: string, groupId: string, to: string): boolean;
+    /**
+     * Posts the task to its group as a message from the giver mentioning the
+     * doer; `taken` settles once the doer took it or never will.
+     */
+    postTask(delegation: Delegation & { readonly group: string }, taken: Promise<void>): void;
+    /** Posts the outcome of the task to its group as a message from the doer, answering the task. */
+    postOutcome(delegation: Delegation & { readonly group: string }): void;
 }
 /** Where a task stands right after it was given. */
 type DelegationStart = {
@@ -33,6 +45,12 @@ type DelegationCancel = {
 type DelegateOptions = {
     /** Id of the task; a new one when absent. An A2A agent names it: the id of its message. */
     readonly id?: string;
+    /**
+     * The group the task is given in (0.7.0, #171): both agents are members of
+     * it, and the task and its outcome are posted there. A task without one is
+     * refused.
+     */
+    readonly group?: string;
     /** ISO 8601 time the task is to be done by. */
     readonly deadline?: string;
     /**
@@ -63,8 +81,11 @@ type TaskTurn = {
 type MessageEvent = AgentEvent & { type: 'message' };
 /** How a task ends: its state, and why when it did not complete. */
 type Outcome = { readonly state: DelegationState; readonly why?: string };
-/** What the fleet says of the agent a task goes to: its status, and whether the giver may write to it. */
-type Sight = { readonly status: AgentStatus | undefined; readonly reachable: boolean };
+/**
+ * What the fleet says of the agent a task goes to: its status, whether the
+ * giver is in the group, and whether the agent is a member of it.
+ */
+type Sight = { readonly status: AgentStatus | undefined; readonly inGroup: boolean; readonly reachable: boolean };
 /** Why a task cannot be given, by one check; nothing when this check lets it be given. */
 type RefusalCheck = (delegation: Delegation, sight: Sight) => string | undefined;
 /** A task the agent asks about that it never gave. */
@@ -88,11 +109,15 @@ const OUTCOMES: ReadonlyMap<string, Outcome> = new Map<string, Outcome>([
  */
 const REFUSAL_CHECKS: readonly RefusalCheck[] = [
     ({ from, to }) => to === from ? 'an agent does not give tasks to itself' : undefined,
+    ({ group }) => group === undefined ? NO_GROUP : undefined,
+    ({ group }, { inGroup }) => group !== undefined && !inGroup ? noSuchGroup(group) : undefined,
     ({ to }, { status, reachable }) => status === undefined || !reachable ? noSuchAgent(to) : undefined,
     ({ to }, { status }) => status === 'stopped' ? `"${to}" is stopped` : undefined,
     ({ deadline }) => deadline !== undefined && Number.isNaN(Date.parse(deadline)) ? `the deadline "${deadline}" is not a time` : undefined,
     ({ deadline }) => deadline !== undefined && Date.parse(deadline) <= Date.now() ? 'its deadline has passed already' : undefined
 ];
+/** Why a task without a group is refused: a task goes inside a group (0.7.0, #171). */
+const NO_GROUP = 'a task goes inside a group: name a group you share with the agent in "group"';
 /** How a task ends by the way the turn of the agent on it ended, and why when it did not complete. */
 function outcomeOf(reason: string): Outcome {
     return OUTCOMES.get(reason) ?? { state: 'failed', why: `the turn of the agent on it ended: ${reason}` };
@@ -106,11 +131,12 @@ function involves(task: Task, agentId: string): boolean {
     return task.view.state === 'working' && (task.view.to === agentId || task.view.from === agentId);
 }
 /** The task as it ended: in its new state, with the result when there is one. */
-function ended({ delegationId, from, to, text, deadline }: Delegation, state: DelegationState, result: string): Delegation {
+function ended({ delegationId, from, to, group, text, deadline }: Delegation, state: DelegationState, result: string): Delegation {
     return {
         delegationId,
         from,
         to,
+        ...present('group', group),
         text,
         state,
         ...present('deadline', deadline),
@@ -138,6 +164,20 @@ function queuedAfter(sent: Promise<void>, ms: number, refused: (error: unknown, 
             done();
         });
     });
+}
+/** The task with the group it was given in; nothing for one of 0.6.x, given agent to agent. */
+function inGroup(delegation: Delegation): (Delegation & { readonly group: string }) | undefined {
+    return delegation.group === undefined ? undefined : { ...delegation, group: delegation.group };
+}
+/** A promise settled from outside: what a message that is not sent yet will come to. */
+function settled(): { readonly promise: Promise<void>; readonly resolve: () => void; readonly reject: (error: unknown) => void } {
+    let resolve: () => void = () => undefined;
+    let reject: (error: unknown) => void = () => undefined;
+    const promise = new Promise<void>((done, failed) => {
+        resolve = done;
+        reject = failed;
+    });
+    return { promise, resolve, reject };
 }
 /** The parts that say something, one paragraph each. */
 function joined(...parts: (string | undefined)[]): string {
@@ -237,6 +277,7 @@ class Delegations {
                 delegationId: id,
                 from,
                 to,
+                ...present('group', options.group),
                 text,
                 state: 'working',
                 ...present('deadline', options.deadline)
@@ -271,9 +312,14 @@ class Delegations {
         }
         return undefined;
     }
-    /** The agent the task goes to, as the fleet sees it from the giver; a task to oneself reaches nobody. */
-    private sight({ from, to }: Delegation): Sight {
-        return { status: this.fleet.status(to), reachable: to !== from && this.fleet.mayWrite(from, to) };
+    /**
+     * The agent the task goes to, as the fleet sees it from the giver: asked
+     * of the group only once the giver is in it; a task to oneself reaches nobody.
+     */
+    private sight({ from, to, group }: Delegation): Sight {
+        const status = this.fleet.status(to);
+        const member = group !== undefined && this.fleet.mayPost(from, group);
+        return { status, inGroup: member, reachable: member && to !== from && this.fleet.mayTask(from, group, to) };
     }
     /**
      * Sends the task to the agent. A refusal within the wait fails the task at
@@ -281,12 +327,22 @@ class Delegations {
      * then, and the agent that gave it is told.
      */
     private hand(task: Task, tellFailure: boolean): Promise<DelegationStart> {
-        const { delegationId: id, from, to, text, deadline } = task.view;
+        const { delegationId: id, from, to, group, text, deadline } = task.view;
+        // Posted before it is sent: an agent may end its turn on the task before `send` returns, and the outcome comes after the task.
+        const taken = settled();
+        // Whoever posts the task learns how it was taken; nobody else waits on it.
+        taken.promise.catch(() => undefined);
+        const posted = inGroup(task.view);
+        if (posted !== undefined) {
+            this.fleet.postTask(posted, taken.promise);
+        }
         const sent = this.fleet.send(to, text, {
             from,
             messageId: task.messageId,
+            ...present('group', group),
             delegation: { id, ...present('deadline', deadline) }
         });
+        sent.then(taken.resolve, taken.reject);
         const queued = queuedAfter(sent, this.queuedAfterMs, (error, late) => {
             this.settle(task, 'failed', `"${to}" did not get it: ${describeError(error)}`, late || tellFailure);
         });
@@ -394,6 +450,10 @@ class Delegations {
         clearTimeout(task.timer);
         task.view = ended(task.view, state, result);
         this.show(task);
+        const posted = inGroup(task.view);
+        if (posted !== undefined) {
+            this.fleet.postOutcome(posted);
+        }
         if (tell) {
             this.tellGiver(task);
         }
@@ -411,9 +471,9 @@ class Delegations {
      * it, quoting the task. It answers the task, so it gets no answer back.
      */
     private tellGiver(task: Task): void {
-        const { delegationId: id, from, to, state, result } = task.view;
+        const { delegationId: id, from, to, group, state, result } = task.view;
         const fromAgent = this.fleet.status(to) === undefined ? {} : { from: to };
-        this.fleet.send(from, result ?? '', { ...fromAgent, replyTo: task.quote, delegation: { id, state } }).catch((error: unknown) => {
+        this.fleet.send(from, result ?? '', { ...fromAgent, ...present('group', group), replyTo: task.quote, delegation: { id, state } }).catch((error: unknown) => {
             this.fleet.note(from, { type: 'log', source: 'flotti', text: `could not deliver the outcome of task ${id}: ${describeError(error)}` });
         });
     }

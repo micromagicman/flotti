@@ -146,6 +146,16 @@ function noSuchAgent(agentId: string): string {
 function noSuchGroup(groupId: string): string {
     return `there is no group "${groupId}" among the groups you are in; list_groups names them`;
 }
+/**
+ * What a tool answers to a message with `to` (0.7.0, #171): agents talk
+ * inside groups only, and the sentence names the way.
+ */
+const TO_IS_GONE = '"to" is gone: a message to another agent goes through a group — name the group in "group" and the agent with @<id> in the text';
+/**
+ * Why a message with `to` of the A2A inbox is not delivered (0.7.0, #171), as
+ * the tab of the sender says it after `could not deliver the message to "x": `.
+ */
+const THROUGH_A_GROUP = 'a message to another agent goes through a group; name it in "group"';
 /** The ids of the groups both agents are in, in the order of the groups. */
 function sharedGroups(groups: readonly Group[], left: string, right: string): string[] {
     return groupsOf(groups, left).filter((group: Group) => group.members.includes(right)).map((group: Group) => group.id);
@@ -166,5 +176,5 @@ function groupView(group: Group, nameOf: (agentId: string) => string | undefined
         })
     };
 }
-export { GROUPS_DIRECTORY, GROUP_FILE, SAMPLE_GROUP, canReach, groupView, groupsOf, noSuchAgent, noSuchGroup, parseGroup, peersOf, sharedGroups };
+export { GROUPS_DIRECTORY, GROUP_FILE, SAMPLE_GROUP, THROUGH_A_GROUP, TO_IS_GONE, canReach, groupView, groupsOf, noSuchAgent, noSuchGroup, parseGroup, peersOf, sharedGroups };
 export type { GroupContext, GroupMember, GroupView, PeerSummary };

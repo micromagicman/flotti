@@ -195,15 +195,20 @@ test('a message from another agent goes where a message of a person goes, and sa
     strictEqual(message?.type === 'message' ? message.from : undefined, 'a');
     throws(() => supervisor.send('b', 'hi', { from: 'nobody' }), UnknownAgentError);
 });
-test('what an agent says to another agent is sent on to it, from the sender', async () => {
+test('what an agent says to another agent by "to" is not sent on: agents talk inside groups, and the tab of the sender says so (0.7.0, #171)', async () => {
     const { supervisor, fakes } = supervised('a', 'b');
     await supervisor.start();
     fake(fakes.get('a')).emit({ type: 'message', role: 'agent', messageId: 'm1', text: 'rerun the tests', append: false, to: 'b' });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send rerun the tests from a']);
-    const received = supervisor.history('b').find((event) => event.type === 'message' && event.role === 'user');
-    deepStrictEqual(received?.type === 'message' ? [received.text, received.from] : undefined, ['rerun the tests', 'a']);
-    deepStrictEqual(supervisor.history('a').map((event) => event.type).slice(0, 2), ['status', 'message'], 'the sender sees its message');
+    deepStrictEqual(fake(fakes.get('b')).calls, ['start'], 'a peer gets nothing');
+    deepStrictEqual(supervisor.history('a').map((event) => (event.type === 'log' ? event.text : event.type)), [
+        'status',
+        'message',
+        'could not deliver the message to "b": a message to another agent goes through a group; name it in "group"'
+    ], 'the sender sees its message, and why it went nowhere');
+    fake(fakes.get('a')).emit({ type: 'message', role: 'agent', messageId: 'm2', text: 'rerun the tests', append: false, group: 'everyone' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send rerun the tests from a'], 'through the group it gets it');
 });
 test('the answer to a message from another agent goes back to the sender, quoting the message', async () => {
     const { supervisor, fakes } = supervised('a', 'b');
@@ -267,7 +272,7 @@ test('an answer that cannot be delivered is a line in the tab of the one who ans
     const lines = supervisor.history('b').flatMap((event) => event.type === 'log' ? [event.text] : []);
     deepStrictEqual(lines, ['could not deliver the answer to "a": a is broken']);
 });
-test('a message to another agent that cannot be delivered is a line in the tab of the sender', async () => {
+test('a message to another agent by "to" is a line in the tab of the sender, whoever it names (0.7.0, #171)', async () => {
     const { fleet, fakes, createAgent } = fakeFleet('a', 'b');
     const supervisor = new Supervisor(fleet, { createAgent });
     await supervisor.start();
@@ -281,17 +286,17 @@ test('a message to another agent that cannot be delivered is a line in the tab o
     const history = supervisor.history('a', 1);
     deepStrictEqual(history.map((event) => (event.type === 'log' ? event.text : event.type)), [
         'message',
-        'could not deliver the message to "nobody": there is no such agent in the fleet',
+        'could not deliver the message to "nobody": a message to another agent goes through a group; name it in "group"',
         'message',
-        'could not deliver the message to "a": an agent does not send messages to itself',
+        'could not deliver the message to "a": a message to another agent goes through a group; name it in "group"',
         'message',
-        'could not deliver the message to "b": b is broken',
+        'could not deliver the message to "b": a message to another agent goes through a group; name it in "group"',
         'turn-end'
     ]);
     deepStrictEqual(history.map((event) => event.seq), [2, 3, 4, 5, 6, 7, 8], 'the lines take numbers of their own, and the events after them go on');
     deepStrictEqual(a.calls, ['start'], 'the sender is not sent anything');
 });
-test('a message to an agent in no group with the sender is refused at the door: a line in the tab of the sender says why (docs/groups.md)', async () => {
+test('a message by "to" is refused before the groups are asked, to a peer and to an agent out of sight alike (0.7.0, #171)', async () => {
     const { fleet, fakes, createAgent } = fakeFleet('a', 'b', 'c');
     const supervisor = new Supervisor({ ...fleet, groups: [group('pair', ['a', 'b'])] }, { createAgent });
     await supervisor.start();
@@ -300,10 +305,11 @@ test('a message to an agent in no group with the sender is refused at the door: 
     a.emit({ type: 'message', role: 'agent', messageId: 'm2', text: 'hi', append: false, to: 'b' });
     await new Promise((resolve) => setTimeout(resolve, 10));
     deepStrictEqual(supervisor.history('a').flatMap((event) => (event.type === 'log' ? [event.text] : [])), [
-        'could not deliver the message to "c": "c" is not in a group with "a"'
-    ]);
+        'could not deliver the message to "c": a message to another agent goes through a group; name it in "group"',
+        'could not deliver the message to "b": a message to another agent goes through a group; name it in "group"'
+    ], 'the same words: the agent learns nothing of who is out of sight');
     deepStrictEqual(fake(fakes.get('c')).calls, ['start'], 'the agent out of sight gets nothing');
-    deepStrictEqual(fake(fakes.get('b')).calls, ['start', 'send hi from a'], 'a peer gets it');
+    deepStrictEqual(fake(fakes.get('b')).calls, ['start'], 'nor does a peer');
     ok(supervisor.canReach('a', 'b') && !supervisor.canReach('a', 'c') && !supervisor.canReach('c', 'a'));
 });
 test('the answer at the end of a turn goes back even when the two no longer share a group; a new message does not', async () => {
@@ -321,7 +327,7 @@ test('the answer at the end of a turn goes back even when the two no longer shar
     await new Promise((resolve) => setTimeout(resolve, 10));
     deepStrictEqual(fake(fakes.get('a')).calls, ['start', 'send all green from b'], 'a message on purpose is a new exchange');
     deepStrictEqual(supervisor.history('b').flatMap((event) => (event.type === 'log' ? [event.text] : [])), [
-        'could not deliver the message to "a": "a" is not in a group with "b"'
+        'could not deliver the message to "a": a message to another agent goes through a group; name it in "group"'
     ]);
 });
 test('peers and groupsOf: what an agent sees of the fleet, and nothing for an agent in no group with anyone', async () => {

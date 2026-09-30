@@ -252,6 +252,12 @@ type Delegation = {
     readonly from: string;
     /** Id of the agent the task was given to. */
     readonly to: string;
+    /**
+     * Id of the group the task was given in (0.7.0, #171): both agents are
+     * members, the task and its outcome are posted there. Absent on a task of
+     * 0.6.x, given agent to agent.
+     */
+    readonly group?: string;
     readonly text: string;
     readonly state: DelegationState;
     /** ISO 8601 time the task is to be done by. */

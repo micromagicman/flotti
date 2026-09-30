@@ -1,7 +1,7 @@
 import { deepStrictEqual, match, ok, strictEqual } from 'node:assert/strict';
 import { after, describe, it } from 'node:test';
 import type { AdminAction } from '../src/agent-events.js';
-import type { AgentSummary, Delivery } from '../src/dashboard-protocol.js';
+import type { AgentSummary } from '../src/dashboard-protocol.js';
 import type { AdminOutcome } from '../src/fleet-admin.js';
 import { FleetMcpServer } from '../src/fleet-mcp.js';
 import type { FleetDirectory } from '../src/fleet-mcp.js';
@@ -47,7 +47,6 @@ function directory(withAdmin = true): FleetDirectory & { asked: string[] } {
         asked,
         agents,
         ...seeingEachOther(['boss', 'worker'], agents),
-        send: async (agentId: string): Promise<Delivery> => ({ agentId, result: 'taken' }),
         sendToGroup: () => Promise.reject(new Error('no groups here')),
         delegate: () => Promise.reject(new Error('no tasks here')),
         cancelDelegation: () => {
