@@ -53,6 +53,10 @@ test('the message as the lane shows it has the shape of a message of a tab, on t
     deepStrictEqual(item, { kind: 'message', key: '_group:team:2', role: 'user', messageId: 'g2', seq: 2, time: '2026-01-01T00:00:02.000Z', text: 'hi', from: 'scout', replyTo: { agentId: 'scout', messageId: 'm', text: 'q' } });
     strictEqual(laneItem(message(1, 'you')).from, undefined, 'a person wrote it');
 });
+test('the message as the lane shows it carries the mentions of the line (#174)', () => {
+    deepStrictEqual(laneItem(message(3, '@scout please', { mentions: ['scout'] })).mentions, ['scout']);
+    strictEqual(laneItem(message(3, 'hello')).mentions, undefined, 'no mention: no field');
+});
 test('who took a message, by name: got it, in line, failed', () => {
     const deliveries = [{ agentId: 'a', result: 'taken' as const }, { agentId: 'b', result: 'failed' as const, error: 'not in the fleet' }, { agentId: 'c', result: 'queued' as const }, { agentId: 'd', result: 'taken' as const }];
     deepStrictEqual(tookNames(deliveries, (id) => id.toUpperCase()), { taken: ['A', 'D'], queued: ['C'], failed: ['B'] });

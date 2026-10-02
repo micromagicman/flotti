@@ -97,6 +97,11 @@ type GroupMessage = {
     /** Id of the agent that wrote it; absent when a person did. */
     readonly from?: string;
     readonly text: string;
+    /**
+     * The members the message mentions with `@<id>` (0.7.0, #174), in the order
+     * of the text; absent when there are none.
+     */
+    readonly mentions?: readonly string[];
     readonly replyTo?: Quote;
     readonly forwarded?: Forwarded;
     /**

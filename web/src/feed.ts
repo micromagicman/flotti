@@ -34,6 +34,8 @@ type FeedItem =
         readonly to?: string;
         /** Id of the group of the fleet the message went through (docs/groups.md). */
         readonly group?: string;
+        /** The members the message mentions with `@<id>` (0.7.0, #174); absent when there are none. */
+        readonly mentions?: readonly string[];
         /** The message this one answers. */
         readonly replyTo?: Quote;
         /** A message sent on as it was; `text` is then what was written above it. */

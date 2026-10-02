@@ -20,6 +20,7 @@ import { GroupHistory } from './group-history.js';
 import { THROUGH_A_GROUP, canReach, groupView, groupsOf, sharedGroups } from './groups.js';
 import type { GroupView, PeerSummary } from './groups.js';
 import { LocalAgentProcess } from './local-agent.js';
+import { mentionsIn, nonMemberMention, NonMemberMentionError } from './mentions.js';
 import { present } from './present.js';
 import type { Agent, Fleet, Group, LocalAgent, LocalAgentAdapter } from './types.js';
 /** The harness each ACP adapter runs. */
@@ -482,20 +483,30 @@ class Supervisor {
      */
     async sendToGroup(groupId: string, text: string, options: GroupSendOptions = {}): Promise<GroupMessage> {
         const group = this.group(groupId);
-        const posted = (this.posting.get(groupId) ?? Promise.resolve()).then(() => this.postToGroup(group, text, options));
+        const mentions = mentionsIn(text, group.members);
+        const nonMember = nonMemberMention(text, group.members);
+        if (nonMember !== undefined) {
+            throw new NonMemberMentionError(nonMember, groupId);
+        }
+        const posted = (this.posting.get(groupId) ?? Promise.resolve()).then(() => this.postToGroup(group, text, options, mentions));
         this.posting.set(groupId, posted.catch(() => undefined));
         return posted;
     }
     /**
      * Hands the message to every other member and writes it down with how each
      * took it; a member in line gets its outcome written to the line later
-     * (#162), once the message is there to write it to.
+     * (#162), once the message is there to write it to. Each member gets the
+     * mentions of the message, and which one is itself asked (0.7.0, #174).
      */
-    private async postToGroup(group: Group, text: string, options: GroupSendOptions): Promise<GroupMessage> {
+    private async postToGroup(group: Group, text: string, options: GroupSendOptions, mentions: readonly string[]): Promise<GroupMessage> {
         const receivers = group.members.filter((id) => id !== options.from);
-        const handed = receivers.map((id) => this.deliverToMember(id, text, { ...options, group: group.id }));
+        const handed = receivers.map((id) => this.deliverToMember(id, text, {
+            ...options,
+            group: group.id,
+            ...(mentions.length === 0 ? {} : { mentions, mentioned: mentions.includes(id) })
+        }));
         const deliveries = await Promise.all(handed.map(({ answer }) => answer));
-        const message = this.post(group, text, options, deliveries);
+        const message = this.post(group, text, options, mentions, deliveries);
         for (const [index, { outcome }] of handed.entries()) {
             if (deliveries[index]?.result === 'queued') {
                 void outcome.then((delivery) => this.settle(group.id, message.seq, delivery));
@@ -751,7 +762,7 @@ class Supervisor {
         const outcome = taken.then((): Delivery => ({ agentId: to, result: 'taken' }), (error: unknown) => failed(to, describeError(error)));
         this.inOrder(group.id, async () => {
             const delivery = await this.answerWithin(to, outcome);
-            const message = this.post(group, taskText(delegation), { from: delegation.from, delegation }, [delivery]);
+            const message = this.post(group, taskText(delegation), { from: delegation.from, delegation }, [], [delivery]);
             if (delivery.result === 'queued') {
                 void outcome.then((settled) => this.settle(group.id, message.seq, settled));
             }
@@ -770,7 +781,7 @@ class Supervisor {
         this.inOrder(group.id, () => {
             const task = this.taskLine(group.id, delegation.delegationId);
             const replyTo = task === undefined ? {} : { replyTo: { agentId: groupTabId(group.id), messageId: task.messageId, seq: task.seq, author: task.from ?? '', text: task.text } };
-            this.post(group, delegation.result ?? '', { from: delegation.to, ...replyTo, delegation }, []);
+            this.post(group, delegation.result ?? '', { from: delegation.to, ...replyTo, delegation }, [], []);
             return Promise.resolve();
         });
     }
@@ -949,7 +960,10 @@ class Supervisor {
             this.say(member, `could not post the answer to group "${groupId}": there is no such group in the fleet`);
             return;
         }
-        void this.sendToGroup(groupId, text, { from: member.agent.id, replyTo, turnAnswer: true });
+        void this.sendToGroup(groupId, text, { from: member.agent.id, replyTo, turnAnswer: true }).catch((error: unknown) => {
+            // The answer mentions a member that is not in the group (0.7.0, #174).
+            this.say(member, `could not post the answer to group "${groupId}": ${describeError(error)}`);
+        });
     }
     /** What the agent says to another one goes there: a message, a task, taking a task back; what it says to a group is posted there. */
     private pass(member: Member, event: AgentEvent): void {
@@ -969,7 +983,10 @@ class Supervisor {
     private postOn(member: Member, event: AgentEvent & { type: 'message'; group: string }): void {
         const why = this.postRefusal(member.agent.id, event.group);
         if (why === undefined) {
-            void this.sendToGroup(event.group, event.text, { from: member.agent.id });
+            void this.sendToGroup(event.group, event.text, { from: member.agent.id }).catch((error: unknown) => {
+                // A mention of a non-member (0.7.0, #174), or the group gone under the call.
+                this.say(member, `could not post the message to group "${event.group}": ${describeError(error)}`);
+            });
         } else {
             this.say(member, `could not post the message to group "${event.group}": ${why}`);
         }
@@ -1234,11 +1251,12 @@ class Supervisor {
         }
     }
     /** Writes the message down as the line of the group and tells the pages. */
-    private post(group: Group, text: string, options: GroupSendOptions & { readonly delegation?: Delegation }, deliveries: readonly Delivery[]): GroupMessage {
+    private post(group: Group, text: string, options: GroupSendOptions & { readonly delegation?: Delegation }, mentions: readonly string[], deliveries: readonly Delivery[]): GroupMessage {
         const message = this.historyOf(group).add({
             messageId: randomUUID(),
             ...present('from', options.from),
             text,
+            ...(mentions.length === 0 ? {} : { mentions }),
             ...present('replyTo', options.replyTo),
             ...present('forwarded', options.forwarded),
             ...turnAnswerMark(options.turnAnswer === true),
@@ -1269,4 +1287,5 @@ class Supervisor {
 }
 export { UnknownDelegationError } from './delegations.js';
 export { Supervisor, UnknownAgentError, UnknownGroupError };
+export { NonMemberMentionError } from './mentions.js';
 export type { GroupSendOptions, SupervisorListener, SupervisorNotice, SupervisorOptions };

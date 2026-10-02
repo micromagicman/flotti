@@ -86,6 +86,12 @@ type AgentEventBody =
          * the turn is marked, see {@link AgentEvent}.
          */
         readonly group?: string;
+        /**
+         * The members the message mentions with `@<id>` (0.7.0, #174), in the
+         * order of the text; absent when there are none. On a message to the
+         * agent, which of them is itself is read from its own id in the list.
+         */
+        readonly mentions?: readonly string[];
         /** The message this one answers: a reply, from a person or from an agent. */
         readonly replyTo?: Quote;
         /**
@@ -119,9 +125,10 @@ type AgentEventBody =
         readonly type: 'queued';
         readonly messageId: string;
         readonly text: string;
-        /** As in a `message` event: the agent of the fleet that sent it, the group it came through, what it answers, sends on or sends again, and the task it is about. */
+        /** As in a `message` event: the agent of the fleet that sent it, the group it came through, the members it mentions, what it answers, sends on or sends again, and the task it is about. */
         readonly from?: string;
         readonly group?: string;
+        readonly mentions?: readonly string[];
         readonly replyTo?: Quote;
         readonly turnAnswer?: true;
         readonly forwarded?: Forwarded;
@@ -294,6 +301,10 @@ type SendOptions = {
     readonly messageId?: string;
     /** Id of the group the message was posted to (docs/groups.md); see the `group` of a `message` event. */
     readonly group?: string;
+    /** The members the message mentions with `@<id>` (0.7.0, #174), in the order of the text; absent when there are none. */
+    readonly mentions?: readonly string[];
+    /** Whether this receiver is one of the mentioned members: the mark says `to you` instead of naming them. */
+    readonly mentioned?: boolean;
     readonly replyTo?: Quote;
     /** The answer flotti sends back at the end of a turn; see the `turnAnswer` of a `message` event. */
     readonly turnAnswer?: true;
@@ -304,10 +315,11 @@ type SendOptions = {
     readonly delegation?: DelegationMark;
 };
 /** The fields of a `message` or `queued` event a sent message carries on, beyond its text. */
-function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message' }, 'from' | 'group' | 'replyTo' | 'turnAnswer' | 'forwarded' | 'retryOf' | 'delegation'> {
+function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message' }, 'from' | 'group' | 'mentions' | 'replyTo' | 'turnAnswer' | 'forwarded' | 'retryOf' | 'delegation'> {
     return {
         ...present('from', options.from),
         ...present('group', options.group),
+        ...mentionsOf(options.mentions),
         ...present('replyTo', options.replyTo),
         ...present('turnAnswer', options.turnAnswer === true ? true as const : undefined),
         ...present('forwarded', options.forwarded),
@@ -315,19 +327,33 @@ function messageFields(options: SendOptions): Pick<AgentEvent & { type: 'message
         ...present('delegation', options.delegation)
     };
 }
+/** The `mentions` of a message event: present with the ids, absent when there are none. */
+function mentionsOf(mentions: readonly string[] | undefined): { readonly mentions?: readonly string[] } {
+    return mentions === undefined || mentions.length === 0 ? {} : { mentions };
+}
 /**
- * The mark in front of a message that says who sent it and through which
- * group, for an agent that has no other place for it — a local agent over ACP,
- * a remote one without the inbox: `[from eva in group release]`, `[from eva]`,
- * `[in group release]` for a message a person posted to the group; nothing for
- * a message of a person to the agent itself.
+ * The mark in front of a message that says who sent it, through which group
+ * and who is asked, for an agent that has no other place for it — a local
+ * agent over ACP, a remote one without the inbox: `[from eva in group
+ * release, to you]`, `[from eva in group release, to codex]` for the others,
+ * `[from eva]`, `[in group release, to you]` for a message a person posted to
+ * the group that mentions a member; nothing for a message of a person to the
+ * agent itself.
  */
 function senderMark(options: SendOptions): string | undefined {
     const parts = [
         ...(options.from === undefined ? [] : [`from ${options.from}`]),
         ...(options.group === undefined ? [] : [`in group ${options.group}`])
     ];
-    return parts.length === 0 ? undefined : `[${parts.join(' ')}]`;
+    return parts.length === 0 ? undefined : `[${parts.join(' ')}${addressedMark(options)}]`;
+}
+/** Who of the group is asked: `, to you` for a mentioned receiver, `, to <ids>` for the others, nothing when nobody is mentioned. */
+function addressedMark(options: SendOptions): string {
+    const mentions = options.mentions;
+    if (mentions === undefined || mentions.length === 0) {
+        return '';
+    }
+    return options.mentioned === true ? ', to you' : `, to ${mentions.join(', ')}`;
 }
 /** The text with the sender mark in front of it, when there is one to put. */
 function markedText(text: string, options: SendOptions): string {

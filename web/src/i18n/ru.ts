@@ -203,7 +203,9 @@ const ru: Messages = {
     },
     composer: {
         toSend: '— отправить',
-        newLine: '— новая строка'
+        newLine: '— новая строка',
+        mentionMembers: 'Упомянуть участника',
+        noMention: 'Нет такого участника'
     },
     feed: {
         output: (name) => `Вывод ${name}`,

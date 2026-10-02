@@ -68,6 +68,7 @@ function laneItem(message: GroupMessage): MessageItem {
         time: message.time,
         text: message.text,
         ...present('from', message.from),
+        ...(message.mentions === undefined || message.mentions.length === 0 ? {} : { mentions: message.mentions }),
         ...present('replyTo', message.replyTo),
         ...present('forwarded', message.forwarded)
     };

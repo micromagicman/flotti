@@ -147,6 +147,14 @@ function noSuchGroup(groupId: string): string {
     return `there is no group "${groupId}" among the groups you are in; list_groups names them`;
 }
 /**
+ * The refusal an agent gets for mentioning an id that is not a member of the
+ * group (0.7.0, #174) — the same words whether that id is an agent of another
+ * group or nobody, so that an agent outside a group learns nothing of it.
+ */
+function noSuchMember(agentId: string, groupId: string): string {
+    return `there is no "${agentId}" among the members of group "${groupId}"; list_groups names them`;
+}
+/**
  * What a tool answers to a message with `to` (0.7.0, #171): agents talk
  * inside groups only, and the sentence names the way.
  */
@@ -176,5 +184,5 @@ function groupView(group: Group, nameOf: (agentId: string) => string | undefined
         })
     };
 }
-export { GROUPS_DIRECTORY, GROUP_FILE, SAMPLE_GROUP, THROUGH_A_GROUP, TO_IS_GONE, canReach, groupView, groupsOf, noSuchAgent, noSuchGroup, parseGroup, peersOf, sharedGroups };
+export { GROUPS_DIRECTORY, GROUP_FILE, SAMPLE_GROUP, THROUGH_A_GROUP, TO_IS_GONE, canReach, groupView, groupsOf, noSuchAgent, noSuchGroup, noSuchMember, parseGroup, peersOf, sharedGroups };
 export type { GroupContext, GroupMember, GroupView, PeerSummary };

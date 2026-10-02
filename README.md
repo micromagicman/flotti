@@ -444,12 +444,22 @@ of a group on `subscribe` under `_group:<id>`, as it asks for the events of an a
   flotti puts that `group` on every event of the turn the message starts, and the page shows the turn
   in the tab of the group, not in the member's tab ([The dashboard](#the-dashboard)). A local agent over ACP, and a remote one without the inbox, read it as
   `[from eva in group release] …`, and your message to a group as `[in group release] …`; a remote
-  agent with the inbox gets `group` beside `from` in the metadata.
+  agent with the inbox gets `group` beside `from` in the metadata. A mention adds who is asked —
+  `[from eva in group release, to you] …` for a mentioned member, `[from eva in group release, to codex] …`
+  for the others — and `mentions` beside `from` and `group` in the metadata.
+- **A mention addresses a member** (0.7.0, #174): `@<id>` in the text — `@` at the start or after a
+  space, a bracket or a comma, followed by the id of a member — addresses that member. Every member
+  still gets the message, but only the mentioned ones answer in the round; without a mention, everyone
+  answers, as before. The `@` of the group's composer offers the members, and the lane shows a mention
+  as a chip with the member's mark and name, a click opening its tab. The history line of the group and
+  the socket carry `mentions` in the order of the text. A mention of an id that is not a member of the
+  group is refused — the tool, the person and the inbox each with their own sentence — and the message
+  is not posted.
 - **What a member answers** in the turn the message started is posted to the group — its history, its
   tab, the other members — as an answer from that member, marked `turnAnswer` («answer» in the tab) and
-quoting the message. Such
-  an answer earns no answer back: one message gets at most one round of answers, never a loop. A member
-  with more to say says it on purpose, with `send_message` and `group`.
+  quoting the message. Such an answer earns no answer back: one message gets at most one round of
+  answers, never a loop, and a mentioned member's answer mentions nobody by itself. A member with more
+  to say says it on purpose, with `send_message` and `group`.
 - **A task inside a group** — `delegate` with `group` and `to`, `task` of the inbox with `group` and
   `to` — goes to one member: it is posted to the group as a message from the giver mentioning the
   doer (`@reviewer …`), with the task and its deadline, and handed to the doer alone; the doer's turn is
