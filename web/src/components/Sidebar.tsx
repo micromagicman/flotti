@@ -11,7 +11,7 @@ import { PoorConnectionMark } from './ConnectionHealth.js';
 import { StatusBadge } from './StatusBadge.js';
 import { useT } from '../i18n/I18n.js';
 import { errorText } from '../i18n/errors.js';
-import { SECTIONS, groupLastSeq, hasUnread, markerDot, markerOf, sectionForKey, statusOf } from '../sidebar-sections.js';
+import { SECTIONS, agentShownSeq, groupLastSeq, hasUnread, markerDot, markerOf, sectionForKey, statusOf } from '../sidebar-sections.js';
 import type { Marker, Section } from '../sidebar-sections.js';
 type SidebarProps = {
     readonly agents: readonly AgentSummary[];
@@ -92,9 +92,6 @@ function AgentTab({ agent, feed, color, unread, selected, onSelect }: AgentTabPr
         </button>
     );
 }
-function lastSeqOf(feed: AgentFeed | undefined): number {
-    return feed?.lastSeq ?? 0;
-}
 type GroupTabProps = Pick<SidebarProps, 'agents' | 'colors'> & {
     readonly group: GroupSummary;
     readonly messages: number;
@@ -171,7 +168,7 @@ function AgentTabs({ agents, feeds, colors, seenSeq, selected, broadcastId, onSe
             <SideTab className="tab tab-broadcast" selected={selected === broadcastId} onClick={() => onSelect(broadcastId)} name={t.sidebar.allAgents} hint={t.sidebar.broadcast} />
             {agents.map((agent) => (
                 <AgentTab key={agent.id} agent={agent} feed={feeds[agent.id]} color={colors[agent.id]} selected={agent.id === selected} onSelect={onSelect}
-                    unread={hasUnread(agent.id, selected, lastSeqOf(feeds[agent.id]), seenSeq)} />
+                    unread={hasUnread(agent.id, selected, agentShownSeq(feeds[agent.id]), seenSeq)} />
             ))}
         </>
     );

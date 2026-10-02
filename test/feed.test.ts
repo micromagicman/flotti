@@ -1,7 +1,7 @@
 import { deepStrictEqual, strictEqual } from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AgentEvent, AgentEventBody } from '../src/agent-events.js';
-import { applyEvent, emptyFeed, forwardOf, quoteOf, quotedMessage, settlePermission } from '../web/src/feed.js';
+import { applyEvent, emptyFeed, forwardOf, inAgentTab, quoteOf, quotedMessage, settlePermission } from '../web/src/feed.js';
 import type { AgentFeed, MessageItem } from '../web/src/feed.js';
 function feedOf(...bodies: AgentEventBody[]): AgentFeed {
     return bodies.reduce((feed: AgentFeed, body, index) =>
@@ -186,4 +186,65 @@ test('a task shows once, where it was given, and its card follows what becomes o
         deadline,
         result: 'its deadline passed'
     });
+});
+/** The events of a turn a group message started, marked with the group as the supervisor keeps them (0.7.0, #172). */
+const GROUP_TURN: readonly AgentEventBody[] = [
+    { type: 'message', role: 'user', messageId: 'g1', text: 'ship it?', append: false, from: 'eva', group: 'release' },
+    { type: 'status', status: 'working' },
+    { type: 'thought', text: 'the tests are green' },
+    { type: 'tool-call', toolCallId: 'c1', title: 'npm test', status: 'completed' },
+    { type: 'progress', text: 'checking the changelog' },
+    { type: 'message', role: 'agent', messageId: 'r1', text: 'yes, ship it', append: false },
+    { type: 'turn-end', reason: 'end_turn' }
+].map((body) => (body.type === 'status' || 'group' in body ? body : { ...body, group: 'release' })) as AgentEventBody[];
+test('a group message and the turn it started produce no rows in the tab of the member; the badge still follows the status (0.7.0, #172)', () => {
+    const feed = feedOf(...GROUP_TURN);
+    deepStrictEqual(feed.items, [], 'neither the message nor the answer, the thought, the tool call, the progress or the turn end');
+    strictEqual(feed.lastSeq, GROUP_TURN.length, 'every event is taken in: a reconnecting page asks for what came after it');
+    strictEqual(feed.status, 'working', 'a status is not traffic');
+    strictEqual(feed.shownSeq, 0, 'nothing the tab shows changed');
+});
+test('a permission request of a group turn stays in the tab of the agent, marked with the group, and is settled with the turn (0.7.0, #172)', () => {
+    const [taken, ...rest] = GROUP_TURN;
+    const asked: AgentEventBody = { type: 'permission', requestId: 'p1', title: 'Push the tag', options: [{ optionId: 'yes', name: 'Allow', kind: 'allow_once' }], group: 'release' } as AgentEventBody;
+    const waiting = feedOf(taken as AgentEventBody, asked);
+    deepStrictEqual(waiting.items, [
+        { kind: 'permission', key: 'e2', requestId: 'p1', title: 'Push the tag', options: [{ optionId: 'yes', name: 'Allow', kind: 'allow_once' }], settled: false, group: 'release' }
+    ]);
+    strictEqual(waiting.shownSeq, 2, 'the request is what the tab shows new');
+    const over = feedOf(taken as AgentEventBody, asked, ...rest);
+    deepStrictEqual(over.items.map((item) => (item.kind === 'permission' ? [item.kind, item.settled] : [item.kind])), [['permission', true]], 'the end of the hidden turn still settles what it asked');
+});
+test('a direct turn shows as ever, after a group turn and between two (0.7.0, #172)', () => {
+    const feed = feedOf(
+        ...GROUP_TURN,
+        { type: 'message', role: 'user', messageId: 'd1', text: 'what did you tell eva?', append: false },
+        { type: 'message', role: 'agent', messageId: 'r1', text: 'to ship it', append: false },
+        { type: 'turn-end', reason: 'end_turn' },
+        ...GROUP_TURN
+    );
+    deepStrictEqual(feed.items.map((item) => (item.kind === 'message' ? `${item.role}:${item.text}` : item.kind)), [
+        'user:what did you tell eva?',
+        'agent:to ship it',
+        'turn-end'
+    ]);
+    strictEqual(feed.shownSeq, GROUP_TURN.length + 3, 'the unread mark follows the last event shown, not the last one kept');
+});
+test('the rule of the tab: what carries a group is left to the tab of the group, but a status, a permission request and an action of an administrator (0.7.0, #172)', () => {
+    const event = (body: AgentEventBody, group?: string): AgentEvent => ({ ...body, agentId: 'a', seq: 1, time: '', ...(group === undefined ? {} : { group }) } as AgentEvent);
+    strictEqual(inAgentTab(event({ type: 'message', role: 'user', messageId: 'u', text: 'hi', append: false })), true, 'a direct message');
+    strictEqual(inAgentTab(event({ type: 'message', role: 'user', messageId: 'u', text: 'hi', append: false, from: 'eva' })), true, 'a row of 0.6.x between two agents stays in sight (open question 2)');
+    strictEqual(inAgentTab(event({ type: 'message', role: 'agent', messageId: 'm', text: 'ok', append: false }, 'release')), false);
+    strictEqual(inAgentTab(event({ type: 'queued', messageId: 'q', text: 'hi' }, 'release')), false, 'a group message waiting in line is the group\'s too');
+    strictEqual(inAgentTab(event({ type: 'status', status: 'working' }, 'release')), true);
+    strictEqual(inAgentTab(event({ type: 'permission', requestId: 'p', title: 't', options: [] }, 'release')), true);
+    strictEqual(inAgentTab(event({ type: 'admin-action', actionId: 'x', action: 'restart', admin: 'a', target: 'b', state: 'pending' }, 'release')), true);
+});
+test('a group message of 0.6.x is hidden, the answer that followed it — unmarked then — stays as a row (0.7.0, #172)', () => {
+    const feed = feedOf(
+        { type: 'message', role: 'user', messageId: 'g1', text: 'ship it?', append: false, from: 'eva', group: 'release' },
+        { type: 'message', role: 'agent', messageId: 'r1', text: 'yes', append: false },
+        { type: 'turn-end', reason: 'end_turn' }
+    );
+    deepStrictEqual(feed.items.map((item) => item.kind === 'message' ? `${item.role}:${item.text}` : item.kind), ['agent:yes', 'turn-end']);
 });

@@ -40,8 +40,15 @@ function statusOf(agent: AgentSummary, feed: AgentFeed | undefined): AgentStatus
     return feed?.status ?? agent.status;
 }
 /**
+ * The last event of an agent its tab shows (0.7.0, #172): not the last one
+ * kept, or a group turn left to the tab of the group would light it.
+ */
+function agentShownSeq(feed: AgentFeed | undefined): number {
+    return feed?.shownSeq ?? 0;
+}
+/**
  * Whether a tab not open has more than it showed when it was: the last event
- * of an agent, or the last message of a group.
+ * an agent's tab shows, or the last message of a group.
  */
 function hasUnread(id: string, selected: string, shown: number, seenSeq: Readonly<Record<string, number>>): boolean {
     return id !== selected && shown > (seenSeq[id] ?? 0);
@@ -59,7 +66,7 @@ type MarkerInput = {
 function agentsMarker({ agents, feeds, seenSeq, selected }: MarkerInput): Marker {
     return {
         waiting: agents.filter((agent) => statusOf(agent, feeds[agent.id]) === 'waiting').map((agent) => agent.name),
-        unread: agents.filter((agent) => hasUnread(agent.id, selected, feeds[agent.id]?.lastSeq ?? 0, seenSeq)).length
+        unread: agents.filter((agent) => hasUnread(agent.id, selected, agentShownSeq(feeds[agent.id]), seenSeq)).length
     };
 }
 /** The last message of a group the page has: what its tab shows. */
@@ -102,5 +109,5 @@ function sectionForKey(current: Section, key: string): Section | undefined {
     const to = moves[key];
     return to === undefined ? undefined : SECTIONS[(to + SECTIONS.length) % SECTIONS.length];
 }
-export { FIRST_SECTION, SECTIONS, groupLastSeq, hasUnread, isSection, markerDot, markerOf, sectionForKey, sectionOf, statusOf };
+export { FIRST_SECTION, SECTIONS, agentShownSeq, groupLastSeq, hasUnread, isSection, markerDot, markerOf, sectionForKey, sectionOf, statusOf };
 export type { Marker, MarkerInput, Section };

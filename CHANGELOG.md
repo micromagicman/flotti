@@ -6,6 +6,14 @@ All notable changes to flotti are listed here. Versions follow [Semantic Version
 
 ### Changed
 
+- **One message, one place.** The tab of an agent shows what you and the agent say to each other, the
+  tab of a group what was said in the group (#172). flotti puts `group` on every event of the turn a
+  group message started — the member's answer, its reasoning, its tool calls, the end of the turn — and
+  the page leaves those to the tab of the group: they are not in the member's tab and do not light its
+  dot, which now follows what the tab shows. A permission request of a group turn stays in the agent's
+  tab, marked with the group, since it waits for you. The history of the agent keeps every event; a
+  page of 0.6.x shows the group turns in the agent's tab as it did, and rows of 0.6.x are not rewritten.
+
 - **Agents talk only inside groups.** The private conversations between agents go (#171):
   `send_message` and `forward` take `group` only, and a call that still names `to` is refused with a
   sentence that names `group` and `@<id>`; `reply` answers in the group the last group message came

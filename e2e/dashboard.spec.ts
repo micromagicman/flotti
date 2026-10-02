@@ -502,24 +502,25 @@ test('on a narrow screen the Memory view is the list, then a note with the way b
     await expect(notes).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
-test('an agent gives another a task in their group: both tabs and the tab of the group show who gave it to whom and how it ended, and the outcome comes back (#171)', async ({ page }) => {
+test('an agent gives another a task in their group: the tab of the group shows who gave it to whom and how it ended, and the tabs of the two do not (#171, #172)', async ({ page }) => {
     await page.goto(url);
     await say(page, 'relay', 'give claude a task');
-    const card = feed(page, 'relay').getByRole('group', { name: 'Task from relay to claude: completed' });
-    await expect(card.locator('.delegation-bar')).toContainText('task · relay → claude');
-    await expect(card).toContainText('Collect the failing tests');
-    await expect(card.locator('.delegation-result')).toContainText('you said: [from relay in group team] Task');
-    const outcome = feed(page, 'relay').locator('.message-peer').filter({ hasText: 'you said: [from relay in group team] Task' }).last();
-    await expect(outcome.locator('.quote')).toContainText('Collect the failing tests');
-    await openTab(page, 'claude');
-    await expect(feed(page, 'claude').getByRole('group', { name: 'Task from relay to claude: completed' })).toBeVisible();
-    await expect(feed(page, 'claude')).toContainText(/you said: \[from relay in group team\] Task \S+, given to you\./);
     await openTab(page, 'Group team', 'Groups');
     const lane = page.getByRole('log', { name: 'Group team' });
-    await expect(lane.getByRole('group', { name: 'Task from relay to claude: completed' })).toContainText('Collect the failing tests');
+    const card = lane.getByRole('group', { name: 'Task from relay to claude: completed' });
+    await expect(card.locator('.delegation-bar')).toContainText('task · relay → claude');
+    await expect(card).toContainText('Collect the failing tests');
     const posted = lane.locator('.message-peer').filter({ hasText: 'you said: [from relay in group team] Task' });
     await expect(posted.locator('.envelope-bar')).toContainText('claude → team · task completed');
     await expect(posted.locator('.quote')).toContainText('@claude Collect the failing tests');
+    // The task went through the group: the tabs of the giver and the doer do not show it again (#172).
+    await openTab(page, 'relay', 'Agents');
+    await expect(feed(page, 'relay')).toContainText('give claude a task');
+    await expect(feed(page, 'relay').getByRole('group', { name: /^Task from relay to claude/ })).toHaveCount(0);
+    await expect(feed(page, 'relay')).not.toContainText('[from relay in group team]');
+    await openTab(page, 'claude');
+    await expect(feed(page, 'claude').getByRole('group', { name: /^Task from relay to claude/ })).toHaveCount(0);
+    await expect(feed(page, 'claude')).not.toContainText('Collect the failing tests');
 });
 /** The row of the last message of the tab that says `text`, with its Reply and Forward. */
 const messageRow = (page: Page, name: string, text: string, side: 'user' | 'agent' = 'agent') =>

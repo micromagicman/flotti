@@ -78,8 +78,17 @@ From the source: `npm ci`, `npm run build`, then `node build/index.js start` (or
 It listens on `127.0.0.1` only and has no login: it is for the person at this machine.
 
 - **A tab per agent**, local ones first: its name, its status — `starting`, `idle`, `working`, `waiting
-  for you`, `error`, `stopped` — and a dot when it has said something since you last looked.
+  for you`, `error`, `stopped` — and a dot when its tab shows something new since you last looked.
   `waiting for you` — a permission to grant, an answer the agent asked for — stands out the most.
+- **One message, one place** (0.7.0). The tab of an agent is what you and the agent say to each other;
+  what was said in a group is read in the tab of the group. A group message and the whole turn it
+  started in a member — its answer, its reasoning, its tool calls — are not in the member's tab, and
+  do not light its dot; the status still says `working` while it is at it. A permission request of such
+  a turn is the exception: it waits for you, so it stays in the agent's tab, marked with the group
+  («Permission requested · in group Release»). Nothing is lost: the history of the agent keeps every
+  event, each event of a group turn with `group` on it. A page of 0.6.x shows the group turns in the
+  agent's tab as it did; rows of 0.6.x stay as they were — a message between two agents with no group
+  is in sight, the answer that followed a group message of 0.6.x too.
 - **The header of the tab** names the harness that runs the agent — `claude` or `codex`, from the
   `adapter` of its manifest; a remote agent names its own in its published file or its card
   ([docs/a2a-ssh.md](https://github.com/micromagicman/flotti/blob/main/docs/a2a-ssh.md#which-harness-runs-the-agent)), and a name flotti does not know
@@ -431,8 +440,9 @@ of a group on `subscribe` under `_group:<id>`, as it asks for the events of an a
   A group the caller is not in is refused with the words for one that does not exist,
   `there is no group "x" among the groups you are in; list_groups names them`; the tab of the sender
   says the real reason.
-- **What a member gets:** the message in its tab, marked with the group — a `message` event with
-  `group` beside `from`. A local agent over ACP, and a remote one without the inbox, read it as
+- **What a member gets:** the message as a `message` event of its own with `group` beside `from`;
+  flotti puts that `group` on every event of the turn the message starts, and the page shows the turn
+  in the tab of the group, not in the member's tab ([The dashboard](#the-dashboard)). A local agent over ACP, and a remote one without the inbox, read it as
   `[from eva in group release] …`, and your message to a group as `[in group release] …`; a remote
   agent with the inbox gets `group` beside `from` in the metadata.
 - **What a member answers** in the turn the message started is posted to the group — its history, its

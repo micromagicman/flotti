@@ -546,3 +546,71 @@ test('a group made again in one run numbers its messages on; the numbers of anot
     deepStrictEqual(supervisor.groupHistory('everyone'), [], 'the messages of the group that went are not the new group\'s');
     strictEqual((await supervisor.sendToGroup('everyone', 'two')).seq, 2, 'a page that saw 1 is not shown a second 1');
 });
+/** The events of the agent's history as `type:group`, a message with its role and text. */
+function marks(supervisor: Supervisor, agentId: string): string[] {
+    return supervisor.history(agentId).map((event) => {
+        const what = event.type === 'message' ? `${event.role} ${event.text}` : event.type;
+        return `${what}:${event.group ?? '-'}`;
+    });
+}
+test('every event of the turn a group message started is kept with the group; a status, the line and a direct turn are not marked (0.7.0, #172)', async () => {
+    const { fleet, fakes, createAgent } = fakeFleet('a', 'b');
+    const supervisor = new Supervisor(fleet, { createAgent, queuedAfterMs: 50, historyLimit: 50 });
+    await supervisor.start();
+    const a = fake(fakes.get('a'));
+    a.slow = true;
+    fake(fakes.get('b')).slow = true;
+    const posted = supervisor.sendToGroup('everyone', 'ship it?');
+    await until(() => a.calls.includes('send ship it?'));
+    a.emit({ type: 'status', status: 'working' });
+    a.emit({ type: 'thought', text: 'green' });
+    a.emit({ type: 'tool-call', toolCallId: 'c1', title: 'npm test', status: 'completed' });
+    a.askPermission('p1');
+    a.finish('yes');
+    a.emit({ type: 'status', status: 'idle' });
+    await posted;
+    a.slow = false;
+    await supervisor.send('a', 'and to me?');
+    deepStrictEqual(marks(supervisor, 'a'), [
+        'status:-',
+        'user ship it?:everyone',
+        'status:-',
+        'thought:everyone',
+        'tool-call:everyone',
+        'permission:everyone',
+        'agent yes:everyone',
+        'turn-end:everyone',
+        'status:-',
+        'user and to me?:-',
+        'agent you said: and to me?:-',
+        'turn-end:-'
+    ]);
+    await until(() => supervisor.groupHistory('everyone').length === 2);
+    deepStrictEqual(lines(supervisor, 'everyone'), [
+        [undefined, 'ship it?', undefined],
+        ['a', 'yes', true]
+    ], 'the group has its own message and the answer; the direct message is in no group');
+    deepStrictEqual(fake(fakes.get('b')).calls.slice(-1), ['send yes from a'], 'what goes on to the group is the answer as the agent said it');
+});
+test('a held answer is kept in the turn it was said in, not the next one (0.7.0, #172)', async () => {
+    const { fleet, fakes, createAgent } = fakeFleet('a', 'b');
+    const supervisor = new Supervisor(fleet, { createAgent, queuedAfterMs: 50, historyLimit: 50, answerDelivery: () => 'whole' });
+    await supervisor.start();
+    const a = fake(fakes.get('a'));
+    a.slow = true;
+    fake(fakes.get('b')).slow = true;
+    const posted = supervisor.sendToGroup('everyone', 'ship it?');
+    await until(() => a.calls.includes('send ship it?'));
+    a.emit({ type: 'message', role: 'agent', messageId: 'r', text: 'ye', append: false });
+    a.emit({ type: 'message', role: 'agent', messageId: 'r', text: 's', append: true });
+    a.slow = false;
+    a.emit({ type: 'status', status: 'stopped' });
+    await posted;
+    await supervisor.send('a', 'hi');
+    deepStrictEqual(marks(supervisor, 'a').filter((mark) => mark.startsWith('agent') || mark.startsWith('user')), [
+        'user ship it?:everyone',
+        'agent yes:everyone',
+        'user hi:-',
+        'agent you said: hi:-'
+    ]);
+});

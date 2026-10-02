@@ -205,14 +205,14 @@ function useAnswers(agentId: string, dispatch: Dispatch<FleetAction>) {
     return { answer, answerAdmin };
 }
 /** The chat with the agent, or its memory bank. */
-function AgentBody({ agent, feed, agents, colors, dispatch, quotes, jump, view }: AgentPanelProps & { readonly view: AgentView }) {
+function AgentBody({ agent, feed, agents, groups, colors, dispatch, quotes, jump, view }: AgentPanelProps & { readonly view: AgentView }) {
     const messaging = useMessaging(agent.id, quotes);
     const { answer, answerAdmin } = useAnswers(agent.id, dispatch);
     const t = useT();
     return (
         <>
             <div className="chat-view" hidden={view !== 'chat'}>
-                <Feed items={feed.items} queue={feed.queue} status={feed.status} line={lineActions(agent.id, t)} agentId={agent.id} agentName={agent.name} agents={agents} colors={colors} onAnswer={answer} onAdminAnswer={answerAdmin} actions={messaging.actions} jump={jump} />
+                <Feed items={feed.items} queue={feed.queue} status={feed.status} line={lineActions(agent.id, t)} agentId={agent.id} agentName={agent.name} agents={agents} groups={groups} colors={colors} onAnswer={answer} onAdminAnswer={answerAdmin} actions={messaging.actions} jump={jump} />
                 <AgentComposer agent={agent} feed={feed} agents={agents} colors={colors} messaging={messaging} />
             </div>
             {view === 'memory' ? <MemoryView agentId={agent.id} /> : null}

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { JSX, RefObject, UIEvent } from 'react';
 import type { AgentStatus } from '../../../src/agent-events.js';
-import type { AgentSummary } from '../../../src/dashboard-protocol.js';
+import type { AgentSummary, GroupSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import { adminActionText } from '../feed.js';
 import type { AdminActionItem, FeedItem, QueuedMessage } from '../feed.js';
@@ -19,6 +19,8 @@ type FeedProps = {
     readonly agentName: string;
     /** The whole fleet: a message between agents names the other one. */
     readonly agents: readonly AgentSummary[];
+    /** The groups of the fleet the page knows: a permission request of a group turn names its group. */
+    readonly groups?: readonly GroupSummary[];
     readonly colors: AgentColors;
     readonly onAnswer: (requestId: string, optionId?: string) => void;
     /** A person allows or refuses an action of an administrator. */
@@ -48,11 +50,22 @@ function PermissionOptions({ item, onAnswer }: { readonly item: FeedItem & { kin
         </div>
     );
 }
-function Permission({ item, onAnswer }: { readonly item: FeedItem & { kind: 'permission' }; readonly onAnswer: FeedProps['onAnswer'] }) {
+type PermissionProps = {
+    readonly item: FeedItem & { kind: 'permission' };
+    readonly onAnswer: FeedProps['onAnswer'];
+    readonly groups: FeedProps['groups'];
+};
+/** The name of a group while the page knows it; its id otherwise. */
+function groupName(id: string, groups: readonly GroupSummary[] = []): string {
+    return groups.find((known) => known.id === id)?.name ?? id;
+}
+/** A permission request; one raised in a group turn (0.7.0, #172) names the group. */
+function Permission({ item, onAnswer, groups }: PermissionProps) {
     const t = useT();
+    const label = item.group === undefined ? t.feed.permission : t.feed.permissionInGroup(groupName(item.group, groups));
     return (
         <div className="item permission">
-            <div className="item-label">{t.feed.permission}</div>
+            <div className="item-label">{label}</div>
             <div>{item.title}</div>
             {item.settled
                 ? <div className="muted">{t.common.answered}</div>
@@ -166,7 +179,7 @@ function FeedEntry({ item, onAnswer, onAdminAnswer, line, ...fleet }: { readonly
         case 'undelivered':
             return <Undelivered item={item} onSendAgain={line.onSendAgain} {...fleet} />;
         case 'permission':
-            return <Permission item={item} onAnswer={onAnswer} />;
+            return <Permission item={item} onAnswer={onAnswer} groups={fleet.groups} />;
         default:
             return cardEntry(item, onAdminAnswer, fleet);
     }

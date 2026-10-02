@@ -115,13 +115,12 @@ test('an agent lists the members of its own group only; "to" is gone, and a task
     // The person reads the real reason in the tab of the giver — once, for the agent that exists.
     await expect(feed(page, 'writer').locator('.log').filter({ hasText: 'is not in a group with' })).toHaveText(['flotti: "reviewer" is not in a group with "writer"']);
 });
-test('two agents in a group talk in the tab of the group only: an agent writes to the group mentioning a member, the member answers, and there is no conversation of the pair (#144, #171)', async ({ page }) => {
+test('two agents in a group talk in the tab of the group only: an agent writes to the group mentioning a member, the member answers, and there is no conversation of the pair (#144, #171, #172)', async ({ page }) => {
     await page.goto(url);
     await expect(page.getByRole('tablist', { name: 'Sections of the sidebar' }).getByRole('tab')).toHaveText(['Agents', 'Groups']);
     await expect(await callTool(page, 'writer', 'send_message', { group: 'docs', text: '@editor The draft is ready' }))
         .toContainText('mcp: Posted to group "docs": "editor" has it. What the members answer comes to you as messages from them.');
-    // The answer of the member comes back to the group, and so to the sender's tab, marked with the group.
-    await expect(feed(page, 'writer').locator('.message-peer').filter({ hasText: 'you said: [from writer in group docs] @editor The draft is ready' })).toHaveCount(1);
+    // The answer of the member comes back to the group, and is read there only (#172).
     await section(page, 'Groups').click();
     await expect(tab(page, 'Group Docs')).toContainText('2 members · 2 messages');
     await expect(tab(page, 'Group Release')).toContainText('2 members · 0 messages');
@@ -146,6 +145,11 @@ test('two agents in a group talk in the tab of the group only: an agent writes t
     // The other group heard nothing.
     await tab(page, 'Group Release').click();
     await expect(lane(page, 'Release')).not.toContainText('The draft is ready');
+    // Neither the tab of the sender nor the tab of the member shows the exchange: only what the person said to each (#172).
+    await openAgent(page, 'writer');
+    await expect(feed(page, 'writer').getByText(/\[from (writer|editor) in group docs\]/)).toHaveCount(0);
+    await openAgent(page, 'editor');
+    await expect(feed(page, 'editor')).not.toContainText('The draft is ready');
     // No pair tab to read it in: a saved address of 0.6.x opens the first agent.
     await page.goto(`${url}#/${encodeURIComponent('_pair:editor:writer')}`);
     await expect(page.getByRole('tab', { name: /^Conversation of/ })).toHaveCount(0);

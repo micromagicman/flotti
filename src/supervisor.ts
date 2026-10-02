@@ -129,12 +129,14 @@ type Member = {
     memory: string | undefined;
     /** Whether the agent is in a turn: between a message it took and the end of its answer. */
     inTurn: boolean;
+    /** The group whose message started the turn the agent is in (0.7.0, #172); none in a turn of a direct message, or out of a turn. */
+    groupTurn: string | undefined;
     /** Called once the turn is over: actions an administrator asked for on itself in the turn. */
     turnOver: (() => void)[];
 };
 /** What a member starts with besides its agent and its history. */
-function freshMember(): Pick<Member, 'answers' | 'unsubscribe' | 'harness' | 'memory' | 'inTurn' | 'turnOver'> {
-    return { answers: new AgentAnswers(), unsubscribe: () => undefined, harness: undefined, memory: undefined, inTurn: false, turnOver: [] };
+function freshMember(): Pick<Member, 'answers' | 'unsubscribe' | 'harness' | 'memory' | 'inTurn' | 'groupTurn' | 'turnOver'> {
+    return { answers: new AgentAnswers(), unsubscribe: () => undefined, harness: undefined, memory: undefined, inTurn: false, groupTurn: undefined, turnOver: [] };
 }
 /** An agent the request names that is not in the fleet. */
 class UnknownAgentError extends Error {}
@@ -229,6 +231,33 @@ function failed(agentId: string, error: string): Delivery {
 /** After this event, no turn of the agent is going on. */
 function endsTurn(event: AgentEvent): boolean {
     return event.type === 'turn-end' || (event.type === 'status' && STOPPED_STATUSES.has(event.status));
+}
+/**
+ * The group whose message started the turn the event is part of (0.7.0,
+ * #172), given the one of the turn the agent was in before it: a message the
+ * agent takes begins a turn of its own — of its group, or of none.
+ */
+function groupTurnOf(before: string | undefined, event: AgentEvent): string | undefined {
+    return isTaken(event) ? event.group : before;
+}
+/** Events that are not the agent's own in a turn: its status, and the line of messages waiting for it. */
+const UNMARKED: ReadonlySet<AgentEvent['type']> = new Set<AgentEvent['type']>(['status', 'queued', 'unqueued']);
+/** A message the agent takes: it begins a turn, and names its group itself, or none. */
+function isTaken(event: AgentEvent): boolean {
+    return event.type === 'message' && event.role === 'user';
+}
+/** An event of the agent's own in its turn that names no group yet. */
+function isMarkable(event: AgentEvent): boolean {
+    return event.group === undefined && !UNMARKED.has(event.type) && !isTaken(event);
+}
+/**
+ * The event as the history keeps it: marked with the group of the turn it is
+ * part of, so that the tab of the agent can leave it to the tab of the group.
+ * A message taken, a status and the line of messages are not the turn's; an
+ * event that names a group already keeps its own.
+ */
+function markedWith<T extends AgentEvent>(event: T, group: string | undefined): T {
+    return group === undefined || !isMarkable(event) ? event : { ...event, group };
 }
 function turnAnswerMark(turnAnswer: boolean): { turnAnswer?: true } {
     return turnAnswer ? { turnAnswer: true } : {};
@@ -1058,15 +1087,28 @@ class Supervisor {
      * piece of an answer held back is not kept yet, and the whole answer, once
      * complete, is kept as a line of flotti's own before the event that
      * completed it — it takes the next number, as {@link put} numbers.
+     *
+     * Every event of a turn a group message started is kept with `group` on it
+     * (0.7.0, #172) — the held answer too, in the turn it was said in — and the
+     * history keeps them all: the page leaves them to the tab of the group.
+     * What goes on to other agents and to the group is the event as the agent
+     * said it, not this mark.
      */
     private keep(member: Member, received: AgentEvent): void {
+        const before = member.groupTurn;
+        const group = groupTurnOf(before, received);
+        member.groupTurn = endsTurn(received) ? undefined : group;
         const { released, kept } = this.delivery.take(member, received, member.inTurn);
         if (released !== undefined) {
-            this.put(member, released);
+            this.put(member, markedWith(released, before));
         }
         if (kept) {
-            this.store(member, member.offset === 0 ? received : { ...received, seq: received.seq + member.offset });
+            this.storeReceived(member, markedWith(received, group));
         }
+    }
+    /** Keeps an event the agent said, numbered on from the events of the agents it replaced. */
+    private storeReceived(member: Member, event: AgentEvent): void {
+        this.store(member, member.offset === 0 ? event : { ...event, seq: event.seq + member.offset });
     }
     /**
      * Puts a line of flotti's own into the tab of an agent, between its events:

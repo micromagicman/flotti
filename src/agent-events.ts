@@ -81,7 +81,9 @@ type AgentEventBody =
          * by the agent `from` names or by a person, and the tab shows the group.
          * On a message of the agent (`role: 'agent'`): the agent posts it to the
          * group, and flotti sends it on to every other member; one of `to` and
-         * `group`, never both.
+         * `group`, never both. In the history of the agent, a message it said
+         * in the turn of a group message carries that group too (0.7.0, #172):
+         * the turn is marked, see {@link AgentEvent}.
          */
         readonly group?: string;
         /** The message this one answers: a reply, from a person or from an agent. */
@@ -206,6 +208,15 @@ type AgentEvent = AgentEventBody & {
     readonly seq: number;
     /** ISO 8601 time the event happened. */
     readonly time: string;
+    /**
+     * Id of the group whose message started the turn this event is part of
+     * (0.7.0, #172): flotti puts it on every event of such a turn it keeps —
+     * the agent's messages, thoughts, tool calls, the `turn-end` — and the tab
+     * of the agent does not show them, the tab of the group does. On a
+     * `message` or `queued` event it is also the group the message went
+     * through, as said there; a status is not marked.
+     */
+    readonly group?: string;
 };
 type AgentEventListener = (event: AgentEvent) => void;
 /**
