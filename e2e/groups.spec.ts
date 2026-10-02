@@ -177,7 +177,7 @@ test('a mention addresses one member: @codex answers and the others do not, the 
     await expect(picker.getByRole('option')).toHaveCount(1);
     await field.press('Enter');
     await expect(field).toHaveValue('@codex ');
-    await field.pressSequentially('please review');
+    await field.fill('@codex please review');
     await field.press('Enter');
     // The row shows the mention as a chip with the member's name.
     const message = lane(page).locator('.message-row-user').filter({ hasText: 'please review' });
