@@ -192,7 +192,9 @@ const en = {
     },
     composer: {
         toSend: 'to send',
-        newLine: 'new line'
+        newLine: 'new line',
+        mentionMembers: 'Mention a member',
+        noMention: 'No member matches'
     },
     feed: {
         output: (name: string) => `Output of ${name}`,

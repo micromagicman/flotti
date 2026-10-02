@@ -181,7 +181,7 @@ function GroupMain({ model }: { readonly model: AppModel }) {
     }
     const { id } = group.open;
     return <GroupPanel key={tab} group={group.open} feed={group.feed} agents={state.agents} colors={colors} quotes={quotes}
-        onDeleted={() => setTab(afterDelete(state, id))} />;
+        onOpenAgent={setTab} onDeleted={() => setTab(afterDelete(state, id))} />;
 }
 function AgentMain({ model }: { readonly model: AppModel }) {
     const { state, dispatch, setTab, colors, agent, feed, live, quotes, jump } = model;

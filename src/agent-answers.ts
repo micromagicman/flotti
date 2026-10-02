@@ -77,13 +77,27 @@ function saidHere(event: AgentEvent & { type: 'message' }): boolean {
 }
 /**
  * Whether the message wants an answer back: it came from another agent, or
- * through a group, and is not itself an answer flotti sent back. A message of
- * a person to the agent itself is answered in the tab; a task has an outcome
- * of its own, sent back as such: see Delegations.
+ * through a group, and is not itself an answer flotti sent back. A group
+ * message asks the mentioned members only, and every member when it mentions
+ * nobody (0.7.0, #174). A message of a person to the agent itself is answered
+ * in the tab; a task has an outcome of its own, sent back as such: see
+ * Delegations.
  */
 function wantsAnswer(event: AgentEvent & { type: 'message' }): boolean {
-    const fromElsewhere = event.from !== undefined || event.group !== undefined;
-    return fromElsewhere && event.turnAnswer !== true && event.delegation === undefined;
+    return fromElsewhere(event) && owesAnswer(event) && mentionedHere(event);
+}
+/** The message came from another agent, or through a group: those are the ones that earn an answer. */
+function fromElsewhere(event: AgentEvent & { type: 'message' }): boolean {
+    return event.from !== undefined || event.group !== undefined;
+}
+/** An answer flotti sent back, and a task, earn no answer of their own. */
+function owesAnswer(event: AgentEvent & { type: 'message' }): boolean {
+    return event.turnAnswer !== true && event.delegation === undefined;
+}
+/** Whether this receiver is asked: a group message asks the mentioned members only, and everyone when there is no mention. */
+function mentionedHere(event: AgentEvent & { type: 'message' }): boolean {
+    const mentions = event.mentions;
+    return mentions === undefined || mentions.length === 0 || mentions.includes(event.agentId);
 }
 /** The message the answer quotes: in the tab of the agent that answers it, written by the sender — an agent, or a person. */
 function quoteOf(event: AgentEvent & { type: 'message' }): Quote {

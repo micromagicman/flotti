@@ -26,6 +26,8 @@ type GroupPanelProps = Fleet & {
     readonly feed: GroupFeed | undefined;
     /** Where a quote leads when the quoted message is not in the lane: the tab of an agent. */
     readonly quotes: QuoteActions;
+    /** Opens the tab of a mentioned agent (0.7.0, #174). */
+    readonly onOpenAgent: (id: string) => void;
     /** The group was deleted from its editor (#175): the page leaves the tab. */
     readonly onDeleted: () => void;
 };
@@ -188,10 +190,11 @@ function GroupHeader({ group, agents, colors, editing, onEdit }: HeaderProps) {
     );
 }
 /** The reply being written, if any, and what the messages of the lane can do: Reply quotes into the composer, Forward sends to an agent. */
-function useMessaging(quotes: QuoteActions, t: Messages) {
+function useMessaging(quotes: QuoteActions, onOpenAgent: (id: string) => void, t: Messages) {
     const [reply, setReply] = useState<Quote>();
     const actions: MessageActions = {
         ...quotes,
+        onOpenAgent,
         onReply: setReply,
         onForward: async (to, forwarded) => {
             const delivery = await api.send(to, '', { forwarded });
@@ -218,7 +221,11 @@ function replyAbove({ reply, setReply }: ReturnType<typeof useMessaging>, fleet:
     }
     return { key: `${reply.agentId}/${reply.messageId}`, node: <ReplyPreview quote={reply} {...fleet} onCancel={() => setReply(undefined)} /> };
 }
-/** The composer of the agent's tab, with the members in place of the status: Enter sends to the group, Reply quotes. */
+/** The members of the group, by id and name, as the `@` picker offers them. */
+function membersOf(group: GroupSummary, agents: readonly AgentSummary[]): readonly { id: string; name: string }[] {
+    return group.members.map((id) => ({ id, name: nameOf(agents, id) }));
+}
+/** The composer of the agent's tab, with the members in place of the status: Enter sends to the group, Reply quotes, `@` mentions. */
 function GroupComposer({ group, agents, colors, messaging }: ComposerProps) {
     const { reply, setReply } = messaging;
     const t = useT();
@@ -234,6 +241,8 @@ function GroupComposer({ group, agents, colors, messaging }: ComposerProps) {
             above={replyAbove(messaging, { agents, colors })}
             onEscape={reply === undefined ? undefined : () => setReply(undefined)}
             state={<span className="badge composer-count">{t.group.members(group.members.length)}</span>}
+            mentions={membersOf(group, agents)}
+            colors={colors}
         />
     );
 }
@@ -243,11 +252,11 @@ function GroupComposer({ group, agents, colors, messaging }: ComposerProps) {
  * as answers, how the members took each one — and a composer at the foot.
  * Edit in the header puts the editor of the group over the lane (#175).
  */
-function GroupPanel({ group, feed, quotes, onDeleted, agents, colors }: GroupPanelProps) {
+function GroupPanel({ group, feed, quotes, onOpenAgent, onDeleted, agents, colors }: GroupPanelProps) {
     const t = useT();
     const [editing, setEditing] = useState(false);
     const messages = feed?.messages ?? NO_MESSAGES;
-    const messaging = useMessaging(quotes, t);
+    const messaging = useMessaging(quotes, onOpenAgent, t);
     const { actions, found } = useLaneQuotes(messages, group.id, messaging.actions);
     const fleet = { agents, colors };
     return (

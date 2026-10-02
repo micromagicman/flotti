@@ -26,6 +26,7 @@ import type { NotificationService } from './notifications.js';
 import { UnknownAgentError, UnknownGroupError } from './supervisor.js';
 import type { GroupSendOptions } from './supervisor.js';
 import type { Supervisor, SupervisorNotice } from './supervisor.js';
+import { NonMemberMentionError } from './mentions.js';
 /** Port the dashboard listens on unless told otherwise. */
 const DEFAULT_PORT = 4870;
 /** Only this machine: the dashboard has no login (decision 4 of the epic). */
@@ -551,11 +552,18 @@ function statusOf(error: unknown): number {
     }
     return fleetStatus(error);
 }
-/** The status of an error the fleet threw: an unknown agent or group, a refused configuration, or else a failure. */
+/** The status of an error the fleet threw: an unknown agent or group, a non-member mentioned, a refused configuration, or else a failure. */
 function fleetStatus(error: unknown): number {
+    if (error instanceof NonMemberMentionError) {
+        return 400;
+    }
     if (isUnknown(error)) {
         return 404;
     }
+    return configurationStatus(error);
+}
+/** The status of a refused configuration, or a failure of the fleet. */
+function configurationStatus(error: unknown): number {
     return error instanceof ConfigurationError ? STATUS_OF_KIND[error.kind] ?? 400 : 500;
 }
 /** Whether the request named an agent or a group that is not in the fleet. */

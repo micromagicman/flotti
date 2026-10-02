@@ -164,6 +164,29 @@ test('a member busy when the message is posted is «in line» under it, and the 
     await expect(lane(page).locator('.message-row-user').filter({ hasText: 'who is free' }).locator('.took summary')).toHaveText('claude, codex got it');
     rmSync(gate, { force: true });
 });
+test('a mention addresses one member: @codex answers and the others do not, the @ picker offers the members, and the row shows a chip (#174)', async ({ page }) => {
+    await openGroups(page);
+    await groupTab(page).click();
+    const field = page.getByRole('textbox', { name: 'Message to Everyone' });
+    // The @ picker: @ offers the members, the query filters them, Enter inserts `@codex `.
+    await field.fill('@');
+    const picker = page.getByRole('listbox', { name: 'Mention a member' });
+    await expect(picker).toBeVisible();
+    await expect(picker.getByRole('option')).toHaveCount(2);
+    await field.pressSequentially('codex');
+    await expect(picker.getByRole('option')).toHaveCount(1);
+    await field.press('Enter');
+    await expect(field).toHaveValue('@codex ');
+    await field.pressSequentially('please review');
+    await field.press('Enter');
+    // The row shows the mention as a chip with the member's name.
+    const message = lane(page).locator('.message-row-user').filter({ hasText: 'please review' });
+    await expect(message).toHaveCount(1);
+    await expect(message.locator('.mention')).toHaveText(['codex']);
+    // Only the mentioned member answers; the other member's turn is not posted.
+    await expect(lane(page).locator('.message-peer').filter({ hasText: 'in group everyone, to you' })).toHaveCount(1);
+    await expect(lane(page).locator('.message-peer').filter({ hasText: 'in group everyone, to codex' })).toHaveCount(0);
+});
 test('the last group deleted from its tab leaves the Groups section empty: the offer of «Everyone» and Add group, which is open (#175)', async ({ page }) => {
     await openGroups(page);
     await groupTab(page).click();

@@ -8,9 +8,10 @@ import type { DelegationCancel, DelegationStart } from './delegations.js';
 import type { GroupSendOptions } from './supervisor.js';
 import { describeError } from './describe-error.js';
 import type { AdminOutcome } from './fleet-admin.js';
-import { TO_IS_GONE, noSuchGroup } from './groups.js';
+import { TO_IS_GONE, noSuchGroup, noSuchMember } from './groups.js';
 import type { GroupView, PeerSummary } from './groups.js';
 import { MEMORY_TOOLS, callMemoryTool, isMemoryTool } from './memory-tools.js';
+import { NonMemberMentionError } from './mentions.js';
 /**
  * The fleet as tools: an MCP server flotti hands to every ACP agent it starts,
  * in `mcpServers` of `session/new`, so a bare Claude Code or Codex can see its
@@ -519,9 +520,15 @@ class FleetMcpServer {
             const { deliveries } = await fleet.sendToGroup(groupId, message, { from, ...extras });
             return text(posted(groupId, deliveries));
         } catch (error) {
-            // The fleet changed under the call: the group or the sender is gone.
-            return failure(`the message was not posted to group "${groupId}": ${describeError(error)}`);
+            return this.postFailure(groupId, error);
         }
+    }
+    /** Why a message to a group was not posted: a mention of a non-member, or the fleet changed under the call. */
+    private postFailure(groupId: string, error: unknown): ToolResult {
+        if (error instanceof NonMemberMentionError) {
+            return failure(noSuchMember(error.agentId, error.groupId));
+        }
+        return failure(`the message was not posted to group "${groupId}": ${describeError(error)}`);
     }
 }
 /**

@@ -67,7 +67,12 @@ function senderMarks(options: SendOptions): Pick<Message, 'metadata' | 'extensio
         : { metadata: { [INBOX_EXTENSION]: params }, extensions: [INBOX_EXTENSION] };
 }
 function senderParams(options: SendOptions): Record<string, unknown> {
-    return { ...field('from', options.from), ...field('group', options.group), ...field('task', options.delegation) };
+    return {
+        ...field('from', options.from),
+        ...field('group', options.group),
+        ...(options.mentions === undefined || options.mentions.length === 0 ? {} : { mentions: options.mentions }),
+        ...field('task', options.delegation)
+    };
 }
 /** `{ [key]: value }`, or nothing when there is no value. */
 function field<K extends string, V>(key: K, value: V | undefined): { readonly [P in K]?: V } {

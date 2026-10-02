@@ -690,6 +690,57 @@ button.quote-jump:focus-visible { outline: var(--ring); outline-offset: 1px; }
 .composer-field:focus { outline: none; }
 .composer-field::placeholder { color: var(--placeholder); }
 .composer-note { margin: 0 14px 4px; font-size: 12px; }
+/* The `@` picker of the group composer (#174): the members over the field, in the colour of each. */
+.mention-picker {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    max-height: 240px;
+    overflow-y: auto;
+    margin: 0 10px 4px;
+    border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+    border-radius: 8px;
+    background: var(--panel);
+    box-shadow: var(--card-shadow);
+}
+.mention-option {
+    --b-bg: color-mix(in srgb, var(--agent-color) 11%, var(--panel));
+    --b-bg-hover: color-mix(in srgb, var(--agent-color) 18%, var(--panel));
+    --b-bg-active: color-mix(in srgb, var(--agent-color) 25%, var(--panel));
+    --b-fg: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: 0;
+    text-align: left;
+    font-size: 13px;
+}
+.mention-option.selected { background: var(--b-bg-hover); }
+.mention-option .agent-mark { width: 10px; height: 10px; }
+.mention-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-id { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.mention-none { padding: 8px 10px; font-size: 12px; }
+/* A mention in the lane of a group (#174): the mark and the name of the member in place of `@id`, a click opens its tab. */
+.mention {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    vertical-align: baseline;
+    margin: 0 2px;
+    padding: 1px 7px 1px 5px;
+    border: 0;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--agent-color) 14%, transparent);
+    color: color-mix(in srgb, var(--agent-color) 70%, var(--text));
+    font-family: inherit;
+    font-size: 0.94em;
+    line-height: 1.5;
+    cursor: pointer;
+}
+.mention .agent-mark { width: 9px; height: 9px; }
+.mention.mention-gone { background: color-mix(in srgb, var(--muted) 12%, transparent); color: var(--muted); cursor: default; font-family: var(--mono); }
 .composer-note.note { color: var(--muted); }
 .composer-note.error { color: var(--bad-text); }
 .composer-bar {

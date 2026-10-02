@@ -129,13 +129,14 @@ test('two agents in a group talk in the tab of the group only: an agent writes t
     await expect(page.locator('.group-header .member')).toHaveText(['writer', 'editor']);
     const row = lane(page, 'Docs').locator('.message-row').filter({ hasText: 'writer → Docs' });
     await expect(row).toHaveCount(1);
-    await expect(row.locator('.message-peer')).toContainText('@editor The draft is ready');
+    await expect(row.locator('.message-peer').locator('.mention')).toHaveText(['editor']);
+    await expect(row.locator('.message-peer')).toContainText('The draft is ready');
     await expect(row.locator('.took summary')).toHaveText('editor got it');
     await row.locator('.took summary').click();
     const list = row.getByRole('list', { name: 'How the members took it' });
     await expect(list.locator('.delivery-name')).toHaveText(['editor']);
     await expect(list.locator('.delivery-result')).toHaveText(['delivered']);
-    const answer = lane(page, 'Docs').locator('.message-peer').filter({ hasText: 'you said: [from writer in group docs] @editor The draft is ready' });
+    const answer = lane(page, 'Docs').locator('.message-peer').filter({ hasText: 'you said: [from writer in group docs, to you]' });
     await expect(answer).toHaveCount(1);
     await expect(answer.locator('.envelope-bar')).toContainText('editor → Docs · answer');
     await expect(answer.locator('.quote')).toContainText('The draft is ready');
