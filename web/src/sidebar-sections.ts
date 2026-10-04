@@ -1,50 +1,54 @@
 /**
- * The four sections of the sidebar as tabs (#136, Groups with #152): which
- * one a tab of the sidebar belongs to, and what a closed section carries on
- * its tab.
+ * The sections of the sidebar as tabs (#136, Groups with #152, no Fleet
+ * since #173, no Conversations since #171): which one a tab of the sidebar
+ * belongs to, and what a closed section carries on its tab.
  */
 import type { AgentStatus } from '../../src/agent-events.js';
 import type { AgentSummary, GroupSummary } from '../../src/dashboard-protocol.js';
 import { groupTabId } from '../../src/dashboard-protocol.js';
-import { pairOf } from './conversations.js';
-import type { Conversation } from './conversations.js';
 import type { AgentFeed } from './feed.js';
 import { groupOf } from './groups.js';
 import type { GroupFeed } from './groups.js';
-const SECTIONS = ['fleet', 'agents', 'groups', 'conversations'] as const;
+const SECTIONS = ['agents', 'groups'] as const;
 type Section = typeof SECTIONS[number];
-/** The first time the sidebar opens on the agents. */
-const FIRST_SECTION: Section = 'agents';
+/**
+ * The first time the sidebar opens on the agents, and on a saved pick the
+ * sidebar no longer has — `fleet` (#173) and `conversations` (#171) of 0.6.x.
+ */
+const FIRST_SECTION: Section = SECTIONS[0];
 function isSection(value: unknown): value is Section {
     return SECTIONS.includes(value as Section);
 }
-/** The ids of the tabs that are not an agent's nor a conversation's. */
-type OtherTabs = { readonly broadcastId: string; readonly feedId: string; readonly conversationsId: string };
+/** The ids of the tabs that are not an agent's nor a group's. */
+type OtherTabs = { readonly broadcastId: string; readonly addGroupId: string };
 /**
- * The section a tab of the sidebar is in: an agent in Agents, a group in
- * Groups, a conversation or the list of them in Conversations, the broadcast
- * and the feed in Fleet. None for a tab of every section, such as Add agent
- * or the settings.
+ * The section a tab of the sidebar is in: an agent and the broadcast in
+ * Agents, a group and Add group (#175) in Groups. None for a tab that opens
+ * the settings: Add agent or the gear.
  */
-function sectionOf(tab: string, agentIds: readonly string[], { broadcastId, feedId, conversationsId }: OtherTabs): Section | undefined {
+function sectionOf(tab: string, agentIds: readonly string[], { broadcastId, addGroupId }: OtherTabs): Section | undefined {
     if (agentIds.includes(tab)) {
         return 'agents';
     }
     if (groupOf(tab) !== undefined) {
         return 'groups';
     }
-    if (pairOf(tab) !== undefined) {
-        return 'conversations';
-    }
-    return new Map<string, Section>([[broadcastId, 'fleet'], [feedId, 'fleet'], [conversationsId, 'conversations']]).get(tab);
+    return new Map<string, Section>([[broadcastId, 'agents'], [addGroupId, 'groups']]).get(tab);
 }
 /** The live status of the agent: its feed knows it first. */
 function statusOf(agent: AgentSummary, feed: AgentFeed | undefined): AgentStatus {
     return feed?.status ?? agent.status;
 }
 /**
+ * The last event of an agent its tab shows (0.7.0, #172): not the last one
+ * kept, or a group turn left to the tab of the group would light it.
+ */
+function agentShownSeq(feed: AgentFeed | undefined): number {
+    return feed?.shownSeq ?? 0;
+}
+/**
  * Whether a tab not open has more than it showed when it was: the last event
- * of an agent, or how many messages of a conversation.
+ * an agent's tab shows, or the last message of a group.
  */
 function hasUnread(id: string, selected: string, shown: number, seenSeq: Readonly<Record<string, number>>): boolean {
     return id !== selected && shown > (seenSeq[id] ?? 0);
@@ -54,7 +58,6 @@ type Marker = { readonly waiting: readonly string[]; readonly unread: number };
 type MarkerInput = {
     readonly agents: readonly AgentSummary[];
     readonly feeds: Readonly<Record<string, AgentFeed>>;
-    readonly conversations: readonly Conversation[];
     readonly groups: readonly GroupSummary[];
     readonly groupFeeds: Readonly<Record<string, GroupFeed>>;
     readonly seenSeq: Readonly<Record<string, number>>;
@@ -63,13 +66,7 @@ type MarkerInput = {
 function agentsMarker({ agents, feeds, seenSeq, selected }: MarkerInput): Marker {
     return {
         waiting: agents.filter((agent) => statusOf(agent, feeds[agent.id]) === 'waiting').map((agent) => agent.name),
-        unread: agents.filter((agent) => hasUnread(agent.id, selected, feeds[agent.id]?.lastSeq ?? 0, seenSeq)).length
-    };
-}
-function conversationsMarker({ conversations, seenSeq, selected }: MarkerInput): Marker {
-    return {
-        waiting: [],
-        unread: conversations.filter((conversation) => hasUnread(conversation.id, selected, conversation.messages.length, seenSeq)).length
+        unread: agents.filter((agent) => hasUnread(agent.id, selected, agentShownSeq(feeds[agent.id]), seenSeq)).length
     };
 }
 /** The last message of a group the page has: what its tab shows. */
@@ -83,15 +80,12 @@ function groupsMarker({ groups, groupFeeds, seenSeq, selected }: MarkerInput): M
         unread: groups.filter((group) => hasUnread(groupTabId(group.id), selected, groupLastSeq(groupFeeds, group), seenSeq)).length
     };
 }
-const MARKERS: Readonly<Record<Exclude<Section, 'fleet'>, (input: MarkerInput) => Marker>> = {
-    agents: agentsMarker, groups: groupsMarker, conversations: conversationsMarker
+const MARKERS: Readonly<Record<Section, (input: MarkerInput) => Marker>> = {
+    agents: agentsMarker, groups: groupsMarker
 };
-/**
- * What the tab of a closed section carries. The open one and Fleet carry
- * nothing: the feed of the fleet takes every message and would always be lit.
- */
+/** What the tab of a closed section carries; the open one carries nothing. */
 function markerOf(section: Section, open: Section, input: MarkerInput): Marker | undefined {
-    if (section === open || section === 'fleet') {
+    if (section === open) {
         return undefined;
     }
     return MARKERS[section](input);
@@ -115,5 +109,5 @@ function sectionForKey(current: Section, key: string): Section | undefined {
     const to = moves[key];
     return to === undefined ? undefined : SECTIONS[(to + SECTIONS.length) % SECTIONS.length];
 }
-export { FIRST_SECTION, SECTIONS, groupLastSeq, hasUnread, isSection, markerDot, markerOf, sectionForKey, sectionOf, statusOf };
+export { FIRST_SECTION, SECTIONS, agentShownSeq, groupLastSeq, hasUnread, isSection, markerDot, markerOf, sectionForKey, sectionOf, statusOf };
 export type { Marker, MarkerInput, Section };

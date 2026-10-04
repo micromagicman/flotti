@@ -2,6 +2,59 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] — 2026-10-04
+
+Groups only: agents see and message each other only inside a group, each group read and managed from
+its own tab, and a mention in a group message addresses one member of it; the private conversations,
+the feed of the fleet and Settings → Groups go; and the specs move into OpenSpec.
+
+### Changed
+
+- **One message, one place.** The tab of an agent shows what you and the agent say to each other, the
+  tab of a group what was said in the group (#172). flotti puts `group` on every event of the turn a
+  group message started — the member's answer, its reasoning, its tool calls, the end of the turn — and
+  the page leaves those to the tab of the group: they are not in the member's tab and do not light its
+  dot, which now follows what the tab shows. A permission request of a group turn stays in the agent's
+  tab, marked with the group, since it waits for you. The history of the agent keeps every event; a
+  page of 0.6.x shows the group turns in the agent's tab as it did, and rows of 0.6.x are not rewritten.
+
+- **Agents talk only inside groups.** The private conversations between agents go (#171):
+  `send_message` and `forward` take `group` only, and a call that still names `to` is refused with a
+  sentence that names `group` and `@<id>`; `reply` answers in the group the last group message came
+  from; `to` with `kind: message` of the A2A inbox is a line in the sender's tab. A task goes to one
+  member inside a group: `delegate` and the inbox `task` take `group` and `to`, the task is posted to the
+  group mentioning the doer, its outcome is posted there from the doer, and the tab of the group shows
+  its card. The **Conversations** section and the tabs of pairs go; the sidebar is **Agents** and
+  **Groups**, and a page that remembered Conversations opens on Agents. `list_agents`, `list_groups` and
+  the roster do not change. **Breaking** for the tool schema of local agents and for adapters that post
+  `to` between agents: they post with `group` now.
+
+- **A group is managed from its tab.** **Edit** in the header of a group's tab opens its form in place
+  of the lane — rename it, change the topic, tick members in and out — and **Delete** there, after a
+  confirmation that names the group, moves it to `.trash/` and opens the next group. **Add group** is
+  the last tab of the Groups section; a saved group opens its tab. Settings → Groups goes, and the
+  empty Groups section no longer points to Settings. The API and the files of groups do not change
+  (#175).
+
+- **A mention addresses a member of a group.** In a group message, `@<id>` — `@` at the start of the
+  text or after a space, a bracket or a comma, followed by the id of a member — addresses that member
+  (#174): every member still gets the message, but only the mentioned ones answer in the round, and a
+  message without a mention asks everyone, as before. The `@` of a group's composer offers the members
+  by mark, name and id, and the lane shows a mention as a chip with the member's mark and name, a click
+  opening its tab. The history line of the group, the socket and the inbox metadata carry `mentions` in
+  the order of the text, and a mention of an id that is not a member of the group is refused — the
+  tool, the person and the inbox each with their own sentence — and the message is not posted.
+
+- **No «All messages».** The feed of the whole fleet goes: a group is read in its tab, an agent in its
+  tab. The Fleet section goes with it, and **All agents** — the broadcast — is the first tab of
+  **Agents**; a page that remembered Fleet opens on Agents. Nothing on disk or on the socket changes
+  (#173).
+
+- **The specs live in OpenSpec.** `openspec/specs/` is the record of what is built (groups, direct
+  messages, the feed, the rail — the capabilities 0.7.0 touches), `openspec/changes/groups-only/` the
+  spec of 0.7.0 (#171–#175) with its open questions; the `openspec` job of `checks` validates them, and
+  the README says how to run it locally. `docs/groups.md` stays the record of 0.6.0 and its reasons (#177).
+
 ## [0.6.1] — 2026-09-30
 
 A patch of 0.6.0: the dashboard no longer dies when its page is served by a flotti of 0.5.x that was
@@ -406,6 +459,7 @@ The first release: a fleet of AI agents and one dashboard to work with them.
   ([micromagicman/eva#266](https://github.com/micromagicman/eva/issues/266)).
 - The A2A adapter of Cutie, on the same contract as Eva's (owners/quanthread-ai-hub#218, !194).
 
+[0.7.0]: https://github.com/micromagicman/flotti/releases/tag/v0.7.0
 [0.6.1]: https://github.com/micromagicman/flotti/releases/tag/v0.6.1
 [0.6.0]: https://github.com/micromagicman/flotti/releases/tag/v0.6.0
 [0.5.0]: https://github.com/micromagicman/flotti/releases/tag/v0.5.0

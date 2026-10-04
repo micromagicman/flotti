@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -8,10 +8,10 @@ import type { DelegationCancel, DelegationStart } from './delegations.js';
 import type { GroupSendOptions } from './supervisor.js';
 import { describeError } from './describe-error.js';
 import type { AdminOutcome } from './fleet-admin.js';
-import { noSuchAgent, noSuchGroup } from './groups.js';
+import { TO_IS_GONE, noSuchGroup, noSuchMember } from './groups.js';
 import type { GroupView, PeerSummary } from './groups.js';
 import { MEMORY_TOOLS, callMemoryTool, isMemoryTool } from './memory-tools.js';
-import { present } from './present.js';
+import { NonMemberMentionError } from './mentions.js';
 /**
  * The fleet as tools: an MCP server flotti hands to every ACP agent it starts,
  * in `mcpServers` of `session/new`, so a bare Claude Code or Codex can see its
@@ -41,16 +41,15 @@ interface FleetDirectory {
     peers(agentId: string): PeerSummary[];
     /** The groups the agent is in, as it sees them. */
     groupsOf(agentId: string): GroupView[];
-    /** Whether `from` may write to `to` — the two share a group; the tab of `from` says why not. */
-    mayWrite(from: string, to: string): boolean;
     /** Whether `from` may post to the group — it is a member; the tab of `from` says why not. */
     mayPost(from: string, groupId: string): boolean;
-    /** Sends a message on behalf of an agent of the fleet: `from` is its id. */
-    send(agentId: string, text: string, options?: SendOptions): Promise<Delivery>;
     /** Posts a message to a group on behalf of an agent of the fleet: `from` is its id; how each other member took it. */
     sendToGroup(groupId: string, text: string, options?: GroupSendOptions): Promise<{ readonly deliveries: readonly Delivery[] }>;
-    /** Gives a task on behalf of an agent of the fleet: `from` is its id; `deadline` an ISO 8601 time. */
-    delegate(from: string, to: string, text: string, deadline?: string): Promise<DelegationStart>;
+    /**
+     * Gives a task on behalf of an agent of the fleet to a member of a group
+     * (0.7.0, #171): `from` is its id; `deadline` an ISO 8601 time.
+     */
+    delegate(from: string, group: string, to: string, text: string, deadline?: string): Promise<DelegationStart>;
     /** Takes back a task the agent `from` gave; throws when it gave no such task. */
     cancelDelegation(from: string, delegationId: string): DelegationCancel;
     /**
@@ -105,14 +104,19 @@ type DeliveredMessage = Received & {
     /** Id of the agent that got it. */
     readonly to: string;
 };
-/** What one call of a tool sends, besides the receiver and the text. */
+/** What one call of a tool sends, besides the group and the text. */
 type Extras = Pick<SendOptions, 'replyTo' | 'forwarded'>;
-/** Where a tool sends: to an agent, or to a group — one of the two (docs/groups.md). */
-type Address = { readonly to: string } | { readonly group: string };
-/** A tool with `to` and `group`: the schema of the two, and the sentence for a call that names both or neither. */
-const ADDRESS_PROPERTIES = {
-    to: { type: 'string', description: 'Id of the agent, as list_agents gives it. One of "to" and "group".' },
-    group: { type: 'string', description: 'Id of a group you are in, as list_groups gives it: every other member gets it. One of "to" and "group".' }
+/**
+ * The one address of a message between agents (0.7.0, #171): a group the
+ * caller is in. `to` is gone from the tools; a call that names it is refused
+ * with the sentence that names the way.
+ */
+const GROUP_PROPERTY = {
+    group: {
+        type: 'string',
+        description: 'Id of a group you are in, as list_groups gives it: every other member gets it. To address one '
+            + 'member, write @<id> in the text.'
+    }
 } as const;
 class RpcError extends Error {
     constructor(readonly code: number, message: string) {
@@ -137,26 +141,25 @@ const TOOLS = [
     },
     {
         name: 'send_message',
-        description: 'Sends a message to another agent of the fleet ("to"), or to every other member of a group you '
-            + 'are in ("group"). It arrives as a message from you, and what an agent answers comes back to you as a '
-            + 'message from it — an answer to a group message reaches every member. A message another agent or a '
-            + 'group sent you is answered the same way: just answer it, no tool needed. Do not answer '
-            + 'acknowledgements: a thank-you needs no thank-you back.',
+        description: 'Sends a message to every other member of a group you are in ("group"): agents talk inside '
+            + 'groups only. To address one member, write @<id> in the text; every member still gets it. It arrives '
+            + 'as a message from you, and what the members answer is posted to the group and comes back to you as '
+            + 'messages from them. A group message sent to you is answered the same way: just answer it, no tool '
+            + 'needed. Do not answer acknowledgements: a thank-you needs no thank-you back.',
         inputSchema: {
             type: 'object',
             properties: {
-                ...ADDRESS_PROPERTIES,
+                ...GROUP_PROPERTY,
                 text: { type: 'string', description: 'The message.' }
             },
-            required: ['text'],
+            required: ['group', 'text'],
             additionalProperties: false
         }
     },
     {
         name: 'reply',
-        description: 'Writes again where the last message to you came from — to the agent, or to the group it was '
-            + 'posted to — quoting that message. Your answer in the turn of the message already reaches it: this '
-            + 'is for writing later.',
+        description: 'Writes again in the group the last group message to you came from, quoting that message. Your '
+            + 'answer in the turn of the message already reaches the group: this is for writing later.',
         inputSchema: {
             type: 'object',
             properties: { text: { type: 'string', description: 'The answer.' } },
@@ -166,22 +169,24 @@ const TOOLS = [
     },
     {
         name: 'delegate',
-        description: 'Gives another agent of the fleet a task and returns its id at once. The agent works on it in a '
-            + 'turn of its own; when it is done, the outcome comes to you as a message from it: completed with what '
-            + 'it answered, failed or canceled with why. A task that cannot be given — no such agent, the agent is '
+        description: 'Gives a member of a group you are in a task and returns its id at once. The task is posted to '
+            + 'the group, mentioning the agent; the agent works on it in a turn of its own, and when it is done the '
+            + 'outcome is posted to the group and comes to you as a message from it: completed with what it '
+            + 'answered, failed or canceled with why. A task that cannot be given — no such member, the agent is '
             + 'stopped — fails at once. Use it for work you want done and reported back; send_message is for a word. '
-            + 'A task goes to one agent, never to a group.',
+            + 'A task goes to one member of the group, never to the whole group.',
         inputSchema: {
             type: 'object',
             properties: {
-                to: { type: 'string', description: 'Id of the agent, as list_agents gives it.' },
+                group: { type: 'string', description: 'Id of a group you and the agent are in, as list_groups gives it.' },
+                to: { type: 'string', description: 'Id of the member that does the task, as list_groups gives it.' },
                 text: { type: 'string', description: 'The task: what to do, and what to answer when done.' },
                 deadline_minutes: {
                     type: 'number',
                     description: 'Optional: minutes the task may take. A task not done by then fails, and the agent stops working on it.'
                 }
             },
-            required: ['to', 'text'],
+            required: ['group', 'to', 'text'],
             additionalProperties: false
         }
     },
@@ -197,14 +202,14 @@ const TOOLS = [
     },
     {
         name: 'forward',
-        description: 'Forwards the last message another agent sent you, as it was, to another agent of the fleet '
-            + '("to") or to a group you are in ("group").',
+        description: 'Forwards the last message another agent sent you, as it was, to a group you are in ("group").',
         inputSchema: {
             type: 'object',
             properties: {
-                ...ADDRESS_PROPERTIES,
+                ...GROUP_PROPERTY,
                 comment: { type: 'string', description: 'A few words of your own to put before it; optional.' }
             },
+            required: ['group'],
             additionalProperties: false
         }
     }
@@ -247,6 +252,8 @@ class FleetMcpServer {
     private readonly tokens = new Map<string, string>();
     private readonly agentsByToken = new Map<string, string>();
     private readonly received = new Map<string, Received>();
+    /** The last message each agent got through a group: what `reply` answers. */
+    private readonly receivedInGroup = new Map<string, Received & { readonly group: string }>();
     private fleet: FleetDirectory | undefined;
     /** The JSON-RPC methods, by name. */
     private readonly methods: ReadonlyMap<string, Method> = new Map<string, Method>([
@@ -259,7 +266,7 @@ class FleetMcpServer {
     private readonly tools: ReadonlyMap<string, Tool> = new Map<string, Tool>([
         ['list_agents', (fleet, caller) => Promise.resolve(listAgents(fleet, caller))],
         ['list_groups', (fleet, caller) => Promise.resolve(listGroups(fleet, caller))],
-        ['send_message', (fleet, caller, args) => this.sendTo(fleet, caller, addressOf(args), stringArgument(args, 'text'))],
+        ['send_message', (fleet, caller, args) => this.post(fleet, caller, groupOf(args), stringArgument(args, 'text'))],
         ['reply', (fleet, caller, args) => this.reply(fleet, caller, args)],
         ['forward', (fleet, caller, args) => this.forward(fleet, caller, args)],
         ['delegate', (fleet, caller, args) => this.delegate(fleet, caller, args)],
@@ -304,6 +311,9 @@ class FleetMcpServer {
     delivered(message: DeliveredMessage): void {
         const { to, ...received } = message;
         this.received.set(to, received);
+        if (received.group !== undefined) {
+            this.receivedInGroup.set(to, { ...received, group: received.group });
+        }
     }
     close(): Promise<void> {
         return new Promise((resolve) => {
@@ -444,15 +454,20 @@ class FleetMcpServer {
         return outcome.ok ? text(outcome.text) : failure(outcome.text);
     }
     /**
-     * The `reply` tool: where the last message came from — the group it was
-     * posted to, or the agent that sent it — quoting it, as a reply of a person does.
+     * The `reply` tool: in the group the last group message came from, quoting
+     * it, as a reply of a person does. Agents talk inside groups (0.7.0, #171):
+     * a message that came some other way — the outcome of a task, an answer of
+     * 0.6.x — is not answered with it.
      */
     private async reply(fleet: FleetDirectory, caller: string, args: ToolArguments): Promise<ToolResult> {
-        const last = this.received.get(caller);
-        if (last === undefined) {
-            return failure('no agent has written to you yet; use send_message and name the agent or the group');
+        if (args['to'] !== undefined) {
+            return failure(TO_IS_GONE);
         }
-        return this.sendTo(fleet, caller, cameFrom(last), stringArgument(args, 'text'), {
+        const last = this.receivedInGroup.get(caller);
+        if (last === undefined) {
+            return failure('no message has come to you through a group yet: there is nothing to reply to; use send_message and name the group in "group"');
+        }
+        return this.post(fleet, caller, last.group, stringArgument(args, 'text'), {
             replyTo: { agentId: caller, messageId: last.messageId, author: last.from, text: original(last).text }
         });
     }
@@ -465,20 +480,21 @@ class FleetMcpServer {
         if (last === undefined) {
             return failure('no agent has written to you yet: there is nothing to forward');
         }
+        const group = groupOf(args);
         const comment = optionalText(args, 'comment');
-        return this.sendTo(fleet, caller, addressOf(args), comment, { forwarded: original(last) });
+        return this.post(fleet, caller, group, comment, { forwarded: original(last) });
     }
-    /** Sends where the address says: to the agent, or to the group. */
-    private sendTo(fleet: FleetDirectory, from: string, address: Address, message: string, extras: Extras = {}): Promise<ToolResult> {
-        return 'to' in address ? this.send(fleet, from, address.to, message, extras) : this.post(fleet, from, address.group, message, extras);
-    }
-    /** The `delegate` tool: the id of the task, or why it failed at once. */
+    /** The `delegate` tool: the id of the task, or why it failed at once. A task names the group and its one doer. */
     private async delegate(fleet: FleetDirectory, caller: string, args: ToolArguments): Promise<ToolResult> {
+        const group = stringArgument(args, 'group');
+        if (optionalText(args, 'to') === '') {
+            throw new ArgumentError('a task names one doer: name the member of the group that does it in "to"');
+        }
         const to = stringArgument(args, 'to');
         const task = stringArgument(args, 'text');
         const deadline = deadlineOf(args['deadline_minutes']);
-        const start = await fleet.delegate(caller, to, task, deadline);
-        return start.delegation.state === 'failed' ? failedAtOnce(start.delegation) : delegated(to, start, deadline);
+        const start = await fleet.delegate(caller, group, to, task, deadline);
+        return start.delegation.state === 'failed' ? failedAtOnce(start.delegation) : delegated(to, group, start, deadline);
     }
     /** The `cancel_delegation` tool. */
     private cancelDelegation(fleet: FleetDirectory, caller: string, id: string): Promise<ToolResult> {
@@ -490,19 +506,6 @@ class FleetMcpServer {
         } catch (error) {
             return Promise.resolve(failure(describeError(error)));
         }
-    }
-    private async send(fleet: FleetDirectory, from: string, to: string, message: string, extras: Extras = {}): Promise<ToolResult> {
-        const refusal = sendRefusal(fleet, from, to);
-        if (refusal !== undefined) {
-            return failure(refusal);
-        }
-        const messageId = randomUUID();
-        const delivery = await deliver(fleet, to, message, { from, messageId, ...extras });
-        if (delivery.result === 'failed') {
-            return undelivered(to, delivery);
-        }
-        this.delivered({ to, from, messageId, text: message, ...present('forwarded', extras.forwarded) });
-        return sent(to, delivery);
     }
     /**
      * A message to a group the caller is in: every other member gets it, and
@@ -517,29 +520,29 @@ class FleetMcpServer {
             const { deliveries } = await fleet.sendToGroup(groupId, message, { from, ...extras });
             return text(posted(groupId, deliveries));
         } catch (error) {
-            // The fleet changed under the call: the group or the sender is gone.
-            return failure(`the message was not posted to group "${groupId}": ${describeError(error)}`);
+            return this.postFailure(groupId, error);
         }
     }
-}
-/** Where the last message came from: the group it was posted to, or the agent that sent it. */
-function cameFrom(last: Received): Address {
-    return last.group === undefined ? { to: last.from } : { group: last.group };
-}
-/** The address a tool call names: `to` or `group`, exactly one of them. */
-function addressOf(args: ToolArguments): Address {
-    const to = optionalText(args, 'to');
-    const group = optionalText(args, 'group');
-    if ((to === '') === (group === '')) {
-        throw new ArgumentError(misaddressed(to));
+    /** Why a message to a group was not posted: a mention of a non-member, or the fleet changed under the call. */
+    private postFailure(groupId: string, error: unknown): ToolResult {
+        if (error instanceof NonMemberMentionError) {
+            return failure(noSuchMember(error.agentId, error.groupId));
+        }
+        return failure(`the message was not posted to group "${groupId}": ${describeError(error)}`);
     }
-    return to === '' ? { group } : { to };
 }
-/** Why a call with both `to` and `group`, or neither, cannot go: `to` tells which of the two it is. */
-function misaddressed(to: string): string {
-    return to === ''
-        ? '"to" or "group" is missing: name an agent in "to" or a group in "group"'
-        : 'name either "to" (an agent) or "group" (a group), not both';
+/**
+ * The group a message of a tool goes to (0.7.0, #171). A call that names `to`
+ * is refused before anything else is asked: agents talk inside groups.
+ */
+function groupOf(args: ToolArguments): string {
+    if (args['to'] !== undefined) {
+        throw new ArgumentError(TO_IS_GONE);
+    }
+    if (optionalText(args, 'group') === '') {
+        throw new ArgumentError('"group" is missing: name a group you are in, as list_groups gives it');
+    }
+    return optionalText(args, 'group');
 }
 /** The result of a message posted to a group: how each other member took it. */
 function posted(groupId: string, deliveries: readonly Delivery[]): string {
@@ -558,30 +561,6 @@ function took(delivery: Delivery): string {
         default:
             return `"${delivery.agentId}" did not get it: ${delivery.error ?? 'no reason given'}`;
     }
-}
-/**
- * Why a message cannot be sent at all; nothing when it can. An agent the
- * caller cannot write to — in no group with it (docs/groups.md) — is refused
- * with the words for one that does not exist.
- */
-function sendRefusal(fleet: FleetDirectory, from: string, to: string): string | undefined {
-    if (to === from) {
-        return 'that is you: name another agent';
-    }
-    if (!fleet.agents().some((agent) => agent.id === to) || !fleet.mayWrite(from, to)) {
-        return noSuchAgent(to);
-    }
-    return undefined;
-}
-/** The result of a message the receiver did not get. */
-function undelivered(to: string, delivery: Delivery): ToolResult {
-    return failure(`"${to}" did not get it: ${delivery.error ?? 'no reason given'}`);
-}
-/** The result of a message sent: taken now, or waiting in line. */
-function sent(to: string, delivery: Delivery): ToolResult {
-    return text(delivery.result === 'taken'
-        ? `"${to}" has it. Its answer comes to you as a message from "${to}".`
-        : `"${to}" is busy: the message waits in line and reaches it once it is done.`);
 }
 /** What `list_agents` says to an agent in no group with anyone: the fleet is not empty, it is out of sight. */
 const NO_PEERS = 'You are not in a group with anyone yet, so there is no agent you can write to: a person puts '
@@ -627,20 +606,11 @@ function failedAtOnce(delegation: Delegation): ToolResult {
     return failure(`Task ${delegation.delegationId} failed at once: ${delegation.result ?? 'no reason given'}`);
 }
 /** The result of a task given: who has it, whether it waits in line, and when it is due. */
-function delegated(to: string, { delegation, queued }: DelegationStart, deadline: string | undefined): ToolResult {
+function delegated(to: string, group: string, { delegation, queued }: DelegationStart, deadline: string | undefined): ToolResult {
     const line = queued ? ', waiting in line until it is done with what it is doing' : '';
     const due = deadline === undefined ? '' : ` It is due by ${deadline}.`;
-    return text(`Task ${delegation.delegationId} is with "${to}"${line}.${due} `
-        + `Its outcome comes to you as a message from "${to}"; cancel_delegation takes it back.`);
-}
-/** Sends through the fleet; a send that throws is a failed delivery. */
-async function deliver(fleet: FleetDirectory, to: string, message: string, options: SendOptions): Promise<Delivery> {
-    try {
-        return await fleet.send(to, message, options);
-    } catch (error) {
-        // The fleet changed under the call: the sender or the receiver is gone.
-        return { agentId: to, result: 'failed', error: describeError(error) };
-    }
+    return text(`Task ${delegation.delegationId} is with "${to}" in group "${group}"${line}.${due} `
+        + `Its outcome is posted to the group and comes to you as a message from "${to}"; cancel_delegation takes it back.`);
 }
 /** The answer to `initialize`: the protocol version, the capabilities, who the caller is and whether it administers. */
 function initializeResult(caller: string, fields: Record<string, unknown>, admin: boolean, memory: boolean): object {
@@ -650,7 +620,7 @@ function initializeResult(caller: string, fields: Record<string, unknown>, admin
         capabilities: { tools: {} },
         serverInfo: { name: MCP_SERVER_NAME, version: '1' },
         instructions: `You are "${caller}", one agent of a flotti fleet. These tools let you see the agents in a `
-            + 'group with you and write to them' + (memory ? ', and keep your own memory across conversations with the memory_* tools.' : '.')
+            + 'group with you and write to them inside those groups — to one member with @<id> in the text' + (memory ? ', and keep your own memory across conversations with the memory_* tools.' : '.')
             + (admin ? ' You are an administrator of the fleet: you may also restart agents and clear their context.' : '')
     };
 }

@@ -2,11 +2,11 @@
  * The groups of the fleet on the page (docs/groups.md, #152): the tab of a
  * group, its history as the socket sends it, and the pure parts of the tab —
  * the message as the lane shows it, how the members took it, the message a
- * quote points at, the one click that puts every agent in one group. Pure,
- * like conversations.ts: the page and the tests share it.
+ * quote points at, the task given inside the group, the one click that puts
+ * every agent in one group. Pure: the page and the tests share it.
  */
-import type { Quote } from '../../src/agent-events.js';
-import type { AgentSummary, Delivery, GroupConfig, GroupMessage } from '../../src/dashboard-protocol.js';
+import type { Delegation, DelegationState, Quote } from '../../src/agent-events.js';
+import type { AgentSummary, Delivery, GroupConfig, GroupMessage, GroupSummary } from '../../src/dashboard-protocol.js';
 import { groupTabId } from '../../src/dashboard-protocol.js';
 import { present } from '../../src/present.js';
 import type { MessageItem } from './feed.js';
@@ -68,6 +68,7 @@ function laneItem(message: GroupMessage): MessageItem {
         time: message.time,
         text: message.text,
         ...present('from', message.from),
+        ...(message.mentions === undefined || message.mentions.length === 0 ? {} : { mentions: message.mentions }),
         ...present('replyTo', message.replyTo),
         ...present('forwarded', message.forwarded)
     };
@@ -94,9 +95,46 @@ function quotedInLane(messages: readonly GroupMessage[], groupId: string, quote:
     }
     return [...messages].reverse().find((message) => message.seq < before && message.from === quote.author && textOf(message) === quote.text);
 }
+/**
+ * The task the line gives (0.7.0, #171) as it stands now: the state of the
+ * last line of the lane about it — its outcome, once posted — and not the
+ * result, which the line of the outcome says itself. None for a line that
+ * gives no task, such as the line of an outcome.
+ */
+function taskOf(messages: readonly GroupMessage[], message: GroupMessage): Delegation | undefined {
+    const given = message.delegation;
+    if (given?.state !== 'working') {
+        return undefined;
+    }
+    const { delegationId, from, to, group, text, state, deadline } = latestOf(messages, given);
+    return { delegationId, from, to, ...present('group', group), text, state, ...present('deadline', deadline) };
+}
+/** The task as the last line of the lane about it has it. */
+function latestOf(messages: readonly GroupMessage[], given: Delegation): Delegation {
+    const last = [...messages].reverse().find((line) => line.delegation?.delegationId === given.delegationId);
+    return last?.delegation ?? given;
+}
+/** How the task a line tells the outcome of ended; none for any other line. */
+function outcomeOf(message: GroupMessage): DelegationState | undefined {
+    const state = message.delegation?.state;
+    return state === 'working' ? undefined : state;
+}
 /** The one group of every agent of the fleet, made with one click when there is none (docs/groups.md, open question 2): named Everyone in every language, as the file is. */
 function everyoneGroup(agents: readonly AgentSummary[]): GroupConfig {
     return { id: 'everyone', name: 'Everyone', members: agents.map((agent) => agent.id) };
 }
-export { EMPTY_GROUP_FEED, everyoneGroup, groupMessageKey, groupOf, inFleet, laneItem, quotedInLane, textOf, tookNames, withGroupMessage };
+/**
+ * Where the page goes once a group is deleted from its tab (#175): the next
+ * group of the Groups section, the one before it when it was the last, and
+ * nothing when it was the only one — the section is empty then.
+ */
+function groupAfter(groups: readonly Pick<GroupSummary, 'id'>[], deleted: string): string | undefined {
+    const at = groups.findIndex((group) => group.id === deleted);
+    const rest = groups.filter((group) => group.id !== deleted);
+    if (rest.length === 0) {
+        return undefined;
+    }
+    return (at < 0 ? rest[0] : rest[Math.min(at, rest.length - 1)])?.id;
+}
+export { EMPTY_GROUP_FEED, everyoneGroup, groupAfter, groupMessageKey, groupOf, inFleet, laneItem, outcomeOf, quotedInLane, taskOf, textOf, tookNames, withGroupMessage };
 export type { GroupFeed, Took };

@@ -1,19 +1,17 @@
 /**
  * A pretend fleet for the stories: agents, their feeds, their colours and
- * their conversations, made without a server. The messages are built the way
- * the page keeps them, so the pure functions of the page (fleet-feed.ts,
- * conversations.ts) work on them as on a live fleet.
+ * their groups, made without a server. The messages are built the way the
+ * page keeps them, so the pure functions of the page (groups.ts) work on
+ * them as on a live fleet.
  */
 import type { AgentStatus, Quote } from '../../src/agent-events.js';
 import type { ConnectionHealth } from '../../src/connection-health.js';
 import type { AgentSummary, Delivery, GroupMessage, GroupSummary } from '../../src/dashboard-protocol.js';
 import type { AgentColors } from '../src/agent-colors.js';
-import { conversations } from '../src/conversations.js';
-import type { Conversation } from '../src/conversations.js';
 import type { AgentFeed, FeedItem, MessageItem, QueuedMessage } from '../src/feed.js';
 import type { GroupFeed } from '../src/groups.js';
 /** The ids of the tabs that are not an agent's, as App.tsx names them. */
-const TABS = { broadcastId: 'all', feedId: '_feed', addAgentId: '_add-agent', conversationsId: '_conversations' } as const;
+const TABS = { broadcastId: 'all', addAgentId: '_add-agent', addGroupId: '_add-group' } as const;
 const SCOUT: AgentSummary = { id: 'scout', name: 'Scout', kind: 'local', harness: 'claude', status: 'idle', description: 'Reads the code and answers questions about it.', memory: { state: 'on', policy: 1, skill: 'builtin' } };
 const BUILDER: AgentSummary = { id: 'builder', name: 'Builder', kind: 'local', harness: 'codex', status: 'working', description: 'Writes the code, runs the tests.', admin: true };
 const REVIEWER: AgentSummary = { id: 'reviewer', name: 'Reviewer', kind: 'remote', status: 'waiting', description: 'Reviews pull requests on the build host.', health: healthOf('fine') };
@@ -53,7 +51,7 @@ function message({ seq, minutesAgo, ...rest }: MessageInput): MessageItem {
 }
 function feed(items: readonly FeedItem[], status: AgentStatus, extras: Partial<Pick<AgentFeed, 'queue' | 'reason'>> = {}): AgentFeed {
     const lastSeq = items.reduce((last, item) => ('seq' in item ? Math.max(last, item.seq) : last), 0);
-    return { items, queue: extras.queue ?? [], lastSeq, status, reason: extras.reason };
+    return { items, queue: extras.queue ?? [], lastSeq, shownSeq: lastSeq, status, reason: extras.reason };
 }
 /** A talk with Scout: a question, an answer with a link, a reply to that answer, a message sent on. */
 const SCOUT_ITEMS: readonly FeedItem[] = [
@@ -97,7 +95,6 @@ const FEEDS: Readonly<Record<string, AgentFeed>> = {
 };
 /** What the page had seen of each tab: Scout and Reviewer have something new, the rest not. */
 const SEEN_SEQ: Readonly<Record<string, number>> = { scout: 3, builder: 3, reviewer: 1, archivist: 2 };
-const CONVERSATIONS: readonly Conversation[] = conversations(AGENTS.map((agent) => agent.id), FEEDS);
 /** Messages in line for an agent that is busy. */
 const QUEUE: readonly QueuedMessage[] = [
     { messageId: 'q-1', seq: 10, time: ago(3), text: 'When the push is done, bump the version to 0.6.0.' },
@@ -138,7 +135,7 @@ const GROUP_FEEDS: Readonly<Record<string, GroupFeed>> = {
 };
 /** A word that goes on: names of agents, texts of messages, too long for one line. */
 const LONG_NAME = 'An agent with a name so long that no tab, chip or header of the dashboard can show all of it';
-const LONG_TEXT = 'A message that goes on for a while, to see where the row cuts it and how a long word like https://example.invalid/a/path/that/does/not/end/and/keeps/going/until/the/edge/of/the/row wraps or is cut in the feed of the fleet and in the tab of an agent.';
+const LONG_TEXT = 'A message that goes on for a while, to see where the row cuts it and how a long word like https://example.invalid/a/path/that/does/not/end/and/keeps/going/until/the/edge/of/the/row wraps or is cut in the tab of an agent.';
 /** A big fleet: `n` agents of every status, each with a talk in its tab. */
 function manyAgents(n: number): { readonly agents: readonly AgentSummary[]; readonly feeds: Readonly<Record<string, AgentFeed>>; readonly colors: AgentColors } {
     const statuses: readonly AgentStatus[] = ['idle', 'working', 'waiting', 'error', 'stopped', 'starting'];
@@ -152,5 +149,5 @@ function manyAgents(n: number): { readonly agents: readonly AgentSummary[]; read
     const colors = Object.fromEntries(agents.map((agent, i) => [agent.id, i % 6]));
     return { agents, feeds, colors };
 }
-export { AGENTS, ARCHIVIST, BUILDER, COLORS, CONVERSATIONS, FEEDS, GROUPS, GROUP_FEEDS, LONG_NAME, LONG_TEXT, QUEUE, RELEASE, REVIEWER, SCOUT, SEEN_SEQ, TABS, ago, feed, groupMessage, healthOf, manyAgents, message, took };
+export { AGENTS, ARCHIVIST, BUILDER, COLORS, FEEDS, GROUPS, GROUP_FEEDS, LONG_NAME, LONG_TEXT, QUEUE, RELEASE, REVIEWER, SCOUT, SEEN_SEQ, TABS, ago, feed, groupMessage, healthOf, manyAgents, message, took };
 export type { MessageInput };

@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import type { Forwarded, Quote } from '../../../src/agent-events.js';
 import type { AgentSummary } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import { forwardOf, quoteOf } from '../feed.js';
-import { nameOf } from './AgentMark.js';
+import { mentionPieces } from '../mentions.js';
+import { AgentMark, nameOf } from './AgentMark.js';
 import type { MessageItem } from '../feed.js';
 import { LinkedText } from './LinkedText.js';
 import { useT } from '../i18n/I18n.js';
@@ -17,6 +19,8 @@ type MessageActions = {
     /** Whether the message a quote points at is still in its feed. */
     readonly hasQuoted: (quote: Quote) => boolean;
     readonly onOpenQuote: (quote: Quote) => void;
+    /** Opens the tab of a mentioned agent (0.7.0, #174); absent outside the lane of a group. */
+    readonly onOpenAgent?: (id: string) => void;
 };
 type MessageProps = {
     readonly item: MessageItem;
@@ -96,13 +100,40 @@ function showsText(item: MessageItem): boolean {
     return item.text !== '' || item.forwarded === undefined;
 }
 /** The quote a reply answers, the words of the message, and what it forwards, in that order. */
-function MessageBody({ item, agents, colors, actions }: { readonly item: MessageItem; readonly actions: QuoteActions } & Names) {
+function MessageBody({ item, agents, colors, actions }: { readonly item: MessageItem; readonly actions: MessageActions } & Names) {
     return (
         <>
             {item.replyTo === undefined ? null : <QuoteLink quote={item.replyTo} agents={agents} colors={colors} actions={actions} />}
-            {showsText(item) ? <div className="text"><LinkedText text={item.text} /></div> : null}
+            {showsText(item) ? <div className="text">{mentionedText(item, agents, colors, actions.onOpenAgent)}</div> : null}
             {item.forwarded === undefined ? null : <ForwardedBlock forwarded={item.forwarded} agents={agents} colors={colors} />}
         </>
+    );
+}
+/** The words of a message, with its mentions as chips (0.7.0, #174) when a group lane reads it; the words alone otherwise. */
+function mentionedText(item: MessageItem, agents: readonly AgentSummary[], colors: AgentColors, onOpenAgent: ((id: string) => void) | undefined): ReactNode {
+    const mentions = item.mentions;
+    if (mentions === undefined || mentions.length === 0 || onOpenAgent === undefined) {
+        return <LinkedText text={item.text} />;
+    }
+    return (
+        <>
+            {mentionPieces(item.text, mentions).map((piece, index) => piece.kind === 'text'
+                ? <LinkedText key={index} text={piece.text} />
+                : <MentionChip key={index} id={piece.id} agents={agents} colors={colors} onOpenAgent={onOpenAgent} />)}
+        </>
+    );
+}
+/** A mention of a member in place of `@<id>`: the mark and the name, a click opens its tab; one not in the fleet any more is shown by id. */
+function MentionChip({ id, agents, colors, onOpenAgent }: { readonly id: string; readonly onOpenAgent: (id: string) => void } & Names) {
+    const agent = agents.find((candidate) => candidate.id === id);
+    if (agent === undefined) {
+        return <span className="mention mention-gone">@{id}</span>;
+    }
+    return (
+        <button type="button" className={`mention agent-color-${colors[id] ?? 0}`} onClick={() => onOpenAgent(id)}>
+            <AgentMark color={colors[id]} />
+            {agent.name}
+        </button>
     );
 }
 /**

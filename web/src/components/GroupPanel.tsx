@@ -5,10 +5,12 @@ import type { AgentSummary, Delivery, GroupMessage, GroupSummary } from '../../.
 import { groupTabId } from '../../../src/dashboard-protocol.js';
 import type { AgentColors } from '../agent-colors.js';
 import { api } from '../api.js';
-import { groupMessageKey, laneItem, quotedInLane, tookNames } from '../groups.js';
+import { groupMessageKey, laneItem, outcomeOf, quotedInLane, taskOf, tookNames } from '../groups.js';
 import type { GroupFeed, Took } from '../groups.js';
 import { GroupMarks, Member, nameOf } from './AgentMark.js';
 import { Composer } from './Composer.js';
+import { DelegationCard } from './DelegationCard.js';
+import { GroupEdit } from './GroupEdit.js';
 import { usePinnedScroll } from './Feed.js';
 import { MessageBody, MessageToolbar, ReplyPreview } from './Message.js';
 import type { MessageActions, QuoteActions } from './Message.js';
@@ -24,10 +26,10 @@ type GroupPanelProps = Fleet & {
     readonly feed: GroupFeed | undefined;
     /** Where a quote leads when the quoted message is not in the lane: the tab of an agent. */
     readonly quotes: QuoteActions;
-    /** Opens the group in Settings → Groups. */
-    readonly onEdit: () => void;
-    /** A message to bring into view as the lane opens: one picked in the feed of the fleet (#114). */
-    readonly opened?: Found | undefined;
+    /** Opens the tab of a mentioned agent (0.7.0, #174). */
+    readonly onOpenAgent: (id: string) => void;
+    /** The group was deleted from its editor (#175): the page leaves the tab. */
+    readonly onDeleted: () => void;
 };
 /** A message to bring into view in the lane; `n` tells one ask from the next. */
 type Found = { readonly key: string; readonly n: number };
@@ -104,48 +106,65 @@ function DeliveryLine({ delivery, agents }: { readonly delivery: Delivery; reado
         </li>
     );
 }
-type RowProps = Fleet & { readonly message: GroupMessage; readonly group: GroupSummary; readonly actions: MessageActions };
-/** The bar of an agent's message: who wrote it → the group, and «answer» when flotti posted it for the member. */
+type RowProps = Fleet & { readonly message: GroupMessage; readonly messages: readonly GroupMessage[]; readonly group: GroupSummary; readonly actions: MessageActions };
+/** What the bar adds after who wrote it: «answer» when flotti posted it for the member, how the task ended on the line of an outcome (#171). */
+function barMark(message: GroupMessage, t: Messages): string {
+    const outcome = outcomeOf(message);
+    if (outcome !== undefined) {
+        return ` · ${t.delegation.task} ${t.delegation.state[outcome]}`;
+    }
+    return message.turnAnswer === true ? ` · ${t.group.answer}` : '';
+}
+/** The bar of an agent's message: who wrote it → the group, and what kind of message it is. */
 function EnvelopeBar({ message, group, agents }: Pick<RowProps, 'message' | 'group' | 'agents'> & { readonly message: GroupMessage & { readonly from: string } }) {
     const t = useT();
     const from = nameOf(agents, message.from);
     const answer = message.turnAnswer === true;
     return (
         <div className="envelope-bar">
-            <span aria-hidden="true">{t.group.toGroup(from, group.name)}{answer ? ` · ${t.group.answer}` : ''}</span>
+            <span aria-hidden="true">{t.group.toGroup(from, group.name)}{barMark(message, t)}</span>
             <span className="visually-hidden">{answer ? t.group.answerFromTo(from, group.name) : t.common.fromTo(from, group.name)}</span>
         </div>
     );
 }
-/** One message of the lane (#152): the person's on the right, an agent's as an envelope on the left; under it, how the members took it. */
-function LaneRow({ message, group, actions, agents, colors }: RowProps) {
+/** The message itself: the person's, an agent's envelope, or the card of a task given in the group (#171), as the task stands now. */
+function LaneMessage({ message, messages, group, actions, agents, colors }: RowProps) {
     const t = useT();
     const item = laneItem(message);
-    const tab = groupTabId(group.id);
+    const task = taskOf(messages, message);
     const from = message.from;
+    if (task !== undefined) {
+        return <DelegationCard item={{ kind: 'delegation', key: item.key, ...task }} agents={agents} colors={colors} />;
+    }
+    return from === undefined
+        ? <div className="item message message-user"><div className="item-label">{t.common.you}</div><MessageBody item={item} agents={agents} colors={colors} actions={actions} /></div>
+        : <div className={`item message message-agent message-peer agent-color-${colors[from] ?? 0}`}>
+            <EnvelopeBar message={{ ...message, from }} group={group} agents={agents} />
+            <div className="envelope-body"><MessageBody item={item} agents={agents} colors={colors} actions={actions} /></div>
+        </div>;
+}
+/** One message of the lane (#152): the person's on the right, an agent's as an envelope on the left; under it, how the members took it. */
+function LaneRow(props: RowProps) {
+    const { message, group, actions, agents, colors } = props;
+    const item = laneItem(message);
+    const tab = groupTabId(group.id);
     return (
-        <div className={`message-row${from === undefined ? ' message-row-user' : ''}`} data-key={item.key}>
-            {from === undefined
-                ? <div className="item message message-user"><div className="item-label">{t.common.you}</div><MessageBody item={item} agents={agents} colors={colors} actions={actions} /></div>
-                : <div className={`item message message-agent message-peer agent-color-${colors[from] ?? 0}`}>
-                    <EnvelopeBar message={{ ...message, from }} group={group} agents={agents} />
-                    <div className="envelope-body"><MessageBody item={item} agents={agents} colors={colors} actions={actions} /></div>
-                </div>}
+        <div className={`message-row${message.from === undefined ? ' message-row-user' : ''}`} data-key={item.key}>
+            <LaneMessage {...props} />
             <MessageToolbar item={item} agentId={tab} agentName={group.name} agents={agents} colors={colors} actions={actions} />
             <Took deliveries={message.deliveries} agents={agents} />
         </div>
     );
 }
-type LaneProps = Fleet & Pick<GroupPanelProps, 'group' | 'opened'> & { readonly messages: readonly GroupMessage[]; readonly actions: MessageActions; readonly found: Found | undefined };
-function Lane({ group, messages, actions, found, opened, ...fleet }: LaneProps) {
+type LaneProps = Fleet & Pick<GroupPanelProps, 'group'> & { readonly messages: readonly GroupMessage[]; readonly actions: MessageActions; readonly found: Found | undefined };
+function Lane({ group, messages, actions, found, ...fleet }: LaneProps) {
     const { list, onScroll } = usePinnedScroll(messages);
     useFound(list, found);
-    useFound(list, opened);
     const t = useT();
     return (
         <div className="feed lane-group" role="log" aria-label={t.group.of(group.name)} ref={list} onScroll={onScroll}>
             {messages.length === 0 ? <p className="muted empty">{t.group.notYet(group.name)}</p> : null}
-            {messages.map((message) => <LaneRow key={message.seq} message={message} group={group} actions={actions} {...fleet} />)}
+            {messages.map((message) => <LaneRow key={message.seq} message={message} messages={messages} group={group} actions={actions} {...fleet} />)}
         </div>
     );
 }
@@ -154,7 +173,8 @@ function Lane({ group, messages, actions, found, opened, ...fleet }: LaneProps) 
  * the name, the members by mark and name — one not in the fleet in grey —
  * and Edit; the topic on a second line. No stripe: a group has no one colour.
  */
-function GroupHeader({ group, agents, colors, onEdit }: Fleet & Pick<GroupPanelProps, 'group' | 'onEdit'>) {
+type HeaderProps = Fleet & Pick<GroupPanelProps, 'group'> & { readonly editing: boolean; readonly onEdit: () => void };
+function GroupHeader({ group, agents, colors, editing, onEdit }: HeaderProps) {
     const t = useT();
     return (
         <header className="agent-header group-header">
@@ -163,17 +183,18 @@ function GroupHeader({ group, agents, colors, onEdit }: Fleet & Pick<GroupPanelP
             </div>
             <div className="group-members">{group.members.map((id) => <Member key={id} id={id} agents={agents} colors={colors} />)}</div>
             <div className="header-actions">
-                <button type="button" className="btn btn-sm" title={t.group.editHint} onClick={onEdit}>{t.common.edit}</button>
+                <button type="button" className="btn btn-sm" title={t.group.editHint} aria-pressed={editing} disabled={editing} onClick={onEdit}>{t.common.edit}</button>
             </div>
             {group.topic === undefined ? null : <p className="group-topic" title={group.topic}>{group.topic}</p>}
         </header>
     );
 }
 /** The reply being written, if any, and what the messages of the lane can do: Reply quotes into the composer, Forward sends to an agent. */
-function useMessaging(quotes: QuoteActions, t: Messages) {
+function useMessaging(quotes: QuoteActions, onOpenAgent: (id: string) => void, t: Messages) {
     const [reply, setReply] = useState<Quote>();
     const actions: MessageActions = {
         ...quotes,
+        onOpenAgent,
         onReply: setReply,
         onForward: async (to, forwarded) => {
             const delivery = await api.send(to, '', { forwarded });
@@ -200,7 +221,11 @@ function replyAbove({ reply, setReply }: ReturnType<typeof useMessaging>, fleet:
     }
     return { key: `${reply.agentId}/${reply.messageId}`, node: <ReplyPreview quote={reply} {...fleet} onCancel={() => setReply(undefined)} /> };
 }
-/** The composer of the agent's tab, with the members in place of the status: Enter sends to the group, Reply quotes. */
+/** The members of the group, by id and name, as the `@` picker offers them. */
+function membersOf(group: GroupSummary, agents: readonly AgentSummary[]): readonly { id: string; name: string }[] {
+    return group.members.map((id) => ({ id, name: nameOf(agents, id) }));
+}
+/** The composer of the agent's tab, with the members in place of the status: Enter sends to the group, Reply quotes, `@` mentions. */
 function GroupComposer({ group, agents, colors, messaging }: ComposerProps) {
     const { reply, setReply } = messaging;
     const t = useT();
@@ -216,6 +241,8 @@ function GroupComposer({ group, agents, colors, messaging }: ComposerProps) {
             above={replyAbove(messaging, { agents, colors })}
             onEscape={reply === undefined ? undefined : () => setReply(undefined)}
             state={<span className="badge composer-count">{t.group.members(group.members.length)}</span>}
+            mentions={membersOf(group, agents)}
+            colors={colors}
         />
     );
 }
@@ -223,18 +250,24 @@ function GroupComposer({ group, agents, colors, messaging }: ComposerProps) {
  * The tab of a group (docs/groups.md, #152): the header, one lane of what was
  * said in it — the person's messages, the agents' messages, the answers marked
  * as answers, how the members took each one — and a composer at the foot.
+ * Edit in the header puts the editor of the group over the lane (#175).
  */
-function GroupPanel({ group, feed, quotes, onEdit, opened, agents, colors }: GroupPanelProps) {
+function GroupPanel({ group, feed, quotes, onOpenAgent, onDeleted, agents, colors }: GroupPanelProps) {
     const t = useT();
+    const [editing, setEditing] = useState(false);
     const messages = feed?.messages ?? NO_MESSAGES;
-    const messaging = useMessaging(quotes, t);
+    const messaging = useMessaging(quotes, onOpenAgent, t);
     const { actions, found } = useLaneQuotes(messages, group.id, messaging.actions);
     const fleet = { agents, colors };
     return (
         <section className="agent-panel group-panel" aria-label={t.group.of(group.name)}>
-            <GroupHeader group={group} onEdit={onEdit} {...fleet} />
-            <Lane group={group} messages={messages} actions={{ ...messaging.actions, ...actions }} found={found} opened={opened} {...fleet} />
-            <GroupComposer group={group} messaging={messaging} {...fleet} />
+            <GroupHeader group={group} editing={editing} onEdit={() => setEditing(true)} {...fleet} />
+            {editing
+                ? <GroupEdit group={group} agents={agents} onDone={() => setEditing(false)} onDeleted={onDeleted} />
+                : <>
+                    <Lane group={group} messages={messages} actions={{ ...messaging.actions, ...actions }} found={found} {...fleet} />
+                    <GroupComposer group={group} messaging={messaging} {...fleet} />
+                </>}
         </section>
     );
 }

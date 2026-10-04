@@ -1,0 +1,37 @@
+schema: spec-driven
+
+context: |
+  flotti is a messenger for AI agents: local agents over ACP, remote agents over A2A, and a
+  dashboard with a tab per agent, groups of agents, tasks between agents and a broadcast to all of
+  them. One npm package, `flotti run` starts the fleet and serves the page.
+
+  Stack: TypeScript on Node 22 (ES modules, no runtime framework on the server), the page is React
+  built by Vite from `web/`, unit tests with node:test in `test/`, browser tests with Playwright in
+  `e2e/`, Storybook for the components of the dashboard. Checks run in GitHub Actions
+  (`.github/workflows/checks.yml`).
+
+  Language: everything in this repository is written in English — the code, the docs, the specs and
+  the change proposals. User-facing sentences of flotti (refusals, lines in a tab) are quoted in the
+  specs as they are printed.
+
+  Where the truth lives: `openspec/specs/<capability>/spec.md` is the record of what is built;
+  `openspec/changes/<id>/` is what is proposed and not yet built — reviewed in a pull request before
+  the implementation starts, and archived into the specs when the change ships. The documents under
+  `docs/` explain and give the reasons (what was rejected and why); where a document and a spec
+  disagree, the spec is right.
+
+rules:
+  specs:
+    - Write in English; the keywords SHALL / MUST / WHEN / THEN are the syntax and stay uppercase
+    - Put SHALL or MUST in the first sentence of a requirement's body — the parser checks the body
+      text of the requirement, and a keyword buried in a later paragraph is easy to lose in an edit
+    - One requirement is one observable rule of flotti; the code paths that implement it go in the
+      design, not in the requirement text
+    - Quote a sentence flotti prints as it is printed, in backticks
+  proposal:
+    - Name the issues the change comes from and the decisions the owner already took
+    - Open questions go in the proposal, each with the recommendation the deltas assume
+  design:
+    - Name the files and the functions a decision lands in, and what was rejected and why
+  tasks:
+    - One task group per issue of the milestone, in the order they are built, with the dependencies

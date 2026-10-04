@@ -7,7 +7,7 @@
  * every action has an answer of its own — a broadcast answers agent by agent —
  * while the socket only carries what the agents do.
  */
-import type { AgentEvent, AgentStatus, Forwarded, Quote } from './agent-events.js';
+import type { AgentEvent, AgentStatus, Delegation, Forwarded, Quote } from './agent-events.js';
 import type { AnswerDelivery } from './answer-delivery.js';
 import type { ConnectionHealth } from './connection-health.js';
 import type { FleetSource, LocalAgentAdapter, RemoteAuth, RemoteSsh, RestartPolicy } from './types.js';
@@ -97,6 +97,11 @@ type GroupMessage = {
     /** Id of the agent that wrote it; absent when a person did. */
     readonly from?: string;
     readonly text: string;
+    /**
+     * The members the message mentions with `@<id>` (0.7.0, #174), in the order
+     * of the text; absent when there are none.
+     */
+    readonly mentions?: readonly string[];
     readonly replyTo?: Quote;
     readonly forwarded?: Forwarded;
     /**
@@ -104,6 +109,13 @@ type GroupMessage = {
      * started, posted back by flotti on its own: the members owe it no answer.
      */
     readonly turnAnswer?: true;
+    /**
+     * The message is about a task given inside the group (0.7.0, #171): the
+     * task as it stood when the line was written. On the line that gives it,
+     * written by the giver, `state` is `working`; on the line of the outcome,
+     * written by the agent that did it, the state it ended in and its result.
+     */
+    readonly delegation?: Delegation;
     /** How each member but the writer took it, in the order of the members; a member not in the fleet `failed`. */
     readonly deliveries: readonly Delivery[];
 };
@@ -157,9 +169,9 @@ type AdminSettings = {
 /** `GET /api/answer-delivery`, the body of `PUT /api/answer-delivery` and the answer to it. */
 type AnswerDeliverySettings = {
     /**
-     * How the answer of an agent reaches its tab and the feed of the fleet
-     * (#157): `streamed` — piece by piece as it is written; `whole` — once,
-     * when the message is complete. One rule for every agent.
+     * How the answer of an agent reaches its tab (#157): `streamed` — piece
+     * by piece as it is written; `whole` — once, when the message is
+     * complete. One rule for every agent.
      */
     readonly mode: AnswerDelivery;
 };

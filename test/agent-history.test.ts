@@ -228,3 +228,24 @@ test('without persistHistory the messages of a group stay in memory', async () =
     strictEqual(existsSync(join(groupDirectory, HISTORY_FILE)), false);
     await supervisor.stop();
 });
+test('the history file of a member keeps every event of a group turn, each with the group: the page hides them, the file loses none (0.7.0, #172)', async () => {
+    const { fleet, directory } = fleetOnDisk('a', 'b');
+    const { supervisor } = run(fleet);
+    await supervisor.start();
+    await supervisor.sendToGroup('everyone', 'hello');
+    await until(() => supervisor.groupHistory('everyone').length === 3);
+    await supervisor.send('a', 'just to you');
+    await supervisor.stop();
+    const turns = onDisk(directory('a')).filter((event) => event.type !== 'status');
+    deepStrictEqual(turns.map((event) => [event.type === 'message' ? event.text : event.type, event.group]), [
+        ['hello', 'everyone'],
+        ['you said: hello', 'everyone'],
+        ['turn-end', 'everyone'],
+        ['you said: hello', 'everyone'],
+        ['you said: you said: hello', 'everyone'],
+        ['turn-end', 'everyone'],
+        ['just to you', undefined],
+        ['you said: just to you', undefined],
+        ['turn-end', undefined]
+    ]);
+});

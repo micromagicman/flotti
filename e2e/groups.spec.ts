@@ -1,9 +1,9 @@
 /**
  * The groups of the fleet on the dashboard (docs/groups.md, #152): a fleet
  * with agents but no group offers one click «Everyone»; the tab of a group
- * shows what was said in it and how each member took it; a group message of
- * the feed of the fleet opens the tab of the group at that message. A fleet
- * of its own, since dashboard.spec.ts starts with a group.
+ * shows what was said in it and how each member took it; the last group
+ * deleted from its tab leaves the section empty (#175). A fleet of its own,
+ * since dashboard.spec.ts starts with a group.
  */
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
@@ -62,7 +62,6 @@ const section = (page: Page, name: string) => page.getByRole('tablist', { name: 
 const agentTab = (page: Page, name: string) => page.locator('.sidebar').getByRole('tab', { name: new RegExp(`^${name}`) });
 const groupTab = (page: Page) => page.locator('.sidebar').getByRole('tab', { name: /^Group Everyone/ });
 const lane = (page: Page) => page.getByRole('log', { name: 'Group Everyone' });
-const fleetFeed = (page: Page) => page.getByRole('log', { name: 'Messages' });
 async function openGroups(page: Page): Promise<void> {
     await page.goto(url);
     await section(page, 'Groups').click();
@@ -104,19 +103,37 @@ test('the tab of a group shows what was said in it — the person\'s message, th
     await expect(answer.locator('.quote').first()).toContainText('hello team');
     await expect(groupTab(page)).toContainText('3 messages');
 });
-test('a group message of the feed of the fleet is one row with the tag «group», and opens the tab of the group at the message (#152)', async ({ page }) => {
-    await page.goto(`${url}#/_feed`);
-    const row = fleetFeed(page).getByRole('button', { name: /^You to Everyone, / }).filter({ hasText: 'hello team' });
-    await expect(row).toHaveCount(1);
-    await expect(row.locator('.fleet-kind')).toHaveText(['group']);
-    const answers = fleetFeed(page).getByRole('button', { name: /^(claude|codex) to Everyone, / });
-    await expect(answers).toHaveCount(2);
-    await expect(answers.first().locator('.fleet-kind')).toHaveText(['group', 'answer']);
-    await page.getByRole('group', { name: 'Show messages of' }).getByRole('button', { name: 'codex' }).click();
-    await expect(row).toHaveCount(1, { timeout: 5_000 });
-    await row.click();
-    await expect(lane(page).locator('.message-row.message-found')).toContainText('hello team');
-    await expect(section(page, 'Groups')).toHaveAttribute('aria-selected', 'true');
+test('a group message and a direct message are each read in one place: the tab of the agent has the person\'s message only, the tab of the group the group\'s, and a group turn lights no agent tab (#172)', async ({ page }) => {
+    const feed = page.getByRole('log', { name: 'Output of codex' });
+    await page.goto(url);
+    await agentTab(page, 'codex').click();
+    await expect(feed).toBeVisible();
+    // The tab of codex has been seen; the group message and the turn it starts go to the tab of the group.
+    await section(page, 'Groups').click();
+    await groupTab(page).click();
+    const toGroup = page.getByRole('textbox', { name: 'Message to Everyone' });
+    await toGroup.fill('group only');
+    await toGroup.press('Enter');
+    await expect(lane(page).locator('.message-row-user').filter({ hasText: 'group only' })).toHaveCount(1);
+    await expect(lane(page).locator('.message-peer').filter({ hasText: 'you said: [in group everyone] group only' })).toHaveCount(2);
+    await section(page, 'Agents').click();
+    await expect(agentTab(page, 'codex').locator('.unread'), 'a group turn is not new in the tab of the agent').toHaveCount(0);
+    await agentTab(page, 'codex').click();
+    const toCodex = page.getByRole('textbox', { name: 'Message to codex' });
+    await toCodex.fill('direct only');
+    await toCodex.press('Enter');
+    await expect(feed.locator('.message-row-agent').filter({ hasText: 'you said: direct only' })).toHaveCount(1);
+    await expect(feed.locator('.message-row-user'), 'the person\'s message to codex, and no group message').toHaveText([/direct only/]);
+    await expect(feed.getByText(/group only|hello team/)).toHaveCount(0);
+    await section(page, 'Groups').click();
+    await groupTab(page).click();
+    await expect(lane(page).locator('.message-row-user').filter({ hasText: 'group only' })).toHaveCount(1);
+    await expect(lane(page).getByText('direct only')).toHaveCount(0);
+    // A reloaded page reads the same histories the same way.
+    await page.reload();
+    await section(page, 'Agents').click();
+    await agentTab(page, 'codex').click();
+    await expect(feed.locator('.message-row-user')).toHaveText([/direct only/]);
 });
 test('a member busy when the message is posted is «in line» under it, and the fold, the history and a reloaded page say how it ended once it does (#162)', async ({ page }) => {
     const gate = join(fleet, 'local', 'claude', 'gate');
@@ -146,4 +163,49 @@ test('a member busy when the message is posted is «in line» under it, and the 
     await groupTab(page).click();
     await expect(lane(page).locator('.message-row-user').filter({ hasText: 'who is free' }).locator('.took summary')).toHaveText('claude, codex got it');
     rmSync(gate, { force: true });
+});
+test('a mention addresses one member: @codex answers and the others do not, the @ picker offers the members, and the row shows a chip (#174)', async ({ page }) => {
+    await openGroups(page);
+    await groupTab(page).click();
+    const field = page.getByRole('textbox', { name: 'Message to Everyone' });
+    // The @ picker: @ offers the members, the query filters them, Enter inserts `@codex `.
+    await field.fill('@');
+    const picker = page.getByRole('listbox', { name: 'Mention a member' });
+    await expect(picker).toBeVisible();
+    await expect(picker.getByRole('option')).toHaveCount(2);
+    await field.pressSequentially('codex');
+    await expect(picker.getByRole('option')).toHaveCount(1);
+    await field.press('Enter');
+    await expect(field).toHaveValue('@codex ');
+    await field.fill('@codex please review');
+    await field.press('Enter');
+    // The row shows the mention as a chip with the member's name.
+    const message = lane(page).locator('.message-row-user').filter({ hasText: 'please review' });
+    await expect(message).toHaveCount(1);
+    await expect(message.locator('.mention')).toHaveText(['codex']);
+    // Only the mentioned member answers; the other member's turn is not posted.
+    await expect(lane(page).locator('.message-peer').filter({ hasText: 'in group everyone, to you' })).toHaveCount(1);
+    await expect(lane(page).locator('.message-peer').filter({ hasText: 'in group everyone, to codex' })).toHaveCount(0);
+});
+test('the last group deleted from its tab leaves the Groups section empty: the offer of «Everyone» and Add group, which is open (#175)', async ({ page }) => {
+    await openGroups(page);
+    await groupTab(page).click();
+    await page.locator('.group-header').getByRole('button', { name: 'Edit' }).click();
+    const form = page.getByRole('form', { name: 'Group everyone' });
+    await form.getByRole('button', { name: 'Delete' }).click();
+    await expect(form).toContainText('Move the group Everyone and its history to .trash in the fleet directory?');
+    await form.getByRole('button', { name: 'Delete' }).click();
+    await expect(groupTab(page)).toHaveCount(0);
+    await expect(section(page, 'Groups')).toHaveAttribute('aria-selected', 'true');
+    const offer = page.getByRole('note');
+    await expect(offer).toContainText('Your agents don\'t see each other yet.');
+    await expect(offer, 'the empty section does not point to Settings').not.toContainText('Settings');
+    await expect(page.locator('.sidebar').getByRole('tab').last()).toHaveText(/^Add group/);
+    await expect(page.locator('.sidebar').getByRole('tab', { name: /^Add group/ })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('form', { name: 'New group' })).toBeVisible();
+    expect(existsSync(join(fleet, 'groups', 'everyone'))).toBe(false);
+    // The one click stays one click.
+    await offer.getByRole('button', { name: 'Everyone' }).click();
+    await expect(page.getByRole('region', { name: 'Group Everyone' })).toBeVisible();
+    expect(existsSync(join(fleet, 'groups', 'everyone', 'group.json'))).toBe(true);
 });

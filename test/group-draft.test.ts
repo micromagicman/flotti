@@ -44,3 +44,18 @@ describe('the draft of a group', () => {
         deepStrictEqual(memberChoices(draft, FLEET).map((choice) => choice.id), ['claude', 'codex']);
     });
 });
+describe('the draft of a group in the editor of its tab (#175)', () => {
+    it('opened in the tab of the group and saved unchanged, says the file it was read from', () => {
+        const files = [
+            { id: 'release', name: 'Release', topic: 'Ship it.', members: ['codex', 'ghost', 'claude'] },
+            { id: 'docs', members: [] }
+        ];
+        for (const file of files) {
+            deepStrictEqual(toGroupConfig(fromGroupConfig(file)), file);
+        }
+    });
+    it('renamed and with a member unticked in the tab, keeps its id: the id names the directory', () => {
+        const draft = withMember({ ...fromGroupConfig({ id: 'release', name: 'Release', members: ['codex', 'claude'] }), name: 'Ship' }, 'codex', false);
+        deepStrictEqual(toGroupConfig(draft), { id: 'release', name: 'Ship', members: ['claude'] });
+    });
+});

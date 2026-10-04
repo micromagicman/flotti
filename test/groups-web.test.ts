@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { AgentSummary, Delivery, GroupMessage, ServerMessage } from '../src/dashboard-protocol.js';
 import { groupTabId } from '../src/dashboard-protocol.js';
 import { fleetReducer, initialState, seen } from '../web/src/fleet-state.js';
-import { EMPTY_GROUP_FEED, everyoneGroup, groupMessageKey, groupOf, laneItem, quotedInLane, tookNames, withGroupMessage } from '../web/src/groups.js';
+import { EMPTY_GROUP_FEED, everyoneGroup, groupAfter, groupMessageKey, groupOf, laneItem, outcomeOf, quotedInLane, taskOf, tookNames, withGroupMessage } from '../web/src/groups.js';
 const agent = (id: string): AgentSummary => ({ id, name: id.toUpperCase(), kind: 'local', status: 'idle' });
 function message(seq: number, text: string, extra: Partial<GroupMessage> = {}): GroupMessage {
     return { groupId: 'team', seq, messageId: `g${seq}`, time: `2026-01-01T00:00:0${seq}.000Z`, text, deliveries: [], ...extra };
@@ -53,6 +53,10 @@ test('the message as the lane shows it has the shape of a message of a tab, on t
     deepStrictEqual(item, { kind: 'message', key: '_group:team:2', role: 'user', messageId: 'g2', seq: 2, time: '2026-01-01T00:00:02.000Z', text: 'hi', from: 'scout', replyTo: { agentId: 'scout', messageId: 'm', text: 'q' } });
     strictEqual(laneItem(message(1, 'you')).from, undefined, 'a person wrote it');
 });
+test('the message as the lane shows it carries the mentions of the line (#174)', () => {
+    deepStrictEqual(laneItem(message(3, '@scout please', { mentions: ['scout'] })).mentions, ['scout']);
+    strictEqual(laneItem(message(3, 'hello')).mentions, undefined, 'no mention: no field');
+});
 test('who took a message, by name: got it, in line, failed', () => {
     const deliveries = [{ agentId: 'a', result: 'taken' as const }, { agentId: 'b', result: 'failed' as const, error: 'not in the fleet' }, { agentId: 'c', result: 'queued' as const }, { agentId: 'd', result: 'taken' as const }];
     deepStrictEqual(tookNames(deliveries, (id) => id.toUpperCase()), { taken: ['A', 'D'], queued: ['C'], failed: ['B'] });
@@ -76,4 +80,26 @@ test('the fleet of a server older than the page — a 0.5.x still running while 
     deepStrictEqual(seen(older), { scout: 0 }, 'the page asks the older server only for what it knows of');
     const current = fleetReducer(older, server({ type: 'fleet', agents: [agent('scout')], groups: [{ id: 'team', name: 'Team', members: ['scout'] }] }));
     deepStrictEqual(current.groupFeeds, { team: EMPTY_GROUP_FEED }, 'once the server is restarted, its groups come as usual');
+});
+test('a task given in the group is one card on its line, in the state of its last line, without the result; the outcome is a line of its own (#171)', () => {
+    const task = { delegationId: 't-1', from: 'eva', to: 'reviewer', group: 'team', text: 'review the diff', state: 'working' as const, deadline: '2026-01-01T01:00:00.000Z' };
+    const given = message(1, '@reviewer review the diff', { from: 'eva', delegation: task });
+    const other = message(2, 'meanwhile', { from: 'eva' });
+    const outcome = message(3, 'two remarks', { from: 'reviewer', delegation: { ...task, state: 'completed', result: 'two remarks' } });
+    deepStrictEqual(taskOf([given, other], given), task, 'working while no outcome is posted');
+    deepStrictEqual(taskOf([given, other, outcome], given), { ...task, state: 'completed' }, 'the state of the outcome, not its result');
+    strictEqual(taskOf([given, other, outcome], outcome), undefined, 'the line of the outcome is a message, not a card');
+    strictEqual(taskOf([given, other, outcome], other), undefined);
+    strictEqual(outcomeOf(outcome), 'completed');
+    strictEqual(outcomeOf(given), undefined);
+    strictEqual(outcomeOf(other), undefined);
+});
+test('a group deleted from its tab leads to the next group of the section, to the one before when it was the last, to none when it was the only one (#175)', () => {
+    const groups = [{ id: 'release' }, { id: 'docs' }, { id: 'watch' }];
+    strictEqual(groupAfter(groups, 'release'), 'docs');
+    strictEqual(groupAfter(groups, 'docs'), 'watch');
+    strictEqual(groupAfter(groups, 'watch'), 'docs');
+    strictEqual(groupAfter([{ id: 'release' }], 'release'), undefined);
+    strictEqual(groupAfter([], 'release'), undefined);
+    strictEqual(groupAfter(groups.slice(1), 'release'), 'docs', 'a group the fleet no longer lists: the first one left');
 });

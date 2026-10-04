@@ -7,10 +7,14 @@ type AdminRequest = { readonly action: AdminAction; readonly target: string };
 type SaidParams = {
     readonly kind: 'message' | 'progress';
     readonly busy?: boolean;
+    /**
+     * The member of `group` a task goes to. On a message without `task` it is
+     * refused (0.7.0, #171): a message to another agent goes through a group.
+     */
     readonly to?: string;
-    /** Id of a group of the fleet the message is posted to (docs/groups.md); one of `to` and `group`. */
+    /** Id of a group of the fleet the message, or the task, is posted to (docs/groups.md). */
     readonly group?: string;
-    /** The message gives `to` a task; the id of the task is the id of the message. */
+    /** The message gives `to` a task in `group`; the id of the task is the id of the message. */
     readonly task?: { readonly deadline?: string };
     /** Id of a task the agent gave and takes back. */
     readonly cancel?: string;
@@ -63,7 +67,12 @@ function senderMarks(options: SendOptions): Pick<Message, 'metadata' | 'extensio
         : { metadata: { [INBOX_EXTENSION]: params }, extensions: [INBOX_EXTENSION] };
 }
 function senderParams(options: SendOptions): Record<string, unknown> {
-    return { ...field('from', options.from), ...field('group', options.group), ...field('task', options.delegation) };
+    return {
+        ...field('from', options.from),
+        ...field('group', options.group),
+        ...(options.mentions === undefined || options.mentions.length === 0 ? {} : { mentions: options.mentions }),
+        ...field('task', options.delegation)
+    };
 }
 /** `{ [key]: value }`, or nothing when there is no value. */
 function field<K extends string, V>(key: K, value: V | undefined): { readonly [P in K]?: V } {

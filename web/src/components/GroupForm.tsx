@@ -15,6 +15,8 @@ type GroupFormProps = {
     /** Resolves once the group is saved; rejects with what the server said is wrong. */
     readonly onSave: (config: GroupConfig) => Promise<void>;
     readonly onCancel: () => void;
+    /** A group of the fleet can be deleted from its form (#175); resolves once it is, rejects with what the server said. */
+    readonly onDelete?: (() => Promise<void>) | undefined;
 };
 type Update = <K extends keyof GroupDraft>(key: K, value: GroupDraft[K]) => void;
 type FieldsProps = { readonly draft: GroupDraft; readonly update: Update };
@@ -98,11 +100,59 @@ function useGroupForm(initial: GroupDraft, onSave: GroupFormProps['onSave']) {
     };
     return { draft, setDraft, saving, error, update, submit };
 }
+/** Deleting the group: asked, then confirmed; what the server said when it refused. */
+function useDelete(onDelete: () => Promise<void>) {
+    const [confirming, setConfirming] = useState(false);
+    const [deleting, setDeleting] = useState(false);
+    const [error, setError] = useState<string>();
+    const t = useT();
+    const remove = (): void => {
+        setError(undefined);
+        setDeleting(true);
+        onDelete().catch((reason: unknown) => {
+            setError(errorText(reason, t));
+            setDeleting(false);
+        });
+    };
+    return { confirming, setConfirming, deleting, error, remove };
+}
+type ConfirmProps = { readonly name: string; readonly deleting: boolean; readonly onDelete: () => void; readonly onKeep: () => void };
+/** The confirmation that names the group: its directory goes to `.trash/`. */
+function ConfirmDelete({ name, deleting, onDelete, onKeep }: ConfirmProps) {
+    const t = useT();
+    return (
+        <div className="actions">
+            <span className="note">{t.groups.confirmDelete(name)}</span>
+            <button type="button" className="btn btn-sm btn-danger" disabled={deleting} aria-busy={deleting} onClick={onDelete}>{t.common.delete}</button>
+            <button type="button" className="btn btn-sm" onClick={onKeep}>{t.groups.keep}</button>
+        </div>
+    );
+}
+/** Delete in the editor of a group (#175), then the confirmation. */
+function DeleteGroup({ name, onDelete }: { readonly name: string; readonly onDelete: () => Promise<void> }) {
+    const { confirming, setConfirming, deleting, error, remove } = useDelete(onDelete);
+    const t = useT();
+    return (
+        <div className="group-delete">
+            {confirming
+                ? <ConfirmDelete name={name} deleting={deleting} onDelete={remove} onKeep={() => setConfirming(false)} />
+                : <div className="actions"><button type="button" className="btn btn-sm" onClick={() => setConfirming(true)}>{t.common.delete}</button></div>}
+            {error === undefined ? null : <p className="error" role="alert">{error}</p>}
+        </div>
+    );
+}
+/** The heading of the form: New group, or the group by its name — by its id when the file names none. */
+function formTitle(initial: GroupDraft, isNew: boolean, newGroup: string): string {
+    if (isNew) {
+        return newGroup;
+    }
+    return initial.name === '' ? initial.id : initial.name;
+}
 /** The group as a person writes it (docs/groups.md); the server checks it before `group.json` is written. */
-function GroupForm({ initial, isNew, agents, onSave, onCancel }: GroupFormProps) {
+function GroupForm({ initial, isNew, agents, onSave, onCancel, onDelete }: GroupFormProps) {
     const { draft, setDraft, saving, error, update, submit } = useGroupForm(initial, onSave);
     const t = useT();
-    const title = isNew ? t.groupForm.newGroup : (initial.name === '' ? initial.id : initial.name);
+    const title = formTitle(initial, isNew, t.groupForm.newGroup);
     return (
         <form className="agent-form" aria-label={isNew ? t.groupForm.newGroup : t.groupForm.groupLabel(initial.id)} onSubmit={submit}>
             <h2>{title}</h2>
@@ -110,6 +160,7 @@ function GroupForm({ initial, isNew, agents, onSave, onCancel }: GroupFormProps)
             <MemberFields draft={draft} setDraft={setDraft} agents={agents} />
             <OthersField draft={draft} update={update} />
             <FormFooter isNew={isNew} error={error} saving={saving} onCancel={onCancel} />
+            {onDelete === undefined ? null : <DeleteGroup name={title} onDelete={onDelete} />}
         </form>
     );
 }

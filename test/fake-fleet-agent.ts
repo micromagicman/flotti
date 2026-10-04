@@ -158,12 +158,11 @@ function everyone(ids: readonly string[]): Group {
  * with every other: what {@link fakeFleet} gives a supervisor, for a fake
  * directory of the tools.
  */
-function seeingEachOther(ids: readonly string[], summaries: () => AgentSummary[]): Pick<FleetDirectory, 'peers' | 'groupsOf' | 'mayWrite' | 'mayPost'> {
+function seeingEachOther(ids: readonly string[], summaries: () => AgentSummary[]): Pick<FleetDirectory, 'peers' | 'groupsOf' | 'mayPost'> {
     const view = { id: 'everyone', name: 'everyone', members: ids.map((id) => ({ id, name: id })) };
     return {
         peers: (agentId) => ids.includes(agentId) && ids.length > 1 ? summaries().map((agent) => ({ ...agent, groups: ['everyone'] })) : [],
         groupsOf: (agentId) => ids.includes(agentId) ? [view] : [],
-        mayWrite: (from, to) => from !== to && ids.includes(from) && ids.includes(to),
         mayPost: (from, groupId) => groupId === 'everyone' && ids.includes(from)
     };
 }

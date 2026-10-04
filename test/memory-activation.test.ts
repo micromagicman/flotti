@@ -21,9 +21,7 @@ async function toolsFor(banks: Map<string, string>): Promise<FleetMcpServer> {
         agents: (): AgentSummary[] => [],
         peers: () => [],
         groupsOf: () => [],
-        mayWrite: () => false,
         mayPost: () => false,
-        send: () => Promise.reject(new Error('no messages here')),
         sendToGroup: () => Promise.reject(new Error('no messages here')),
         delegate: () => Promise.reject(new Error('no tasks here')),
         cancelDelegation: () => {
