@@ -2,7 +2,11 @@
 
 All notable changes to flotti are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.7.0] — 2026-10-04
+
+Groups only: agents see and message each other only inside a group, each group read and managed from
+its own tab, and a mention in a group message addresses one member of it; the private conversations,
+the feed of the fleet and Settings → Groups go; and the specs move into OpenSpec.
 
 ### Changed
 
@@ -455,6 +459,7 @@ The first release: a fleet of AI agents and one dashboard to work with them.
   ([micromagicman/eva#266](https://github.com/micromagicman/eva/issues/266)).
 - The A2A adapter of Cutie, on the same contract as Eva's (owners/quanthread-ai-hub#218, !194).
 
+[0.7.0]: https://github.com/micromagicman/flotti/releases/tag/v0.7.0
 [0.6.1]: https://github.com/micromagicman/flotti/releases/tag/v0.6.1
 [0.6.0]: https://github.com/micromagicman/flotti/releases/tag/v0.6.0
 [0.5.0]: https://github.com/micromagicman/flotti/releases/tag/v0.5.0
